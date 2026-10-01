@@ -1,6 +1,6 @@
 namespace Legal.Application.Features.Intelligence.Decision.Channels;
 
-// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// ───────────────────────────────────────────────────────────────────────────────────────────────
 // POLOXI Decision Channels — contract-first boundary (slice 1: DocumentEvidence).
 //
 // A CHANNEL is not a decision engine. It is a source of information that, once validated by that
@@ -119,6 +119,15 @@ public sealed record DecisionContribution
     public string? ApplicabilityCode { get; init; }
     public string? DirectnessCode { get; init; }
 
+    // OPTIONAL normalized magnitude in [0,1] expressing HOW STRONGLY the channel's own judgment places
+    // this contribution WITHIN the frame it was decided in. For Human Intelligence this is the attorney's
+    // relative position inside the sibling band ((ConfirmedValue - lower) / (upper - lower)) — the
+    // intelligence encoded by WHERE the attorney inserted (or overwrote) the proposition. It is NOT a
+    // score: POLOXI still owns the composite/ceiling/entropy/margin math and the final consequence. When
+    // null (all legacy channels, or no comparable band), the adapter falls back to the fixed magnitude so
+    // existing behavior is byte-identical.
+    public double? Magnitude { get; init; }
+
     // Effectivity window for time-scoped contributions (e.g. superseded authority). Null = always.
     public DateTime? EffectiveFromUtc { get; init; }
     public DateTime? EffectiveToUtc { get; init; }
@@ -189,6 +198,12 @@ public sealed record DecisionChannelResolveContext
     public string? SourceHash { get; init; }
     public string? SourceLabel { get; init; }
     public DateTime? SourceDateUtc { get; init; }
+
+    // The resolved Domain Pack for this matter (synonym terminology + evidence-type→signal map +
+    // entity/event vocabularies). Null when no pack is configured or resolution failed fail-soft.
+    // Channels treat it as advisory: synonyms only ADD matches, the signal map only overrides the
+    // default target signal when a mapping exists. POLOXI Wide2 still owns candidate competition.
+    public ResolvedDomainPack? ResolvedPack { get; init; }
 }
 
 // Stable string codes at the persistence boundary (mirror the *Code columns in Legal_ChannelContribution).
@@ -290,6 +305,9 @@ public sealed record ChannelContributionPersistence(
     string? VerificationReason,
     DateTime? EffectiveFromUtc,
     DateTime? EffectiveToUtc,
+    // OPTIONAL normalized [0,1] relative-position qualifier (not a score); null for channels/rows
+    // with no comparable band. See DecisionContribution.Magnitude and migration 0374.
+    double? PlacementMagnitude,
     Guid TenantId,
     Guid? ActorUserId);
 
@@ -317,6 +335,7 @@ public sealed record ChannelContributionDto(
     string? VerificationReason,
     DateTime? EffectiveFromUtc,
     DateTime? EffectiveToUtc,
+    double? PlacementMagnitude,
     DateTime CreatedDateUtc);
 
 // Rehydrates a persisted contribution (ChannelContributionDto) back into the validator-agnostic
@@ -338,6 +357,7 @@ public static class ChannelContributionRehydration
         TargetSignalCode = dto.TargetSignalCode,
         ApplicabilityCode = dto.ApplicabilityCode,
         DirectnessCode = dto.DirectnessCode,
+        Magnitude = dto.PlacementMagnitude,
         EffectiveFromUtc = dto.EffectiveFromUtc,
         EffectiveToUtc = dto.EffectiveToUtc,
         Provenance = new ContributionProvenance

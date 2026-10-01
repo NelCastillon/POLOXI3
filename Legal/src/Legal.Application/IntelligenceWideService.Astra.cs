@@ -21,7 +21,8 @@ public sealed partial class IntelligenceWideService
             [IntelligencePromptCodes.WideInformationValue]=(InformationValueSchema,"Estimate the supplied targets using the schema's categorical values. Ranking-change predictions are falsifiable estimates, not measured gains or permission to override deterministic stopping rules."),
             [IntelligencePromptCodes.WideCandidateMatrix]=(CandidateScoringSchema,"Score only the supplied candidate and branch pairs against actual decision criteria. Preserve candidate names and branch attribution. Never convert context or disambiguation labels into unsupported scoring criteria."),
             [IntelligencePromptCodes.WideLegalAnswer]=(LegalAnswerSchema,"Populate the legal answer fields with the substantive conclusion, analysis, application, and bottom line. Attribute legal propositions only to the supplied verified authorities; state missing facts and uncertainty without fabricating citations."),
-            [IntelligencePromptCodes.WideLegalAuthorityProposal]=(LegalAuthorityProposalSchema,"Propose authorities for targeted retrieval only. A proposed authority is not verified evidence. Preserve the distinction between authority identity and support for a particular legal proposition.")
+            [IntelligencePromptCodes.WideLegalAuthorityProposal]=(LegalAuthorityProposalSchema,"Propose authorities for targeted retrieval only. A proposed authority is not verified evidence. Preserve the distinction between authority identity and support for a particular legal proposition."),
+            [IntelligencePromptCodes.WideCandidateLandscape]=(CandidateLandscapeSchema,"Explain the whole candidate competition as one coherent system and produce an individualized narrative for EVERY supplied candidate. Preserve candidate identity, verification state, and the distinction between interpretive support and authoritative competition; never introduce new facts, scores, or rankings.")
         };
 
     private static bool UsesAstra(WideSearchRequest request)=>string.Equals(request.ModelCode?.Trim(),AstraModelCode,StringComparison.OrdinalIgnoreCase);
@@ -36,4 +37,11 @@ public sealed partial class IntelligenceWideService
     // Astra reuses the shared Wide answer policy (same budgets as Sol); the Astra model still runs
     // through the model override, so no route or deployment changes.
     private static string AnswerFeatureCode(WideSearchRequest request)=>"INTELLIGENCE_WIDE_ANSWER";
+
+    // The Candidate Landscape composer emits a per-candidate narrative landscape for the WHOLE
+    // candidate set in one call, so its output is fundamentally larger than the single answer call.
+    // It gets its own feature policy with a bigger output budget / longer timeout (migration 0376) so
+    // it no longer truncates against the shared answer budget. The "_ANSWER" suffix is intentional: it
+    // keeps medium reasoning effort and the full (uncapped) output budget in AzureOpenAiProvider.
+    private static string CandidateLandscapeFeatureCode(WideSearchRequest request)=>"INTELLIGENCE_WIDE_LANDSCAPE_ANSWER";
 }

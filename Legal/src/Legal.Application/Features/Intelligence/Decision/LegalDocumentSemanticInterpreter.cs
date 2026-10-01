@@ -17,6 +17,7 @@ public sealed class LegalDocumentSemanticInterpreter(IAiProviderRouter aiRouter)
         IReadOnlyCollection<LegalDocumentPassageDto> passages,
         string correlationId,
         string? modelCodeOverride = null,
+        ResolvedDomainPack? resolvedPack = null,
         CancellationToken cancellationToken = default)
     {
         if (passages.Count == 0)
@@ -39,6 +40,12 @@ public sealed class LegalDocumentSemanticInterpreter(IAiProviderRouter aiRouter)
             passage.SectionPath,
             passage.Text
         });
+        var entityTypes = (resolvedPack?.EntityTypes ?? [])
+            .OrderBy(entity => entity.SortOrder)
+            .Select(entity => new { entity.EntityTypeCode, entity.DimensionCode, entity.Name, entity.Description });
+        var eventTypes = (resolvedPack?.EventTypes ?? [])
+            .OrderBy(evt => evt.SortOrder)
+            .Select(evt => new { evt.EventTypeCode, evt.DimensionCode, evt.Name, evt.Description });
         var userPrompt = JsonSerializer.Serialize(new
         {
             MatterId = matterId,
@@ -46,6 +53,8 @@ public sealed class LegalDocumentSemanticInterpreter(IAiProviderRouter aiRouter)
             DocumentVersionId = documentVersionId,
             DomainPackCode = domainPackCode,
             DomainConcepts = concepts,
+            DomainEntityTypes = entityTypes,
+            DomainEventTypes = eventTypes,
             Passages = sourcePassages
         });
         var result = await aiRouter.GenerateAsync(
@@ -59,13 +68,14 @@ public sealed class LegalDocumentSemanticInterpreter(IAiProviderRouter aiRouter)
             modelCodeOverride: string.IsNullOrWhiteSpace(modelCodeOverride) ? null : modelCodeOverride.Trim(),
             cancellationToken: cancellationToken);
         var proposal = Parse(result.StructuredOutputJson ?? result.Content) ?? EmptyProposal();
-        return Govern(proposal, domainConcepts, passages);
+        return Govern(proposal, domainConcepts, passages, resolvedPack);
     }
 
     private static LegalDocumentSemanticProposal Govern(
         LegalDocumentSemanticProposal proposal,
         IReadOnlyCollection<DecisionDomainConceptDto> concepts,
-        IReadOnlyCollection<LegalDocumentPassageDto> passages)
+        IReadOnlyCollection<LegalDocumentPassageDto> passages,
+        ResolvedDomainPack? resolvedPack)
     {
         var allowedPassages = passages.Select(item => item.LegalDocumentPassageId).ToHashSet();
         var conceptsByCode = concepts.ToDictionary(item => item.ConceptCode, StringComparer.OrdinalIgnoreCase);
@@ -122,12 +132,43 @@ public sealed class LegalDocumentSemanticInterpreter(IAiProviderRouter aiRouter)
                     : LegalDocumentRelationshipTypes.RelatedTo
             })
             .ToArray();
+        // Govern extracted domain entities/events: they must cite a supplied passage and, when a resolved
+        // Domain Pack is present, bind to one of its EntityType/EventType codes. With no pack (intake
+        // corpus-activation path) they are dropped — there is no vocabulary to validate them against.
+        var entityTypeCodes = (resolvedPack?.EntityTypes ?? [])
+            .Select(entity => entity.EntityTypeCode)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var eventTypeCodes = (resolvedPack?.EventTypes ?? [])
+            .Select(evt => evt.EventTypeCode)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var domainEntities = proposal.DomainEntities
+            .Where(item => !string.IsNullOrWhiteSpace(item.EntityTypeCode) &&
+                           !string.IsNullOrWhiteSpace(item.EntityText) &&
+                           item.PassageId.HasValue &&
+                           allowedPassages.Contains(item.PassageId.Value) &&
+                           entityTypeCodes.Contains(item.EntityTypeCode))
+            .Select(item => item with { Confidence = Clamp(item.Confidence) })
+            .GroupBy(item => $"{item.PassageId:N}|{item.EntityTypeCode}|{Normalize(item.EntityText)}", StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .ToArray();
+        var domainEvents = proposal.DomainEvents
+            .Where(item => !string.IsNullOrWhiteSpace(item.EventTypeCode) &&
+                           !string.IsNullOrWhiteSpace(item.Summary) &&
+                           item.PassageId.HasValue &&
+                           allowedPassages.Contains(item.PassageId.Value) &&
+                           eventTypeCodes.Contains(item.EventTypeCode))
+            .Select(item => item with { Confidence = Clamp(item.Confidence) })
+            .GroupBy(item => $"{item.PassageId:N}|{item.EventTypeCode}|{Normalize(item.Summary)}", StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .ToArray();
         return proposal with
         {
             ClassificationConfidence = Clamp(proposal.ClassificationConfidence),
             EvidenceItems = evidence,
             FactPropositions = facts,
-            Relationships = relationships
+            Relationships = relationships,
+            DomainEntities = domainEntities,
+            DomainEvents = domainEvents
         };
     }
 
@@ -160,6 +201,8 @@ public sealed class LegalDocumentSemanticInterpreter(IAiProviderRouter aiRouter)
     private const string SystemPrompt = """
         You extract proposed legal-document semantics. Use only supplied passages and Domain Pack concepts.
         Never decide a matter, verify a fact, or invent missing content. Every evidence proposal should cite a supplied passageId.
+        When DomainEntityTypes/DomainEventTypes are supplied, also extract domainEntities/domainEvents that occur in the
+        passages, each bound to one supplied entityTypeCode/eventTypeCode and citing a supplied passageId; omit any you cannot bind.
         All facts are allegations pending independent verification. Return strict JSON matching the schema.
         """;
 
@@ -167,13 +210,15 @@ public sealed class LegalDocumentSemanticInterpreter(IAiProviderRouter aiRouter)
         {
           "type":"object",
           "additionalProperties":false,
-          "required":["documentTypeCode","classificationConfidence","evidenceItems","factPropositions","relationships","ambiguities","unknowns"],
+          "required":["documentTypeCode","classificationConfidence","evidenceItems","factPropositions","relationships","ambiguities","unknowns","domainEntities","domainEvents"],
           "properties":{
             "documentTypeCode":{"type":["string","null"]},
             "classificationConfidence":{"type":["number","null"],"minimum":0,"maximum":1},
             "evidenceItems":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["proposalKey","passageId","evidenceTypeCode","dimensionCode","summary","confidence","domainConceptCode","verificationProfileCode"],"properties":{"proposalKey":{"type":"string"},"passageId":{"type":"string","format":"uuid"},"evidenceTypeCode":{"type":"string"},"dimensionCode":{"type":"string"},"summary":{"type":"string"},"confidence":{"type":["number","null"]},"domainConceptCode":{"type":"string"},"verificationProfileCode":{"type":["string","null"]}}}},
             "factPropositions":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["proposalKey","propositionText","factStateCode","confidence"],"properties":{"proposalKey":{"type":"string"},"propositionText":{"type":"string"},"factStateCode":{"type":"string"},"confidence":{"type":["number","null"]}}}},
             "relationships":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["sourceProposalKey","targetProposalKey","relationshipTypeCode","rationale"],"properties":{"sourceProposalKey":{"type":"string"},"targetProposalKey":{"type":"string"},"relationshipTypeCode":{"type":"string"},"rationale":{"type":["string","null"]}}}},
+            "domainEntities":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["passageId","entityTypeCode","dimensionCode","entityText","normalizedValue","confidence"],"properties":{"passageId":{"type":"string","format":"uuid"},"entityTypeCode":{"type":"string"},"dimensionCode":{"type":["string","null"]},"entityText":{"type":"string"},"normalizedValue":{"type":["string","null"]},"confidence":{"type":["number","null"]}}}},
+            "domainEvents":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["passageId","eventTypeCode","dimensionCode","summary","eventDateUtc","confidence"],"properties":{"passageId":{"type":"string","format":"uuid"},"eventTypeCode":{"type":"string"},"dimensionCode":{"type":["string","null"]},"summary":{"type":"string"},"eventDateUtc":{"type":["string","null"],"format":"date-time"},"confidence":{"type":["number","null"]}}}},
             "ambiguities":{"type":"array","items":{"type":"string"}},
             "unknowns":{"type":"array","items":{"type":"string"}}
           }

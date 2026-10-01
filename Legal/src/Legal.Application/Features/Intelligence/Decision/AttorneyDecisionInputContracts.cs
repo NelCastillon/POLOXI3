@@ -25,6 +25,9 @@ public sealed record AttorneyRelativeAssessmentDto(
     DateTime CreatedDateUtc);
 
 // The single active approved matter assessment for a node/scoring context (§5 invariant).
+// PreviousSiblingValue/NextSiblingValue carry the comparable sibling band the attorney placed WITHIN;
+// they let POLOXI express the placement as a relative-position magnitude (the intelligence encoded by
+// where the attorney inserted/overwrote the value). Null when no comparable band existed at placement.
 public sealed record ApprovedMatterAssessmentDto(
     Guid ApprovalId,
     Guid DecisionNodeId,
@@ -33,7 +36,9 @@ public sealed record ApprovedMatterAssessmentDto(
     Guid ApprovedByUserId,
     string ApprovedByDisplayName,
     string GovernancePolicyCode,
-    DateTime ApprovedDateUtc);
+    DateTime ApprovedDateUtc,
+    decimal? PreviousSiblingValue = null,
+    decimal? NextSiblingValue = null);
 
 // A canonical decision node with its attorney signals for the Human Intelligence panel.
 public sealed record AttorneyDecisionNodeDto(

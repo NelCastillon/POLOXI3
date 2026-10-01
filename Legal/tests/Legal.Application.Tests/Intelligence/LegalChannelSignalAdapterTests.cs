@@ -27,7 +27,8 @@ public sealed class LegalChannelSignalAdapterTests
         DecisionChannelType channel = DecisionChannelType.DocumentEvidence,
         ContributionRelation relation = ContributionRelation.Supports,
         ContributionVerificationState verification = ContributionVerificationState.Verified,
-        string targetSignalCode = DecisionChannelCodes.TargetSignal.EvidenceSupport) => new()
+        string targetSignalCode = DecisionChannelCodes.TargetSignal.EvidenceSupport,
+        double? magnitude = null) => new()
         {
             TenantId = Guid.NewGuid(),
             DecisionMatterId = Guid.NewGuid(),
@@ -37,6 +38,7 @@ public sealed class LegalChannelSignalAdapterTests
             Relation = relation,
             VerificationState = verification,
             TargetSignalCode = targetSignalCode,
+            Magnitude = magnitude,
             Provenance = new ContributionProvenance { SourceTypeCode = "Test" },
         };
 
@@ -175,5 +177,45 @@ public sealed class LegalChannelSignalAdapterTests
             Assert.Equal(first[i].TargetSignal, second[i].TargetSignal);
             Assert.Equal(first[i].ReasonCode, second[i].ReasonCode);
         }
+    }
+
+    [Fact]
+    public void NullMagnitudeSupport_FallsBackToFixedDelta()
+    {
+        var adapter = AdapterWith(new ChannelContributionLineage([Guid.NewGuid()], []));
+
+        var baseline = Assert.Single(adapter.Project([Contribution(magnitude: null)]));
+        var maxPlacement = Assert.Single(adapter.Project([Contribution(magnitude: 1.0)]));
+
+        // Null magnitude lands at the full-support ceiling, identical to the top of the placement band.
+        Assert.Equal(baseline.SupportDelta, maxPlacement.SupportDelta);
+    }
+
+    [Fact]
+    public void HigherPlacementMagnitude_EarnsStrongerSupportDelta()
+    {
+        var adapter = AdapterWith(new ChannelContributionLineage([Guid.NewGuid()], []));
+
+        var low = Assert.Single(adapter.Project([Contribution(magnitude: 0.0)]));
+        var mid = Assert.Single(adapter.Project([Contribution(magnitude: 0.5)]));
+        var high = Assert.Single(adapter.Project([Contribution(magnitude: 1.0)]));
+
+        Assert.True(low.SupportDelta > 0);
+        Assert.True(low.SupportDelta < mid.SupportDelta);
+        Assert.True(mid.SupportDelta < high.SupportDelta);
+    }
+
+    [Fact]
+    public void PlacementMagnitude_IsClampedWithinSupportBand()
+    {
+        var adapter = AdapterWith(new ChannelContributionLineage([Guid.NewGuid()], []));
+
+        var over = Assert.Single(adapter.Project([Contribution(magnitude: 5.0)]));
+        var under = Assert.Single(adapter.Project([Contribution(magnitude: -5.0)]));
+        var ceiling = Assert.Single(adapter.Project([Contribution(magnitude: 1.0)]));
+        var floor = Assert.Single(adapter.Project([Contribution(magnitude: 0.0)]));
+
+        Assert.Equal(ceiling.SupportDelta, over.SupportDelta);
+        Assert.Equal(floor.SupportDelta, under.SupportDelta);
     }
 }

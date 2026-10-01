@@ -64,6 +64,39 @@ public static class ChannelNodeTextMatcher
         return shared;
     }
 
+    // Additive synonym expansion. Tokenizes as usual, then for every surface token that the Domain Pack
+    // knows as a synonym (termLookup: surface form -> canonical code) ALSO adds the canonical code as an
+    // extra token. This can only ADD shared-token overlaps, never remove existing raw-overlap matches, so
+    // it strictly improves recall and preserves the "never inferior" guarantee. A null/empty lookup is a
+    // no-op that returns the plain token set.
+    public static HashSet<string> TokenizeWithSynonyms(string? text, IReadOnlyDictionary<string, string>? termLookup)
+    {
+        var tokens = Tokenize(text);
+        if (termLookup is null || termLookup.Count == 0 || tokens.Count == 0)
+            return tokens;
+
+        // Expand whole-surface-form terms (e.g. "rear end") and single tokens against the lookup.
+        if (!string.IsNullOrWhiteSpace(text) && termLookup.TryGetValue(text.Trim(), out var phraseCanonical))
+            tokens.Add(phraseCanonical);
+
+        foreach (var token in tokens.ToArray())
+            if (termLookup.TryGetValue(token, out var canonical))
+                tokens.Add(canonical);
+
+        return tokens;
+    }
+
+    // Synonym-aware node index. Identical to BuildNodeIndex but expands each node statement with the
+    // pack's synonym terminology. Falls back to the plain index when termLookup is null/empty.
+    public static IReadOnlyList<(HierarchyNodeDto Node, HashSet<string> Tokens)> BuildNodeIndex(
+        IEnumerable<HierarchyNodeDto> nodes,
+        IReadOnlyDictionary<string, string>? termLookup)
+        => nodes
+            .Where(IsEvidenceBearing)
+            .Select(n => (Node: n, Tokens: TokenizeWithSynonyms(n.Statement, termLookup)))
+            .Where(x => x.Tokens.Count > 0)
+            .ToArray();
+
     // Pre-tokenizes the evidence-bearing nodes of an execution once so a channel can match many
     // source texts against them without re-tokenizing per lookup.
     public static IReadOnlyList<(HierarchyNodeDto Node, HashSet<string> Tokens)> BuildNodeIndex(
@@ -81,9 +114,19 @@ public static class ChannelNodeTextMatcher
         IReadOnlyList<(HierarchyNodeDto Node, HashSet<string> Tokens)> nodeIndex,
         int minimumSharedTokens,
         out int overlap)
+        => BestMatch(sourceText, nodeIndex, minimumSharedTokens, null, out overlap);
+
+    // Synonym-aware overload. Expands the source text with the pack's synonym terminology before
+    // matching; a null/empty lookup behaves exactly like the plain overload (additive, recall-only).
+    public static HierarchyNodeDto? BestMatch(
+        string? sourceText,
+        IReadOnlyList<(HierarchyNodeDto Node, HashSet<string> Tokens)> nodeIndex,
+        int minimumSharedTokens,
+        IReadOnlyDictionary<string, string>? termLookup,
+        out int overlap)
     {
         overlap = 0;
-        var sourceTokens = Tokenize(sourceText);
+        var sourceTokens = TokenizeWithSynonyms(sourceText, termLookup);
         if (sourceTokens.Count == 0)
             return null;
 

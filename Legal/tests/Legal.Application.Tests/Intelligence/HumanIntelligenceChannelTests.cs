@@ -41,6 +41,40 @@ public sealed class HumanIntelligenceChannelTests
     }
 
     [Fact]
+    public async Task Approved_assessment_carries_relative_placement_magnitude_from_sibling_band()
+    {
+        var breachNode = Node("Defendant was using a phone immediately before the collision impact.", "PROPOSITION");
+        var hierarchy = HierarchyRepo(breachNode);
+        // Attorney confirmed 0.60 inside the sibling band [0.40, 0.80] → relative position 0.5.
+        var attorney = AttorneyRepo(true, HiNode(
+            "Defendant was using a phone immediately before impact.",
+            approved: Approved(confirmedValue: 0.60m, previousSiblingValue: 0.40m, nextSiblingValue: 0.80m),
+            openChallenges: 0));
+
+        var channel = new HumanIntelligenceChannel(attorney, hierarchy);
+        var contribution = Assert.Single(await channel.ResolveContributionsAsync(Context()));
+
+        Assert.NotNull(contribution.Magnitude);
+        Assert.Equal(0.5, contribution.Magnitude!.Value, 3);
+    }
+
+    [Fact]
+    public async Task Approved_assessment_without_sibling_band_has_null_magnitude()
+    {
+        var breachNode = Node("Defendant was using a phone immediately before the collision impact.", "PROPOSITION");
+        var hierarchy = HierarchyRepo(breachNode);
+        var attorney = AttorneyRepo(true, HiNode(
+            "Defendant was using a phone immediately before impact.",
+            approved: Approved(confirmedValue: 0.60m),
+            openChallenges: 0));
+
+        var channel = new HumanIntelligenceChannel(attorney, hierarchy);
+        var contribution = Assert.Single(await channel.ResolveContributionsAsync(Context()));
+
+        Assert.Null(contribution.Magnitude);
+    }
+
+    [Fact]
     public async Task Open_challenge_becomes_disputed_uncertainty_never_support()
     {
         var node = Node("Defendant owed the plaintiff a duty of reasonable care.", "PROPOSITION");
@@ -168,15 +202,20 @@ public sealed class HumanIntelligenceChannelTests
         CapabilityCode: null,
         OriginCode: "LLM_PROPOSAL");
 
-    private static ApprovedMatterAssessmentDto Approved() => new(
+    private static ApprovedMatterAssessmentDto Approved(
+        decimal confirmedValue = 0.5m,
+        decimal? previousSiblingValue = null,
+        decimal? nextSiblingValue = null) => new(
         ApprovalId: Guid.NewGuid(),
         DecisionNodeId: Guid.NewGuid(),
         AssessmentId: Guid.NewGuid(),
-        ConfirmedValue: 0.5m,
+        ConfirmedValue: confirmedValue,
         ApprovedByUserId: Guid.NewGuid(),
         ApprovedByDisplayName: "Jane Counsel",
         GovernancePolicyCode: "SELF_APPROVE",
-        ApprovedDateUtc: DateTime.UtcNow);
+        ApprovedDateUtc: DateTime.UtcNow,
+        PreviousSiblingValue: previousSiblingValue,
+        NextSiblingValue: nextSiblingValue);
 
     private static AttorneyDecisionNodeDto HiNode(string text, ApprovedMatterAssessmentDto? approved, int openChallenges) => new(
         DecisionNodeId: Guid.NewGuid(),

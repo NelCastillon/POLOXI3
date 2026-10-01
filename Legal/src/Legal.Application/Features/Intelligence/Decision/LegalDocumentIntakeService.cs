@@ -13,7 +13,7 @@ public sealed class LegalDocumentIntakeService(
     ILegalDocumentExtractionRouter extractionRouter,
     ILegalDocumentSemanticInterpreter semanticInterpreter,
     ILegalDocumentCorpusRepository corpusRepository,
-    ILegalDecisionRepository decisionRepository,
+    IDomainPackResolver domainPackResolver,
     IMatterChangeProcessor matterChangeProcessor,
     ILogger<LegalDocumentIntakeService> logger) : ILegalDocumentIntakeService
 {
@@ -146,15 +146,40 @@ public sealed class LegalDocumentIntakeService(
                 // the extracted document is preserved and enrichment is simply skipped.
                 try
                 {
-                    var pack = string.IsNullOrWhiteSpace(request.DomainPackCode)
-                        ? null
-                        : await decisionRepository.GetDomainPackAsync(request.TenantId, request.DomainPackCode, cancellationToken);
+                    var resolvedPack = await domainPackResolver.ResolveAsync(request.TenantId, request.DomainPackCode, cancellationToken);
+                    var concepts = resolvedPack.Concepts;
                     var proposal = await semanticInterpreter.InterpretAsync(
                         request.TenantId, request.MatterId, documentId, version.LegalDocumentVersionId,
-                        request.DomainPackCode, pack?.Concepts ?? [], passages, request.CorrelationId, request.ModelCode, cancellationToken);
+                        request.DomainPackCode, concepts, passages, request.CorrelationId, request.ModelCode, resolvedPack, cancellationToken);
                     await corpusRepository.SaveSemanticProposalAsync(
                         request.TenantId, request.UserId, request.MatterId, documentId,
                         version.LegalDocumentVersionId, proposal, cancellationToken);
+
+                    // Explicit domain-specific entity/event extraction (migration 0373). Persisted as a
+                    // separate, advisory store so the Decision Channels can resolve domain semantics by
+                    // matter without re-reading the LLM. Fail-soft within the enrichment try/catch.
+                    if (proposal.DomainEntities.Count > 0 || proposal.DomainEvents.Count > 0)
+                    {
+                        var entities = proposal.DomainEntities
+                            .Select(entity => new DocumentDomainEntityPersistence(
+                                Guid.NewGuid(), request.MatterId, documentId, version.LegalDocumentVersionId,
+                                entity.PassageId, resolvedPack.PackCode, entity.EntityTypeCode, entity.DimensionCode,
+                                entity.EntityText, entity.NormalizedValue, entity.Confidence,
+                                request.ModelCode, request.CorrelationId, request.TenantId, request.UserId))
+                            .ToArray();
+                        var events = proposal.DomainEvents
+                            .Select(ev => new DocumentDomainEventPersistence(
+                                Guid.NewGuid(), request.MatterId, documentId, version.LegalDocumentVersionId,
+                                ev.PassageId, resolvedPack.PackCode, ev.EventTypeCode, ev.DimensionCode,
+                                ev.Summary, ev.EventDateUtc, ev.Confidence,
+                                request.ModelCode, request.CorrelationId, request.TenantId, request.UserId))
+                            .ToArray();
+                        await corpusRepository.SaveDocumentDomainExtractionAsync(
+                            request.TenantId, request.UserId, request.MatterId, documentId,
+                            version.LegalDocumentVersionId,
+                            string.IsNullOrWhiteSpace(resolvedPack.PackCode) ? request.DomainPackCode : resolvedPack.PackCode,
+                            entities, events, cancellationToken);
+                    }
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {

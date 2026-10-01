@@ -1,4 +1,6 @@
+using Legal.Application.Abstractions.Intelligence;
 using Legal.Application.Abstractions.Persistence;
+using Legal.Application.Features.Intelligence.Decision;
 using Legal.Application.Features.Intelligence.Decision.Channels;
 using Microsoft.Extensions.Logging;
 
@@ -37,6 +39,8 @@ public interface IDecisionChannelOrchestrator
 public sealed class DecisionChannelOrchestrator(
     IEnumerable<IDecisionChannel> channels,
     IChannelContributionRepository contributionRepository,
+    ILegalDecisionRepository decisionRepository,
+    IDomainPackResolver domainPackResolver,
     ILogger<DecisionChannelOrchestrator> logger) : IDecisionChannelOrchestrator
 {
     public async Task<ChannelIngestionResult> IngestContributionsAsync(
@@ -46,12 +50,32 @@ public sealed class DecisionChannelOrchestrator(
         Guid authoritativeHierarchyExecutionId,
         CancellationToken cancellationToken = default)
     {
+        // Resolve the matter's Domain Pack once so every channel shares the same synonym terminology and
+        // evidence-type→signal map. Fail-soft: any failure leaves the pack null and channels fall back to
+        // their raw-overlap / default-signal behavior — never blocking ingestion.
+        ResolvedDomainPack? resolvedPack = null;
+        try
+        {
+            var matter = await decisionRepository.GetMatterAsync(tenantId, decisionMatterId, cancellationToken);
+            if (!string.IsNullOrWhiteSpace(matter?.DomainPackCode))
+                resolvedPack = await domainPackResolver.ResolveAsync(tenantId, matter.DomainPackCode, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Domain Pack resolution failed for matter {MatterId}; channels run without pack semantics.", decisionMatterId);
+        }
+
         var context = new DecisionChannelResolveContext
         {
             TenantId = tenantId,
             UserId = userId,
             DecisionMatterId = decisionMatterId,
             AuthoritativeHierarchyExecutionId = authoritativeHierarchyExecutionId,
+            ResolvedPack = resolvedPack,
         };
 
         var byChannel = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -111,6 +135,7 @@ public sealed class DecisionChannelOrchestrator(
         VerificationReason: c.Provenance.VerificationReason,
         EffectiveFromUtc: c.EffectiveFromUtc,
         EffectiveToUtc: c.EffectiveToUtc,
+        PlacementMagnitude: c.Magnitude,
         TenantId: c.TenantId,
         ActorUserId: c.ActorUserId);
 }

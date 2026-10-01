@@ -13,7 +13,7 @@ public sealed class LegalChannelContributionRepository(ISqlConnectionFactory con
         "ChannelContributionId, DecisionMatterId, HierarchyExecutionId, HierarchyNodeId, ChannelTypeCode, " +
         "RelationCode, VerificationStateCode, TargetSignalCode, ApplicabilityCode, DirectnessCode, " +
         "SourceTypeCode, SourceId, SourceLabel, LegalDocumentId, LegalDocumentVersionId, LegalDocumentPassageId, " +
-        "ProposedByModel, PromptRunId, VerificationReason, EffectiveFromUtc, EffectiveToUtc, CreatedDateUtc";
+        "ProposedByModel, PromptRunId, VerificationReason, EffectiveFromUtc, EffectiveToUtc, PlacementMagnitude, CreatedDateUtc";
 
     public async Task SaveContributionsAsync(IReadOnlyCollection<ChannelContributionPersistence> contributions, CancellationToken cancellationToken = default)
     {
@@ -24,12 +24,12 @@ public sealed class LegalChannelContributionRepository(ISqlConnectionFactory con
                 (ChannelContributionId, DecisionMatterId, HierarchyExecutionId, HierarchyNodeId, ChannelTypeCode,
                  RelationCode, VerificationStateCode, TargetSignalCode, ApplicabilityCode, DirectnessCode,
                  SourceTypeCode, SourceId, SourceLabel, LegalDocumentId, LegalDocumentVersionId, LegalDocumentPassageId,
-                 ProposedByModel, PromptRunId, VerificationReason, EffectiveFromUtc, EffectiveToUtc, TenantId, CreatedByUserId)
+                 ProposedByModel, PromptRunId, VerificationReason, EffectiveFromUtc, EffectiveToUtc, PlacementMagnitude, TenantId, CreatedByUserId)
             VALUES
                 (@ChannelContributionId, @DecisionMatterId, @HierarchyExecutionId, @HierarchyNodeId, @ChannelTypeCode,
                  @RelationCode, @VerificationStateCode, @TargetSignalCode, @ApplicabilityCode, @DirectnessCode,
                  @SourceTypeCode, @SourceId, @SourceLabel, @LegalDocumentId, @LegalDocumentVersionId, @LegalDocumentPassageId,
-                 @ProposedByModel, @PromptRunId, @VerificationReason, @EffectiveFromUtc, @EffectiveToUtc, @TenantId, @ActorUserId);
+                 @ProposedByModel, @PromptRunId, @VerificationReason, @EffectiveFromUtc, @EffectiveToUtc, @PlacementMagnitude, @TenantId, @ActorUserId);
             """,
             contributions, cancellationToken: cancellationToken));
     }

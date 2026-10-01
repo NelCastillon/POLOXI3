@@ -101,6 +101,10 @@ public interface ILegalDocumentSemanticInterpreter
         IReadOnlyCollection<LegalDocumentPassageDto> passages,
         string correlationId,
         string? modelCodeOverride = null,
+        // Resolved Domain Pack (migration-0373 entity/event taxonomy + terminology). When supplied, the
+        // interpreter also extracts and governs domain entities/events against the pack vocabularies.
+        // Optional/advisory; null preserves the prior concepts-only behavior for existing callers.
+        ResolvedDomainPack? resolvedPack = null,
         CancellationToken cancellationToken = default);
 }
 

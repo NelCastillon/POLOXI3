@@ -232,6 +232,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ILegalDocumentExtractionRouter, Legal.Application.Features.Intelligence.Decision.LegalDocumentExtractionRouter>();
         services.AddScoped<ILegalDocumentSearchProjectionDispatcher, LegalDocumentSearchProjectionDispatcher>();
         services.AddScoped<ILegalDocumentSemanticInterpreter, Legal.Application.Features.Intelligence.Decision.LegalDocumentSemanticInterpreter>();
+        services.AddScoped<Legal.Application.Abstractions.Intelligence.IDomainPackResolver, Legal.Application.Features.Intelligence.Decision.DomainPackResolver>();
         services.AddScoped<ILegalDocumentIntakeService, Legal.Application.Features.Intelligence.Decision.LegalDocumentIntakeService>();
         services.AddScoped<Legal.Application.Abstractions.Intelligence.ILegalMatterCorpusActivationService, Legal.Application.Features.Intelligence.Decision.LegalMatterCorpusActivationService>();
         services.AddScoped<Legal.Application.Abstractions.Intelligence.IMatterChangeProcessor, Legal.Application.Features.Intelligence.Decision.MatterChangeProcessor>();
@@ -255,7 +256,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<Legal.Application.Features.Intelligence.Decision.Core.ILegalDecisionImpactMapper, Legal.Application.Features.Intelligence.Decision.Core.LegalDecisionImpactMapper>();
         services.AddScoped<ILegalDecisionService, LegalDecisionService>();
 
-        // ── Judz.ai Early Access SaaS layer ──────────────────────────────────
+        // ── Judz.ai Early Access SaaS layer
         // ASP.NET Core Identity EF Core store DbContext over the AspNet* tables (migration 0246).
         // The Identity builder (AddIdentityCore/token providers/sign-in) is configured by the API host
         // which has the ASP.NET Core framework reference; here we only register the store DbContext.

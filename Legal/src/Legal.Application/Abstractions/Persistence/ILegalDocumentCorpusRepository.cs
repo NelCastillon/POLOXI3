@@ -163,6 +163,23 @@ public interface ILegalDocumentCorpusRepository
         LegalDocumentSemanticProposal proposal,
         CancellationToken cancellationToken = default);
 
+    // Persists the domain-specific entities/events extracted for a document version (migration 0373).
+    // Idempotent per version: replaces the version's prior extraction rows. Advisory; fail-soft callers.
+    Task SaveDocumentDomainExtractionAsync(
+        Guid tenantId,
+        Guid userId,
+        Guid matterId,
+        Guid documentId,
+        Guid documentVersionId,
+        string? domainPackCode,
+        IReadOnlyCollection<DocumentDomainEntityPersistence> entities,
+        IReadOnlyCollection<DocumentDomainEventPersistence> events,
+        CancellationToken cancellationToken = default);
+
+    // Matter-scoped read of extracted domain entities/events (for API/UI provenance surfaces).
+    Task<IReadOnlyCollection<DocumentDomainEntityDto>> GetMatterDomainEntitiesAsync(Guid tenantId, Guid matterId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyCollection<DocumentDomainEventDto>> GetMatterDomainEventsAsync(Guid tenantId, Guid matterId, CancellationToken cancellationToken = default);
+
     Task PersistRetrievalTelemetryAsync(
         Guid tenantId,
         Guid userId,

@@ -47,7 +47,7 @@ public sealed class LegalDocumentSearchProjectionDispatcher(
             {
                 var documents = (await connection.QueryAsync<SearchDocument>(new CommandDefinition(
                     """
-                    SELECT CONCAT(CONVERT(nvarchar(32),document.TenantId,2),N'-',CONVERT(nvarchar(32),passage.LegalDocumentPassageId,2)) [Id],
+                    SELECT CONCAT(CONVERT(nvarchar(36),document.TenantId),N'-',CONVERT(nvarchar(36),passage.LegalDocumentPassageId)) [Id],
                            document.TenantId,document.DecisionMatterId AS MatterId,document.LegalDocumentId,version.LegalDocumentVersionId,
                            passage.LegalDocumentPassageId AS PassageId,document.FileName AS Title,passage.PassageText AS Content,
                            passage.PageNumber,document.DocumentTypeCode,passage.ExtractionMethodCode,passage.EpistemicStateCode,

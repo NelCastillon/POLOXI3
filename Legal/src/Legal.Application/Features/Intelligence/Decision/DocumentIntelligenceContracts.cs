@@ -927,7 +927,33 @@ public sealed record LegalDocumentSemanticProposal(
     IReadOnlyCollection<LegalFactSemanticProposal> FactPropositions,
     IReadOnlyCollection<LegalSemanticRelationshipProposal> Relationships,
     IReadOnlyCollection<string> Ambiguities,
-    IReadOnlyCollection<string> Unknowns);
+    IReadOnlyCollection<string> Unknowns)
+{
+    // Domain-specific entities/events the interpreter extracted against the matter's Domain Pack. Optional
+    // and advisory (like the rest of the proposal); default-empty so existing callers/tests stay valid.
+    public IReadOnlyCollection<LegalDomainEntitySemanticProposal> DomainEntities { get; init; } = [];
+    public IReadOnlyCollection<LegalDomainEventSemanticProposal> DomainEvents { get; init; } = [];
+}
+
+// A domain entity (Claimant, Defendant, Provider, Vehicle, …) the interpreter proposes from a passage,
+// bound to a Domain Pack EntityTypeCode. Qualitative source-truth only — no score influence by itself.
+public sealed record LegalDomainEntitySemanticProposal(
+    Guid? PassageId,
+    string EntityTypeCode,
+    string? DimensionCode,
+    string EntityText,
+    string? NormalizedValue,
+    decimal? Confidence);
+
+// A domain event (Collision, Impact, Treatment, Surgery, …) the interpreter proposes from a passage,
+// bound to a Domain Pack EventTypeCode.
+public sealed record LegalDomainEventSemanticProposal(
+    Guid? PassageId,
+    string EventTypeCode,
+    string? DimensionCode,
+    string Summary,
+    DateTime? EventDateUtc,
+    decimal? Confidence);
 
 public sealed record LegalEvidenceSemanticProposal(
     string ProposalKey,

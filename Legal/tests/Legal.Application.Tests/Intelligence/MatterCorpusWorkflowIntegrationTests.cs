@@ -21,7 +21,7 @@ public sealed class MatterCorpusWorkflowIntegrationTests
         var interpreter=new AccidentReportInterpreter();
         var service=new LegalDocumentIntakeService(
             binaryStore,new AcceptingValidator(),new CleanScanner(),new AccidentReportExtractor(),interpreter,
-            corpus,DecisionRepositoryProxy.Create(),new NoOpMatterChangeProcessor(),
+            corpus,new DomainPackResolver(DecisionRepositoryProxy.Create()),new NoOpMatterChangeProcessor(),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<LegalDocumentIntakeService>.Instance);
         var request=new LegalDocumentIntakeRequest(
             tenantId,userId,matterId,"synthetic-accident-report.txt","text/plain",bytes.Length,"matter-corpus-e2e")
@@ -90,7 +90,7 @@ public sealed class MatterCorpusWorkflowIntegrationTests
     private sealed class AccidentReportInterpreter:ILegalDocumentSemanticInterpreter
     {
         public string? DomainPackCode{get;private set;}
-        public Task<LegalDocumentSemanticProposal> InterpretAsync(Guid tenantId,Guid matterId,Guid documentId,Guid documentVersionId,string? domainPackCode,IReadOnlyCollection<DecisionDomainConceptDto> domainConcepts,IReadOnlyCollection<LegalDocumentPassageDto> passages,string correlationId,string? modelCodeOverride=null,CancellationToken cancellationToken=default)
+        public Task<LegalDocumentSemanticProposal> InterpretAsync(Guid tenantId,Guid matterId,Guid documentId,Guid documentVersionId,string? domainPackCode,IReadOnlyCollection<DecisionDomainConceptDto> domainConcepts,IReadOnlyCollection<LegalDocumentPassageDto> passages,string correlationId,string? modelCodeOverride=null,ResolvedDomainPack? resolvedPack=null,CancellationToken cancellationToken=default)
         {
             DomainPackCode=domainPackCode;
             var passage=Assert.Single(passages);
@@ -149,6 +149,10 @@ public sealed class MatterCorpusWorkflowIntegrationTests
             ReplaceDocumentStatus(LegalDocumentProcessingStates.Processed,null);
             return Task.CompletedTask;
         }
+
+        public Task SaveDocumentDomainExtractionAsync(Guid tenantId,Guid userId,Guid matterId,Guid documentId,Guid documentVersionId,string? domainPackCode,IReadOnlyCollection<DocumentDomainEntityPersistence> entities,IReadOnlyCollection<DocumentDomainEventPersistence> events,CancellationToken cancellationToken=default)=>Task.CompletedTask;
+        public Task<IReadOnlyCollection<DocumentDomainEntityDto>> GetMatterDomainEntitiesAsync(Guid tenantId,Guid matterId,CancellationToken cancellationToken=default)=>Task.FromResult<IReadOnlyCollection<DocumentDomainEntityDto>>([]);
+        public Task<IReadOnlyCollection<DocumentDomainEventDto>> GetMatterDomainEventsAsync(Guid tenantId,Guid matterId,CancellationToken cancellationToken=default)=>Task.FromResult<IReadOnlyCollection<DocumentDomainEventDto>>([]);
 
         public Task<IReadOnlyCollection<LegalMatterContextItem>> SearchMatterContextAsync(Guid tenantId,Guid userId,Guid matterId,string query,int maximumItems,int maximumCharacters,CancellationToken cancellationToken=default)=>
             Task.FromResult<IReadOnlyCollection<LegalMatterContextItem>>(FactPropositions.Select(fact=>

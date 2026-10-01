@@ -72,7 +72,9 @@ public sealed class InvestigationChannel(
         if (findings.Length == 0)
             return [];
 
-        var nodeIndex = ChannelNodeTextMatcher.BuildNodeIndex(execution.Nodes);
+        // Domain Pack synonym terminology (advisory) only ADDS node-match recall; null pack = raw overlap.
+        var termLookup = context.ResolvedPack?.TermLookup;
+        var nodeIndex = ChannelNodeTextMatcher.BuildNodeIndex(execution.Nodes, termLookup);
         if (nodeIndex.Count == 0)
             return [];
 
@@ -86,9 +88,19 @@ public sealed class InvestigationChannel(
                 continue;
 
             var matchText = $"{finding.Title} {finding.Summary}";
-            var bestNode = ChannelNodeTextMatcher.BestMatch(matchText, nodeIndex, MinimumSharedTokens, out var bestOverlap);
+            var bestNode = ChannelNodeTextMatcher.BestMatch(matchText, nodeIndex, MinimumSharedTokens, termLookup, out var bestOverlap);
             if (bestNode is null)
                 continue;
+
+            // Match-confidence magnitude (support branch only): how COMPLETELY the finding text lexically
+            // covers the node's wording = sharedTokens / nodeSignificantTokenCount, clamped to [0,1]. It is
+            // finding-INTRINSIC, never the node's own POLOXI score, so it cannot create a feedback loop and is
+            // stable across re-runs. Null when the node has no significant tokens -> the adapter falls back to
+            // its fixed delta. Mirrors DocumentEvidence; POLOXI Wide2 still owns the scoring consequence.
+            var nodeTokenCount = ChannelNodeTextMatcher.TokenizeWithSynonyms(bestNode.Statement, termLookup).Count;
+            double? matchConfidence = nodeTokenCount > 0
+                ? Math.Clamp((double)bestOverlap / nodeTokenCount, 0.0, 1.0)
+                : null;
 
             // A confirmed, resolved finding is a VERIFIED investigation result establishing the fact.
             if (IsConfirmedResolved(finding))
@@ -103,6 +115,7 @@ public sealed class InvestigationChannel(
                     Relation = ContributionRelation.Establishes,
                     VerificationState = ContributionVerificationState.Verified,
                     TargetSignalCode = DecisionChannelCodes.TargetSignal.FactSupport,
+                    Magnitude = matchConfidence,
                     ActorUserId = context.UserId,
                     Provenance = new ContributionProvenance
                     {

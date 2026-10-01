@@ -133,6 +133,7 @@ public sealed class ApiClient(HttpClient httpClient)
         public async Task<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.DecisionSessionSummaryDto>> GetLegalDecisionMatterSessionsAsync(Guid matterId,CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.DecisionSessionSummaryDto>>($"api/legal_decision/matters/{matterId}/sessions",token)??[];
         public async Task<IReadOnlyCollection<LegalDocumentDto>> GetLegalMatterDocumentsAsync(Guid matterId,CancellationToken token=default)=>await GetFromJsonWithTransientThrottleRetryAsync<IReadOnlyCollection<LegalDocumentDto>>($"api/legal_decision/matters/{matterId}/documents",token)??[];
         public async Task<Legal.Application.Features.Intelligence.Decision.LegalMatterEvidenceGraphDto?> GetLegalMatterEvidenceGraphAsync(Guid matterId,CancellationToken token=default)=>await GetFromJsonWithTransientThrottleRetryAsync<Legal.Application.Features.Intelligence.Decision.LegalMatterEvidenceGraphDto>($"api/legal_decision/matters/{matterId}/evidence-graph",token);
+        public async Task<Legal.Application.Features.Intelligence.Decision.CandidateFullAnalysisDto?> GetLegalCandidateFullAnalysisAsync(Guid matterId,int candidateIndex,CancellationToken token=default)=>await GetFromJsonWithTransientThrottleRetryAsync<Legal.Application.Features.Intelligence.Decision.CandidateFullAnalysisDto>($"api/legal_decision/matters/{matterId}/candidate-analysis/{candidateIndex}",token);
         public async Task<Legal.Application.Features.Intelligence.Decision.MatterHumanIntelligenceDto?> GetLegalMatterHumanIntelligenceAsync(Guid matterId,CancellationToken token=default)=>await GetFromJsonWithTransientThrottleRetryAsync<Legal.Application.Features.Intelligence.Decision.MatterHumanIntelligenceDto>($"api/legal_decision/matters/{matterId}/human-intelligence",token);
         // ── Attorney Decision Input (Human Intelligence) write path ──────────────────────────────
         public async Task<Legal.Application.Features.Intelligence.Decision.AttorneyInputDraft?> CreateLegalAttorneyDraftAsync(Guid matterId,Legal.Application.Features.Intelligence.Decision.CreateAttorneyInputCommand command,CancellationToken token=default){using var response=await _httpClient.PostAsJsonAsync($"api/legal_decision/matters/{matterId}/decision-input/drafts",command,token);await EnsureSuccessWithDetailAsync(response,token);return await response.Content.ReadFromJsonAsync<Legal.Application.Features.Intelligence.Decision.AttorneyInputDraft>(cancellationToken:token);}
@@ -698,7 +699,14 @@ public sealed class ApiClient(HttpClient httpClient)
                         : $"The API throttled GET {uri} after {maximumAttempts} attempts: {detail}");
                 }
                 await EnsureSuccessWithDetailAsync(response,token);
-                return await response.Content.ReadFromJsonAsync<TResult>(cancellationToken:token);
+                // A successful response can legitimately carry no body (HTTP 204 No Content, or an empty
+                // 200 when the server has nothing to return). ReadFromJsonAsync throws "The input does not
+                // contain any JSON tokens" on an empty stream, so treat an empty body as a null result
+                // (callers already coalesce null to [] / handle null) instead of surfacing a parse error.
+                if(response.StatusCode==HttpStatusCode.NoContent||response.Content.Headers.ContentLength==0)return default;
+                var payload=await response.Content.ReadAsStringAsync(token);
+                if(string.IsNullOrWhiteSpace(payload))return default;
+                return System.Text.Json.JsonSerializer.Deserialize<TResult>(payload,new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
             }
 
             var retryAfter=response.Headers.RetryAfter;

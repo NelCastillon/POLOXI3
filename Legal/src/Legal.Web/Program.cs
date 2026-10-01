@@ -9,6 +9,9 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
 builder.Services.AddScoped<BreadcrumbService>();
+// Circuit-scoped working memory so the Personal Injury Decision 2 Overview can
+// restore its last candidate result after navigating into Full Analysis and back.
+builder.Services.AddScoped<DecisionOverviewStateCache>();
 
 // Bridges the active Blazor circuit's services to the ApiClient message handler
 // pipeline so AuthRedirectHandler can reach the initialized NavigationManager.

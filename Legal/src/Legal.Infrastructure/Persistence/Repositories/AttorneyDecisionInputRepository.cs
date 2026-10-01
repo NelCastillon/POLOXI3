@@ -54,7 +54,8 @@ public sealed class AttorneyDecisionInputRepository(ISqlConnectionFactory connec
                    assessment.ConfirmedValue,
                    approval.ApprovedByUserId,
                    LTRIM(RTRIM(CONCAT(ISNULL(u.FirstName, N''), N' ', ISNULL(u.LastName, N'')))) AS ApprovedByDisplayName,
-                   approval.GovernancePolicyCode, approval.CreatedDateUtc AS ApprovedDateUtc
+                   approval.GovernancePolicyCode, approval.CreatedDateUtc AS ApprovedDateUtc,
+                   assessment.PreviousSiblingValue, assessment.NextSiblingValue
             FROM POLOXI.Legal_ApprovedMatterAssessment approval
             JOIN POLOXI.Legal_AttorneyRelativeAssessment assessment ON assessment.AssessmentId = approval.AssessmentId
             LEFT JOIN dbo.AspNetUsers u ON u.Id = approval.ApprovedByUserId

@@ -56,7 +56,9 @@ public sealed class DecisionContractChannel(
         if (contract is null || !GovernedStatusCodes.Contains(contract.StatusCode))
             return [];
 
-        var nodeIndex = ChannelNodeTextMatcher.BuildNodeIndex(execution.Nodes);
+        // Domain Pack synonym terminology (advisory) only ADDS node-match recall; null pack = raw overlap.
+        var termLookup = context.ResolvedPack?.TermLookup;
+        var nodeIndex = ChannelNodeTextMatcher.BuildNodeIndex(execution.Nodes, termLookup);
         if (nodeIndex.Count == 0)
             return [];
 
@@ -80,9 +82,19 @@ public sealed class DecisionContractChannel(
             if (string.IsNullOrWhiteSpace(boundary.SnapshotText))
                 continue;
 
-            var bestNode = ChannelNodeTextMatcher.BestMatch(boundary.SnapshotText, nodeIndex, MinimumSharedTokens, out var bestOverlap);
+            var bestNode = ChannelNodeTextMatcher.BestMatch(boundary.SnapshotText, nodeIndex, MinimumSharedTokens, termLookup, out var bestOverlap);
             if (bestNode is null)
                 continue;
+
+            // Match-confidence magnitude (KNOWN/support branch only): how COMPLETELY the boundary text
+            // lexically covers the node's wording = sharedTokens / nodeSignificantTokenCount, clamped to [0,1].
+            // Boundary-INTRINSIC, never the node's own POLOXI score, so it cannot create a feedback loop and is
+            // stable across re-runs. Null for DISPUTED (challenge) and when the node has no significant tokens
+            // -> the adapter falls back to its fixed delta. Mirrors DocumentEvidence; POLOXI Wide2 owns outcome.
+            var boundaryNodeTokenCount = ChannelNodeTextMatcher.TokenizeWithSynonyms(bestNode.Statement, termLookup).Count;
+            double? boundaryMagnitude = isKnown && boundaryNodeTokenCount > 0
+                ? Math.Clamp((double)bestOverlap / boundaryNodeTokenCount, 0.0, 1.0)
+                : null;
 
             contributions.Add(new DecisionContribution
             {
@@ -97,6 +109,7 @@ public sealed class DecisionContractChannel(
                 TargetSignalCode = isKnown
                     ? DecisionChannelCodes.TargetSignal.FactSupport
                     : DecisionChannelCodes.TargetSignal.Uncertainty,
+                Magnitude = boundaryMagnitude,
                 ActorUserId = context.UserId,
                 Provenance = new ContributionProvenance
                 {
@@ -121,9 +134,18 @@ public sealed class DecisionContractChannel(
             if (!isStatuteRule && !isKeyIssue)
                 continue;
 
-            var bestNode = ChannelNodeTextMatcher.BestMatch(tag.TagText, nodeIndex, MinimumSharedTokens, out var bestOverlap);
+            var bestNode = ChannelNodeTextMatcher.BestMatch(tag.TagText, nodeIndex, MinimumSharedTokens, termLookup, out var bestOverlap);
             if (bestNode is null)
                 continue;
+
+            // Match-confidence magnitude (STATUTE_RULE/authority branch only): how COMPLETELY the tag text
+            // lexically covers the node's wording = sharedTokens / nodeSignificantTokenCount, clamped to [0,1].
+            // Tag-INTRINSIC, never the node's own POLOXI score. Null for KEY_ISSUE (context-only) and when the
+            // node has no significant tokens -> the adapter falls back to its fixed delta.
+            var tagNodeTokenCount = ChannelNodeTextMatcher.TokenizeWithSynonyms(bestNode.Statement, termLookup).Count;
+            double? tagMagnitude = isStatuteRule && tagNodeTokenCount > 0
+                ? Math.Clamp((double)bestOverlap / tagNodeTokenCount, 0.0, 1.0)
+                : null;
 
             contributions.Add(new DecisionContribution
             {
@@ -138,6 +160,7 @@ public sealed class DecisionContractChannel(
                 TargetSignalCode = isStatuteRule
                     ? DecisionChannelCodes.TargetSignal.AuthoritySupport
                     : DecisionChannelCodes.TargetSignal.FactSupport,
+                Magnitude = tagMagnitude,
                 // A statute rule is bounded by the contract's authority cutoff (null = always effective).
                 EffectiveToUtc = isStatuteRule ? authorityCutoffUtc : null,
                 ActorUserId = context.UserId,

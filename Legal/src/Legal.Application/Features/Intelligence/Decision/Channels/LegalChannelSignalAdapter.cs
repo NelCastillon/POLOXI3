@@ -67,9 +67,7 @@ public sealed class LegalChannelSignalAdapter(IChannelContributionLineageResolve
             var reopen = effect == ContributionEffect.Reopen;
             var delta = effect switch
             {
-                ContributionEffect.Support => contribution.Relation == ContributionRelation.Qualifies
-                    ? QualifiedSupportMagnitude
-                    : SupportMagnitude,
+                ContributionEffect.Support => SupportDelta(contribution),
                 ContributionEffect.Contradict => ContradictionMagnitude,
                 _ => 0.0, // Reopen carries no direct δ; it requests POLOXI to reopen verification.
             };
@@ -112,6 +110,26 @@ public sealed class LegalChannelSignalAdapter(IChannelContributionLineageResolve
         }
 
         return signals;
+    }
+
+    // Resolves the positive support δ for a supporting contribution. The base band is the fixed
+    // [QualifiedSupportMagnitude, SupportMagnitude] a qualitative relation is permitted to contribute.
+    // When the channel supplied a placement Magnitude (the attorney's deliberate relative position
+    // WITHIN the sibling band they chose — including a value overwritten in the UI), that [0,1]
+    // intelligence linearly selects where inside the permitted band this δ lands, so a stronger
+    // placement earns a stronger (but still bounded) support δ. Null Magnitude → fixed constant,
+    // preserving byte-identical legacy behavior. POLOXI Core still owns the final consequence.
+    private static double SupportDelta(DecisionContribution contribution)
+    {
+        var ceiling = contribution.Relation == ContributionRelation.Qualifies
+            ? QualifiedSupportMagnitude
+            : SupportMagnitude;
+
+        if (contribution.Magnitude is not { } magnitude)
+            return ceiling;
+
+        var position = Math.Clamp(magnitude, 0.0, 1.0);
+        return QualifiedSupportMagnitude + (ceiling - QualifiedSupportMagnitude) * position;
     }
 
     // The qualitative effect a contribution is permitted to have on POLOXI, gated by verification.

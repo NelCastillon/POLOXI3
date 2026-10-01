@@ -721,6 +721,122 @@ public sealed record DecisionDomainConceptRelationDto(
     bool IsHardConstraint,
     int SortOrder);
 
+// ── Domain Pack entity/event taxonomy, terminology, and evidence→signal map DTOs (migration 0373).
+// These are the DOMAIN SEMANTICS the Decision Channels and the document semantic interpreter resolve
+// through. Advisory configuration only — POLOXI Core owns all scoring and competition.
+public sealed record DecisionDomainEntityTypeDto(
+    string EntityTypeCode,
+    string Name,
+    string? DimensionCode,
+    string? Description,
+    int SortOrder);
+
+public sealed record DecisionDomainEventTypeDto(
+    string EventTypeCode,
+    string Name,
+    string? DimensionCode,
+    string? Description,
+    int SortOrder);
+
+public sealed record DecisionDomainTermDto(
+    string TermText,
+    string CanonicalCode,
+    string TermKindCode,
+    int Weight);
+
+public sealed record DecisionDomainSignalMapDto(
+    string EvidenceTypeCode,
+    string TargetSignalCode,
+    string RelationCode,
+    string? DimensionCode,
+    int SortOrder);
+
+// ── Extracted-document domain entities/events (persistence + read DTOs) ──
+public sealed record DocumentDomainEntityPersistence(
+    Guid DocumentDomainEntityId,
+    Guid DecisionMatterId,
+    Guid LegalDocumentId,
+    Guid LegalDocumentVersionId,
+    Guid? LegalDocumentPassageId,
+    string? DomainPackCode,
+    string EntityTypeCode,
+    string? DimensionCode,
+    string EntityText,
+    string? NormalizedValue,
+    decimal? Confidence,
+    string? ProposedByModel,
+    string? PromptRunId,
+    Guid TenantId,
+    Guid? CreatedByUserId);
+
+public sealed record DocumentDomainEventPersistence(
+    Guid DocumentDomainEventId,
+    Guid DecisionMatterId,
+    Guid LegalDocumentId,
+    Guid LegalDocumentVersionId,
+    Guid? LegalDocumentPassageId,
+    string? DomainPackCode,
+    string EventTypeCode,
+    string? DimensionCode,
+    string Summary,
+    DateTime? EventDateUtc,
+    decimal? Confidence,
+    string? ProposedByModel,
+    string? PromptRunId,
+    Guid TenantId,
+    Guid? CreatedByUserId);
+
+public sealed record DocumentDomainEntityDto(
+    Guid DocumentDomainEntityId,
+    Guid LegalDocumentId,
+    Guid LegalDocumentVersionId,
+    Guid? LegalDocumentPassageId,
+    string? DomainPackCode,
+    string EntityTypeCode,
+    string? DimensionCode,
+    string EntityText,
+    string? NormalizedValue,
+    decimal? Confidence,
+    DateTime CreatedDateUtc);
+
+public sealed record DocumentDomainEventDto(
+    Guid DocumentDomainEventId,
+    Guid LegalDocumentId,
+    Guid LegalDocumentVersionId,
+    Guid? LegalDocumentPassageId,
+    string? DomainPackCode,
+    string EventTypeCode,
+    string? DimensionCode,
+    string Summary,
+    DateTime? EventDateUtc,
+    decimal? Confidence,
+    DateTime CreatedDateUtc);
+
+// ── ResolvedDomainPack: the single cached, tenant-scoped view the IDomainPackResolver returns.
+// It is the formal abstraction the channels resolve through: it exposes concepts, synonym terminology
+// (for conservative domain-aware node matching), the evidence-type→TargetSignal/Relation map, and the
+// entity/event vocabularies. It never carries a numeric score or signal delta.
+public sealed record ResolvedDomainPack(
+    string PackCode,
+    string PracticeAreaCode,
+    IReadOnlyCollection<DecisionDomainConceptDto> Concepts,
+    IReadOnlyCollection<DecisionDomainEntityTypeDto> EntityTypes,
+    IReadOnlyCollection<DecisionDomainEventTypeDto> EventTypes,
+    IReadOnlyCollection<DecisionDomainTermDto> Terms,
+    IReadOnlyCollection<DecisionDomainSignalMapDto> SignalMap)
+{
+    // Synonym surface-form → canonical code, used by the matcher to expand node/assertion text.
+    public IReadOnlyDictionary<string, string> TermLookup { get; } =
+        Terms.GroupBy(t => t.TermText, StringComparer.OrdinalIgnoreCase)
+             .ToDictionary(g => g.Key, g => g.First().CanonicalCode, StringComparer.OrdinalIgnoreCase);
+
+    // Resolve the POLOXI TargetSignal/Relation an evidence type informs; null when the pack has no entry.
+    public DecisionDomainSignalMapDto? ResolveSignal(string? evidenceTypeCode)
+        => string.IsNullOrWhiteSpace(evidenceTypeCode)
+            ? null
+            : SignalMap.FirstOrDefault(m => string.Equals(m.EvidenceTypeCode, evidenceTypeCode, StringComparison.OrdinalIgnoreCase));
+}
+
 // Well-known Domain Pack codes.
 public static class DecisionDomainPackCodes
 {
@@ -967,3 +1083,247 @@ public sealed record DecisionGovernanceVerdictDto(
     IReadOnlyCollection<string> OutputViolations,
     IReadOnlyCollection<GovernanceClaimDto> InvolvedClaims,
     IReadOnlyCollection<string> Narrative);
+
+// ── Candidate Full Analysis read model ──────────────────────────────────────────────────────────
+// ── Decision Presentation Gate ─────────────────────────────────────────────────────────────────────────────────────
+// The authoritative, UI-agnostic presentation state of a decision. It is DERIVED (never guessed) from
+// already-persisted signals — competition execution, contract completeness, readiness verdict, and the
+// scoring-blocked status — so every surface (header, metrics, brief) projects the SAME epistemic truth.
+// Nothing here changes the underlying verdicts; it only governs how honestly they may be presented.
+public enum DecisionPresentationState
+{
+    // No decision session / candidates at all.
+    NoDecision,
+
+    // Candidate structure established, but authoritative competition has not produced a winner.
+    CompetitionBlocked,
+
+    // Competition ran and a candidate is leading, but readiness/contract are not fully satisfied.
+    Provisional,
+
+    // Competition ran AND readiness is satisfied: an authoritative decision may be presented.
+    DecisionReady,
+}
+
+// A pure projection carrying the derived presentation state plus the individual authoritative gates that
+// produced it, so the UI can both pick the correct headline AND explain exactly why it is (not) a decision.
+public sealed record DecisionPresentationStatus(
+    DecisionPresentationState State,
+    bool CompetitionExecuted,
+    bool ContractComplete,
+    bool ReadinessPassed,
+    int ContractCompletenessPct,
+    int InterpretiveSupportPct,
+    int NormalizedEntropyPct,
+    string Headline,
+    string? BlockingReason,
+    IReadOnlyList<string> Blockers)
+{
+    // True only when the UI is permitted to use authoritative decision language
+    // ("Current Leader", "Decision Score", "Decision established").
+    public bool CanShowCurrentLeader => CompetitionExecuted && State == DecisionPresentationState.DecisionReady;
+
+    // True when competition did not execute: interpretive numbers must be relabeled and badged "NOT COMPETED".
+    public bool IsInterpretiveOnly => !CompetitionExecuted;
+}
+
+// ── Candidate Full Analysis read model ─────────────────────────────────────────────────────────────────────────────
+// Authoritative, DB-backed composition powering the dedicated Candidate Full Analysis workspace
+// (/legal/decision/candidate-analysis). It is assembled server-side from already-persisted sources —
+// the matter, the latest decision session, the matter evidence graph, matter change events, and
+// document stats — then projected onto ONE candidate (by its 1-based rank index). Sections for which
+// no persisted per-candidate source exists yet are returned empty so the UI renders honest
+// empty-states rather than fabricated values. Nothing here is hardcoded or mocked.
+public sealed record CandidateFullAnalysisDto(
+    Guid MatterId,
+    string MatterTitle,
+    string? Jurisdiction,
+    string? Posture,
+    Guid? DecisionSessionId,
+    int CandidateIndex,
+    string CandidateLabel,
+    string CandidateTitle,
+    string? CandidateDescription,
+    bool IsLeader,
+    int DecisionScorePct,
+    int RankPosition,
+    int RankTotal,
+    int MarginVsNextPts,
+    string UncertaintyLabel,
+    string ReadinessLabel,
+    DateTime? LastRecalibratedUtc,
+    IReadOnlyList<CandidateDimensionDto> Dimensions,
+    IReadOnlyList<CandidateDriverDto> StrongestDrivers,
+    IReadOnlyList<CandidateConstraintDto> StrongestConstraints,
+    CandidateHierarchySummaryDto Hierarchy,
+    IReadOnlyList<CandidateHierarchyNodeDto> HierarchyNodes,
+    IReadOnlyList<CandidatePropositionDto> Propositions,
+    IReadOnlyList<CandidateEvidenceCategoryDto> EvidenceBreakdown,
+    IReadOnlyList<CandidateMaterialEvidenceDto> MaterialEvidence,
+    CandidateAuthoritySummaryDto Authority,
+    IReadOnlyList<CandidateFlipPointDto> FlipPoints,
+    IReadOnlyList<CandidateAdvItemDto> NextBestInformation,
+    CandidateDocumentIntelligenceDto DocumentIntelligence,
+    IReadOnlyList<CandidateUncertaintyBandDto> UncertaintyMap,
+    IReadOnlyList<CandidateChangeHistoryDto> ChangeHistory,
+    CandidateReadinessDto Readiness,
+    string? Narrative)
+{
+    // Derived presentation gate (never persisted directly). Governs whether the UI may use authoritative
+    // decision language or must present interpretation-prior values relabeled with a "NOT COMPETED" badge.
+    // Defaults to NoDecision so an un-populated DTO can never overstate certainty.
+    public DecisionPresentationStatus Presentation { get; init; } = new(
+        DecisionPresentationState.NoDecision,
+        CompetitionExecuted: false,
+        ContractComplete: false,
+        ReadinessPassed: false,
+        ContractCompletenessPct: 0,
+        InterpretiveSupportPct: 0,
+        NormalizedEntropyPct: 0,
+        Headline: "No decision",
+        BlockingReason: null,
+        Blockers: []);
+}
+
+// A single multidimensional state bar (LEGAL / FACT / EVIDENCE / AUTHORITY / VERIFICATION).
+public sealed record CandidateDimensionDto(string Label, int ValuePct, string Tone);
+
+// A driver that pushes the candidate up, with its evidence-grounding counts.
+public sealed record CandidateDriverDto(
+    string Label,
+    int StrengthPct,
+    string Description,
+    int PropositionCount,
+    int EvidenceBindingCount);
+
+// A constraint / risk working against the candidate.
+public sealed record CandidateConstraintDto(string Label, string SeverityLabel, string Tone);
+
+// Roll-up counters for the Candidate Hierarchy (CHR) panel.
+public sealed record CandidateHierarchySummaryDto(
+    int NodeCount,
+    int ResolvedCount,
+    int TotalForResolution,
+    string CoverageLabel,
+    string DepthLabel);
+
+// One node in the candidate decision hierarchy tree (CHR). ParentNodeKey is null at the root.
+public sealed record CandidateHierarchyNodeDto(
+    string NodeKey,
+    string? ParentNodeKey,
+    int Depth,
+    string Label,
+    int? StrengthPct,
+    string StateCode,
+    string StateTone,
+    Guid? PropositionId);
+
+// A proposition shown in the Proposition Inspector, with its grounding edges.
+public sealed record CandidatePropositionDto(
+    Guid PropositionId,
+    string Code,
+    string Text,
+    string StatusCode,
+    string StatusTone,
+    string AprLabel,
+    string? FactorPath,
+    IReadOnlyList<CandidatePropositionEvidenceDto> Evidence);
+
+// An evidence edge grounding a proposition (SUPPORTS / CONTRADICTS / QUALIFIES / INSUFFICIENT).
+public sealed record CandidatePropositionEvidenceDto(
+    Guid EvidenceItemId,
+    string RelationshipTypeCode,
+    string RelationshipTone,
+    string DocumentFileName,
+    int? PageNumber,
+    string? Summary,
+    int? VerificationPct);
+
+// Evidence-analysis matrix row (per factor/dimension).
+public sealed record CandidateEvidenceCategoryDto(
+    string Label,
+    int Supports,
+    int Contradicts,
+    int Qualifies,
+    int Insufficient);
+
+// A single most-decision-material evidence item (HRR + AER trace).
+public sealed record CandidateMaterialEvidenceDto(
+    Guid EvidenceItemId,
+    string DocumentFileName,
+    int? PageNumber,
+    string? SourceAssertion,
+    string? HrrPath,
+    string AerRelationshipCode,
+    string AerTone,
+    int? VerificationPct);
+
+// Legal-authority roll-up and the top controlling authority (kept distinct from ordinary evidence).
+public sealed record CandidateAuthoritySummaryDto(
+    int TotalCount,
+    int VerifiedCount,
+    int PendingCount,
+    string? TopAuthorityLabel,
+    string? TopAuthorityCitation,
+    string? RelevantProposition,
+    bool CitationVerified,
+    bool HoldingVerified,
+    bool AuthorityVerified,
+    string? PropositionFitLabel,
+    string? EffectLabel);
+
+// A flip point that could change the candidate's standing.
+public sealed record CandidateFlipPointDto(
+    string Label,
+    string CurrentStateLabel,
+    string FlipPotentialLabel,
+    string Tone,
+    string? Rationale,
+    string? AffectedCandidates);
+
+// An ADV / next-best-information recommendation.
+public sealed record CandidateAdvItemDto(
+    int Rank,
+    string Title,
+    decimal Adv,
+    decimal InformationValue,
+    decimal DecisionRelevance,
+    decimal FlipPotential,
+    string EstimatedCostLabel,
+    string? WhyItMatters,
+    string? AffectedHierarchyPath);
+
+// Document-intelligence wiring roll-up for the candidate.
+public sealed record CandidateDocumentIntelligenceDto(
+    int MatterDocumentCount,
+    int RelevantDocumentCount,
+    int SourceAssertionCount,
+    int PropositionBindingCount,
+    int VerifiedEvidenceCount,
+    int ContradictionCount,
+    string? LatestDocumentFileName,
+    int? LatestDocumentPage,
+    string? LatestAssertionCode,
+    string? LatestPropositionCode,
+    string? LatestAerCode,
+    string? LatestDecisionEffect);
+
+// One uncertainty band in the uncertainty map.
+public sealed record CandidateUncertaintyBandDto(string Label, int LevelPct, string LevelLabel, string Tone);
+
+// A decision-change-history point for the candidate (DCI).
+public sealed record CandidateChangeHistoryDto(
+    DateTime WhenUtc,
+    string Label,
+    int? ScorePct,
+    int? DeltaPts,
+    string Tone);
+
+// Candidate-specific readiness breakdown and blockers.
+public sealed record CandidateReadinessDto(
+    string StateLabel,
+    int OverallPct,
+    IReadOnlyList<CandidateReadinessMetricDto> Metrics,
+    IReadOnlyList<string> Blockers);
+
+public sealed record CandidateReadinessMetricDto(string Label, string Value, int? Pct, string Tone);

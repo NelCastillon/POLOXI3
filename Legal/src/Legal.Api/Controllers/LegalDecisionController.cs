@@ -116,6 +116,15 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
     public async Task<IActionResult> MatterSessions(Guid matterId, CancellationToken cancellationToken)
         => Ok(await service.GetMatterSessionsAsync(TenantId, matterId, cancellationToken));
 
+    // Composed, DB-backed Candidate Full Analysis read model for one candidate (1-based rank index).
+    [HttpGet("matters/{matterId:guid}/candidate-analysis/{candidateIndex:int}")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> CandidateFullAnalysis(Guid matterId, int candidateIndex, CancellationToken cancellationToken)
+    {
+        var analysis = await service.GetCandidateFullAnalysisAsync(TenantId, matterId, candidateIndex, cancellationToken);
+        return analysis is null ? NotFound() : Ok(analysis);
+    }
+
     [HttpGet("matters/{matterId:guid}/documents")]
     [Authorize(Policy = IntelligencePolicies.Search)]
     public async Task<IActionResult> MatterDocuments(Guid matterId, CancellationToken cancellationToken)

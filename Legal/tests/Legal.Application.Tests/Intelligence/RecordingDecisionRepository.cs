@@ -347,6 +347,18 @@ internal sealed class RecordingDecisionRepository : ILegalDecisionRepository
     public Task<IReadOnlyCollection<DecisionDomainPackDto>> GetDomainPacksAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => Task.FromResult<IReadOnlyCollection<DecisionDomainPackDto>>([]);
 
+    public Task<IReadOnlyCollection<DecisionDomainEntityTypeDto>> GetDomainEntityTypesAsync(Guid tenantId, string packCode, CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyCollection<DecisionDomainEntityTypeDto>>([]);
+
+    public Task<IReadOnlyCollection<DecisionDomainEventTypeDto>> GetDomainEventTypesAsync(Guid tenantId, string packCode, CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyCollection<DecisionDomainEventTypeDto>>([]);
+
+    public Task<IReadOnlyCollection<DecisionDomainTermDto>> GetDomainTermsAsync(Guid tenantId, string packCode, CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyCollection<DecisionDomainTermDto>>([]);
+
+    public Task<IReadOnlyCollection<DecisionDomainSignalMapDto>> GetDomainSignalMapAsync(Guid tenantId, string packCode, CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyCollection<DecisionDomainSignalMapDto>>([]);
+
     public Task PersistGraphAsync(DecisionGraphPersistence graph, CancellationToken cancellationToken = default)
         => Task.CompletedTask;
 

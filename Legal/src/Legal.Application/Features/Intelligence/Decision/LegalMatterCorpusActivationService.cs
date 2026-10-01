@@ -15,6 +15,7 @@ public sealed class LegalMatterCorpusActivationService(
     IMatterChangeProcessor matterChangeProcessor,
     IDecisionIntegrityRepository integrityRepository,
     ILegalDecisionRepository decisionRepository,
+    IDomainPackResolver domainPackResolver,
     IAiProviderRouter aiRouter,
     ILogger<LegalMatterCorpusActivationService> logger) : ILegalMatterCorpusActivationService
 {
@@ -65,13 +66,37 @@ public sealed class LegalMatterCorpusActivationService(
                         var domainConcepts = await ResolveDomainConceptsAsync(
                             tenantId, version.DomainPackCode, conceptsByPack, cancellationToken);
                         conceptBound = domainConcepts.Count > 0;
+                        var resolvedPack = await domainPackResolver.ResolveAsync(tenantId, version.DomainPackCode, cancellationToken);
                         var proposal = await semanticInterpreter.InterpretAsync(
                             tenantId, matterId, version.LegalDocumentId, version.LegalDocumentVersionId,
-                            version.DomainPackCode, domainConcepts, passages, correlationId, modelCode, cancellationToken);
+                            version.DomainPackCode, domainConcepts, passages, correlationId, modelCode, resolvedPack, cancellationToken);
                         evidenceExtracted = proposal.EvidenceItems.Count;
                         await corpusRepository.SaveSemanticProposalAsync(
                             tenantId, userId, matterId, version.LegalDocumentId,
                             version.LegalDocumentVersionId, proposal, cancellationToken);
+
+                        if (proposal.DomainEntities.Count > 0 || proposal.DomainEvents.Count > 0)
+                        {
+                            var entities = proposal.DomainEntities
+                                .Select(entity => new DocumentDomainEntityPersistence(
+                                    Guid.NewGuid(), matterId, version.LegalDocumentId, version.LegalDocumentVersionId,
+                                    entity.PassageId, resolvedPack.PackCode, entity.EntityTypeCode, entity.DimensionCode,
+                                    entity.EntityText, entity.NormalizedValue, entity.Confidence,
+                                    modelCode, correlationId, tenantId, userId))
+                                .ToArray();
+                            var events = proposal.DomainEvents
+                                .Select(ev => new DocumentDomainEventPersistence(
+                                    Guid.NewGuid(), matterId, version.LegalDocumentId, version.LegalDocumentVersionId,
+                                    ev.PassageId, resolvedPack.PackCode, ev.EventTypeCode, ev.DimensionCode,
+                                    ev.Summary, ev.EventDateUtc, ev.Confidence,
+                                    modelCode, correlationId, tenantId, userId))
+                                .ToArray();
+                            await corpusRepository.SaveDocumentDomainExtractionAsync(
+                                tenantId, userId, matterId, version.LegalDocumentId,
+                                version.LegalDocumentVersionId,
+                                string.IsNullOrWhiteSpace(resolvedPack.PackCode) ? version.DomainPackCode : resolvedPack.PackCode,
+                                entities, events, cancellationToken);
+                        }
                     }
                 }
 

@@ -443,6 +443,49 @@ public sealed partial class LegalDecisionService(
     public Task<IReadOnlyCollection<DecisionSessionSummaryDto>> GetMatterSessionsAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default)
         => repository.GetMatterSessionsAsync(tenantId, decisionMatterId, cancellationToken);
 
+    // ── Candidate Full Analysis read model ──────────────────────────────────────────────────────
+    // Composes the dedicated Candidate Full Analysis workspace from already-persisted, authoritative
+    // sources: the matter, its latest decision session result (candidates / branches / evidence / flip
+    // points / graph / readiness), the matter evidence graph (documents ↔ propositions ↔ support), and
+    // matter change events (DCI). It projects onto ONE candidate selected by 1-based rank index. Nothing
+    // is fabricated: sections with no persisted per-candidate source are returned empty so the UI can
+    // render honest empty-states.
+    public async Task<CandidateFullAnalysisDto?> GetCandidateFullAnalysisAsync(
+        Guid tenantId, Guid decisionMatterId, int candidateIndex, CancellationToken cancellationToken = default)
+    {
+        var matter = await repository.GetMatterAsync(tenantId, decisionMatterId, cancellationToken);
+        if (matter is null)
+            return null;
+
+        var sessionId = matter.LatestSessionId;
+        DecisionSearchResponse? decision = null;
+        if (sessionId is { } sid)
+            decision = await GetSessionResultAsync(tenantId, sid, cancellationToken);
+
+        LegalMatterEvidenceGraphDto? evidenceGraph = null;
+        try
+        {
+            evidenceGraph = await documentCorpusRepository.GetMatterEvidenceGraphAsync(tenantId, decisionMatterId, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Candidate full analysis: evidence graph unavailable for matter {MatterId}", decisionMatterId);
+        }
+
+        IReadOnlyCollection<MatterChangeEventDto> changeEvents = [];
+        try
+        {
+            changeEvents = await integrityRepository.GetMatterChangeEventsAsync(tenantId, decisionMatterId, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Candidate full analysis: change events unavailable for matter {MatterId}", decisionMatterId);
+        }
+
+        return CandidateFullAnalysisComposer.Compose(matter, sessionId, candidateIndex, decision, evidenceGraph, changeEvents);
+    }
+
+
     public Task<bool> UpdateMatterAsync(Guid tenantId, Guid userId, Guid decisionMatterId, DecisionMatterUpdateRequest request, CancellationToken cancellationToken = default)
         => repository.UpdateMatterAsync(tenantId, userId, decisionMatterId, request, cancellationToken);
 

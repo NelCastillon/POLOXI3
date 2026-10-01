@@ -592,12 +592,12 @@ WHERE Rn=1 ORDER BY AnswerKindCode;
     {
         const string sql="""
 DECLARE @WideExecutionId UNIQUEIDENTIFIER=NEWID();
-INSERT POLOXI.Legal_WideExecution(WideExecutionId,TenantId,UserId,QueryText,CorrelationId,StatusCode,ParentWideExecutionId,CreatedDateUtc,CreatedByUserId,IsDeleted)
-VALUES(@WideExecutionId,@TenantId,@UserId,@QueryText,@CorrelationId,N'RUNNING',@ParentWideExecutionId,SYSUTCDATETIME(),@UserId,0);
+INSERT POLOXI.Legal_WideExecution(WideExecutionId,TenantId,UserId,QueryText,CorrelationId,StatusCode,ParentWideExecutionId,MatterId,CreatedDateUtc,CreatedByUserId,IsDeleted)
+VALUES(@WideExecutionId,@TenantId,@UserId,@QueryText,@CorrelationId,N'RUNNING',@ParentWideExecutionId,@MatterId,SYSUTCDATETIME(),@UserId,0);
 SELECT @WideExecutionId;
 """;
         using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        return await connection.ExecuteScalarAsync<Guid>(new CommandDefinition(sql,new{start.TenantId,start.UserId,start.QueryText,start.CorrelationId,start.ParentWideExecutionId},cancellationToken:cancellationToken));
+        return await connection.ExecuteScalarAsync<Guid>(new CommandDefinition(sql,new{start.TenantId,start.UserId,start.QueryText,start.CorrelationId,start.ParentWideExecutionId,start.MatterId},cancellationToken:cancellationToken));
     }
 
     public async Task SaveWideBranchesAsync(IReadOnlyCollection<WideBranchRecord> branches,Guid userId,CancellationToken cancellationToken=default)

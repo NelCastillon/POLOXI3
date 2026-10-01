@@ -50,7 +50,9 @@ public sealed class LegalAuthorityChannel(
         if (verifiedAuthorities.Length == 0)
             return [];
 
-        var nodeIndex = ChannelNodeTextMatcher.BuildNodeIndex(execution.Nodes);
+        // Domain Pack synonym terminology (advisory) only ADDS node-match recall; null pack = raw overlap.
+        var termLookup = context.ResolvedPack?.TermLookup;
+        var nodeIndex = ChannelNodeTextMatcher.BuildNodeIndex(execution.Nodes, termLookup);
         if (nodeIndex.Count == 0)
             return [];
 
@@ -59,9 +61,19 @@ public sealed class LegalAuthorityChannel(
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var bestNode = ChannelNodeTextMatcher.BestMatch(authority.Summary, nodeIndex, MinimumSharedTokens, out var bestOverlap);
+            var bestNode = ChannelNodeTextMatcher.BestMatch(authority.Summary, nodeIndex, MinimumSharedTokens, termLookup, out var bestOverlap);
             if (bestNode is null)
                 continue;
+
+            // Match-confidence magnitude: how COMPLETELY the authority text lexically covers the node's
+            // wording = sharedTokens / nodeSignificantTokenCount, clamped to [0,1]. This is authority-INTRINSIC
+            // (a property of the text), never the node's own POLOXI score, so it cannot create a feedback loop
+            // and is stable across re-runs. Null when the node has no significant tokens -> the adapter falls
+            // back to its fixed delta. Mirrors DocumentEvidence; POLOXI Wide2 still owns the scoring consequence.
+            var nodeTokenCount = ChannelNodeTextMatcher.TokenizeWithSynonyms(bestNode.Statement, termLookup).Count;
+            double? matchConfidence = nodeTokenCount > 0
+                ? Math.Clamp((double)bestOverlap / nodeTokenCount, 0.0, 1.0)
+                : null;
 
             contributions.Add(new DecisionContribution
             {
@@ -73,6 +85,7 @@ public sealed class LegalAuthorityChannel(
                 Relation = ContributionRelation.Establishes,
                 VerificationState = ContributionVerificationState.Verified,
                 TargetSignalCode = DecisionChannelCodes.TargetSignal.AuthoritySupport,
+                Magnitude = matchConfidence,
                 // Qualitative qualifiers (codes, not scores). Directness is derived from how strongly the
                 // authority text lexically governs the node; applicability records the governing dimension.
                 ApplicabilityCode = string.IsNullOrWhiteSpace(authority.DimensionCode) ? null : authority.DimensionCode,

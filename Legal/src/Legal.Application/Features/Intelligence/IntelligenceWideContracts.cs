@@ -588,6 +588,12 @@ public sealed record WideSearchResponse(Guid WideExecutionId,string Query,string
     // defaults match the deterministic DecisionCoreMath constants). Null when the config read failed
     // soft \u2014 the UI then omits the computation-details tile rather than fabricating constants.
     public WidePoloxiComputationDetailsDto? PoloxiComputationDetails{get;init;}
+    // Candidate Landscape Narrative Composer output (PRESENTATION ONLY). A single fail-soft LLM pass that
+    // explains the WHOLE candidate competition as one coherent system and produces an individualized
+    // narrative for every candidate (why it occupies its position, what differentiates it, what weakens
+    // it, what could change it). POLOXI remains the sole owner of ranking/scoring/uncertainty; this layer
+    // never changes the decision state. Null for non-legal context, zero candidates, or a fail-soft error.
+    public WideCandidateLandscapeDto? CandidateLandscape{get;init;}
 }
 // POLOXI computation-details projection for the Candidate Competition tab. Every value is DB-backed
 // (Core.ConfigurationSetting) so the UI never hardcodes scoring weights or the algorithm version.
@@ -664,6 +670,54 @@ public sealed record WideLegalAnswerDto(
 // reason it supports the conclusion. The output guard rejects the composed answer if Name is not a
 // verified authority.
 public sealed record WideLegalAuthorityDto(string Name,string Relevance,string? Reference);
+
+// \u2500\u2500 Candidate Landscape Narrative Composer (PRESENTATION ONLY) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+// One coherent explanation of the WHOLE candidate competition plus an individualized narrative for every
+// candidate. Every field is prose/label the UI renders directly; nothing here is a score or a ranking.
+// POLOXI already decided \u2014 this layer only communicates WHY the landscape has its shape and WHAT could
+// change it. PresentationState distinguishes an authoritative competition from a provisional/interpretive
+// read so the UI chooses the correct vocabulary (leader vs leading interpretation).
+public sealed record WideCandidateLandscapeDto(
+    string? AnalysisRunId,
+    string PresentationState,          // INTERPRETIVE | COMPETED | BLOCKED | OTHER
+    string? ExecutiveSynthesis,
+    IReadOnlyCollection<string> PrincipalDiscriminators,
+    IReadOnlyCollection<string> MaterialUnknowns,
+    IReadOnlyCollection<WideCandidateNarrativeDto> Candidates);
+
+// One candidate's narrative within the landscape. OverviewHeadline/OverviewNarrative feed the Overview
+// card (the 55\u201390 word card narrative); FullAnalysis carries the deeper sections rendered later on the
+// View Full Analysis page. Null fields degrade gracefully in the UI.
+public sealed record WideCandidateNarrativeDto(
+    string? CandidateId,
+    string CandidateName,
+    string PresentationRole,           // LEADING_INTERPRETATION | COMPETING_INTERPRETATION | AUTHORITATIVE_LEADER | COMPETED_CANDIDATE | OTHER
+    string? OverviewHeadline,
+    string OverviewNarrative,
+    IReadOnlyCollection<WideCandidateDriverDto> KeyDrivers,
+    string? PrimaryRiskLabel,
+    string? PrimaryRiskReason,
+    string? StrongestAlternativeName,
+    string? StrongestAlternativeDiscriminator,
+    WideCandidateFullAnalysisNarrativeDto? FullAnalysis);
+
+// A single decision-material driver for a candidate (label + plain-language reason it matters).
+public sealed record WideCandidateDriverDto(string Label,string? Reason);
+
+// Deep, per-candidate narrative for the View Full Analysis page. Each section is a single prose block
+// composed in the SAME landscape pass so sections stay cross-candidate consistent.
+public sealed record WideCandidateFullAnalysisNarrativeDto(
+    string? ExecutiveAssessment,
+    string? WhyCurrentPosition,
+    string? EvidenceAndAuthorityPosition,
+    string? ComparisonWithStrongestAlternative,
+    string? StrongestCaseAgainst,
+    string? MaterialUncertainty,
+    string? WhatStrengthensCandidate,
+    string? WhatWeakensCandidate,
+    string? WhatCouldChangePosition,
+    string? NextBestInformation,
+    string? CurrentDecisionPosition);
 
 // POLOXI ABV display projection. Every business value carries a provenance source code
 // (DERIVED / EVIDENCE / BUSINESS_POLICY / DOMAIN_CONFIG). Unsupported values (exposure, SLA, owner)
@@ -1316,6 +1370,10 @@ public sealed record WideExecutionStart(Guid TenantId,Guid UserId,string QueryTe
 {
     // V3.4: links a clarification continuation to the execution that asked the question.
     public Guid? ParentWideExecutionId{get;init;}
+    // Links this Wide execution to the originating matter so the Candidate Full Analysis
+    // drill-down can rehydrate the same persisted candidates/branches by matter. Null for
+    // ad-hoc (non-matter) wide searches.
+    public Guid? MatterId{get;init;}
 }
 
 public sealed record WideBranchRecord(Guid WideBranchId,Guid WideExecutionId,Guid? ParentWideBranchId,Guid TenantId,int LevelNumber,string BranchCode,string DisplayName,string Interpretation,string? CapabilityCode,string? SearchText,string GroundingStatusCode,int EvidenceCount,decimal Confidence,bool ContinueNarrowing,string? StopReason,bool IsEliminated,string? EliminationReason,int SortOrder)
@@ -1339,6 +1397,16 @@ public sealed record WideCandidateRecord(Guid WideCandidateId,Guid WideExecution
 }
 
 public sealed record WideCandidateBranchScoreRecord(Guid WideCandidateBranchScoreId,Guid WideCandidateId,Guid WideBranchId,Guid TenantId,string BranchDisplayName,decimal EvidenceScore);
+
+// ── Matter-addressable read model ───────────────────────────────────────────
+// Read-only projections used to rehydrate the latest completed Wide execution for
+// a matter so the Candidate Full Analysis drill-down shows the SAME candidates the
+// Overview rendered. These are flat read rows mapped from the persisted Wide store.
+public sealed record WideExecutionSummary(Guid WideExecutionId,Guid TenantId,Guid? MatterId,string QueryText,string StatusCode,string? TerminationReasonCode,int DepthReached,int LlmCallCount,decimal FinalConfidence,string? FinalAnswer,long DurationMilliseconds,DateTime CreatedDateUtc);
+
+public sealed record WideCandidateReadRow(Guid WideCandidateId,Guid WideExecutionId,string DisplayName,string? Detail,decimal CompositeScore,int RankNumber,bool IsConstraintViolation,string? ConstraintViolationReason);
+
+public sealed record WideBranchReadRow(Guid WideBranchId,Guid? ParentWideBranchId,int LevelNumber,string BranchCode,string DisplayName,string? Interpretation,string BranchStateCode,decimal Confidence,decimal InterpretationPrior,decimal EvidenceSupport,decimal PoloxiConfidence,int EvidenceCount,bool IsEliminated,int SortOrder);
 
 // Batch persistence rows (one round trip per level/phase instead of per branch).
 public sealed record WideBranchOutcomeUpdate(Guid WideBranchId,string GroundingStatusCode,int EvidenceCount,bool IsEliminated,string? EliminationReason);

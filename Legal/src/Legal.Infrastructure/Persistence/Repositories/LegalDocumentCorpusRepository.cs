@@ -1583,6 +1583,109 @@ public sealed class LegalDocumentCorpusRepository(ISqlConnectionFactory connecti
         }
     }
 
+    // Persists the domain-specific entities/events extracted for a document version (migration 0373).
+    // Idempotent per version: soft-deletes the version's prior extraction rows, then inserts the new set.
+    public async Task SaveDocumentDomainExtractionAsync(
+        Guid tenantId, Guid userId, Guid matterId, Guid documentId, Guid documentVersionId, string? domainPackCode,
+        IReadOnlyCollection<DocumentDomainEntityPersistence> entities,
+        IReadOnlyCollection<DocumentDomainEventPersistence> events,
+        CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        using var transaction = connection.BeginTransaction();
+        try
+        {
+            var ownsDocument = await connection.ExecuteScalarAsync<int>(new CommandDefinition(
+                """
+                SELECT COUNT(1)
+                FROM POLOXI.Legal_MatterDocument document
+                INNER JOIN POLOXI.Legal_MatterDocumentVersion version ON version.LegalDocumentId=document.LegalDocumentId
+                WHERE document.LegalDocumentId=@DocumentId AND document.DecisionMatterId=@MatterId
+                  AND version.LegalDocumentVersionId=@DocumentVersionId
+                  AND document.TenantId=@TenantId AND version.TenantId=@TenantId
+                  AND document.IsDeleted=0 AND version.IsDeleted=0;
+                """, new { DocumentId = documentId, MatterId = matterId, DocumentVersionId = documentVersionId, TenantId = tenantId }, transaction, cancellationToken: cancellationToken));
+            if (ownsDocument != 1)
+                throw new InvalidOperationException("The document, version, and matter do not belong to the requested tenant scope.");
+
+            await connection.ExecuteAsync(new CommandDefinition(
+                "UPDATE POLOXI.Legal_DocumentDomainEntity SET IsDeleted=1,ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@UserId WHERE LegalDocumentVersionId=@VersionId AND TenantId=@TenantId AND IsDeleted=0;",
+                new { VersionId = documentVersionId, TenantId = tenantId, UserId = userId }, transaction, cancellationToken: cancellationToken));
+            await connection.ExecuteAsync(new CommandDefinition(
+                "UPDATE POLOXI.Legal_DocumentDomainEvent SET IsDeleted=1,ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@UserId WHERE LegalDocumentVersionId=@VersionId AND TenantId=@TenantId AND IsDeleted=0;",
+                new { VersionId = documentVersionId, TenantId = tenantId, UserId = userId }, transaction, cancellationToken: cancellationToken));
+
+            foreach (var entity in entities)
+            {
+                await connection.ExecuteAsync(new CommandDefinition(
+                    """
+                    INSERT POLOXI.Legal_DocumentDomainEntity
+                        (DocumentDomainEntityId,DecisionMatterId,LegalDocumentId,LegalDocumentVersionId,LegalDocumentPassageId,DomainPackCode,EntityTypeCode,DimensionCode,EntityText,NormalizedValue,Confidence,ProposedByModel,PromptRunId,TenantId,CreatedByUserId)
+                    VALUES (@Id,@MatterId,@DocumentId,@VersionId,@PassageId,@DomainPackCode,@EntityTypeCode,@DimensionCode,@EntityText,@NormalizedValue,@Confidence,@ProposedByModel,@PromptRunId,@TenantId,@UserId);
+                    """,
+                    new
+                    {
+                        Id = entity.DocumentDomainEntityId == Guid.Empty ? Guid.NewGuid() : entity.DocumentDomainEntityId,
+                        MatterId = matterId, DocumentId = documentId, VersionId = documentVersionId,
+                        PassageId = entity.LegalDocumentPassageId, DomainPackCode = domainPackCode,
+                        entity.EntityTypeCode, entity.DimensionCode, entity.EntityText, entity.NormalizedValue,
+                        entity.Confidence, entity.ProposedByModel, entity.PromptRunId, TenantId = tenantId, UserId = userId
+                    }, transaction, cancellationToken: cancellationToken));
+            }
+
+            foreach (var ev in events)
+            {
+                await connection.ExecuteAsync(new CommandDefinition(
+                    """
+                    INSERT POLOXI.Legal_DocumentDomainEvent
+                        (DocumentDomainEventId,DecisionMatterId,LegalDocumentId,LegalDocumentVersionId,LegalDocumentPassageId,DomainPackCode,EventTypeCode,DimensionCode,Summary,EventDateUtc,Confidence,ProposedByModel,PromptRunId,TenantId,CreatedByUserId)
+                    VALUES (@Id,@MatterId,@DocumentId,@VersionId,@PassageId,@DomainPackCode,@EventTypeCode,@DimensionCode,@Summary,@EventDateUtc,@Confidence,@ProposedByModel,@PromptRunId,@TenantId,@UserId);
+                    """,
+                    new
+                    {
+                        Id = ev.DocumentDomainEventId == Guid.Empty ? Guid.NewGuid() : ev.DocumentDomainEventId,
+                        MatterId = matterId, DocumentId = documentId, VersionId = documentVersionId,
+                        PassageId = ev.LegalDocumentPassageId, DomainPackCode = domainPackCode,
+                        ev.EventTypeCode, ev.DimensionCode, ev.Summary, ev.EventDateUtc,
+                        ev.Confidence, ev.ProposedByModel, ev.PromptRunId, TenantId = tenantId, UserId = userId
+                    }, transaction, cancellationToken: cancellationToken));
+            }
+
+            transaction.Commit();
+        }
+        catch
+        {
+            transaction.Rollback();
+            throw;
+        }
+    }
+
+    public async Task<IReadOnlyCollection<DocumentDomainEntityDto>> GetMatterDomainEntitiesAsync(Guid tenantId, Guid matterId, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return (await connection.QueryAsync<DocumentDomainEntityDto>(new CommandDefinition(
+            """
+            SELECT DocumentDomainEntityId, LegalDocumentId, LegalDocumentVersionId, LegalDocumentPassageId,
+                   DomainPackCode, EntityTypeCode, DimensionCode, EntityText, NormalizedValue, Confidence, CreatedDateUtc
+            FROM POLOXI.Legal_DocumentDomainEntity
+            WHERE DecisionMatterId=@MatterId AND TenantId=@TenantId AND IsDeleted=0
+            ORDER BY CreatedDateUtc DESC;
+            """, new { MatterId = matterId, TenantId = tenantId }, cancellationToken: cancellationToken))).ToArray();
+    }
+
+    public async Task<IReadOnlyCollection<DocumentDomainEventDto>> GetMatterDomainEventsAsync(Guid tenantId, Guid matterId, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return (await connection.QueryAsync<DocumentDomainEventDto>(new CommandDefinition(
+            """
+            SELECT DocumentDomainEventId, LegalDocumentId, LegalDocumentVersionId, LegalDocumentPassageId,
+                   DomainPackCode, EventTypeCode, DimensionCode, Summary, EventDateUtc, Confidence, CreatedDateUtc
+            FROM POLOXI.Legal_DocumentDomainEvent
+            WHERE DecisionMatterId=@MatterId AND TenantId=@TenantId AND IsDeleted=0
+            ORDER BY CreatedDateUtc DESC;
+            """, new { MatterId = matterId, TenantId = tenantId }, cancellationToken: cancellationToken))).ToArray();
+    }
+
     public async Task PersistRetrievalTelemetryAsync(Guid tenantId, Guid userId, DecisionRetrievalTelemetry telemetry, CancellationToken cancellationToken = default)
     {
         using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);

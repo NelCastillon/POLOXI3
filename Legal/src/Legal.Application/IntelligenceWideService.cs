@@ -1485,6 +1485,16 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
                 llmCalls++;
                 legalAnswer=await ComposeLegalAnswerAsync(request,finalAnswerText,answerContext?.WinnerDisplayName,resolutionDeliverable,externalKnowledge,interpretiveResults,decisionConfidence,decisionEvidenceCoverage,evidenceCoverage,finalEntropy,cancellationToken);
             }
+            // Candidate Landscape Narrative Composer (PRESENTATION ONLY, legal context + POLOXI engine).
+            // One fail-soft LLM call explains the WHOLE candidate competition and produces a per-candidate
+            // narrative. Never on the clarification gate; any failure leaves CandidateLandscape null and the
+            // standard POLOXI candidate cards stand \u2014 POLOXI Core ranking/scoring is untouched.
+            WideCandidateLandscapeDto? candidateLandscape=null;
+            if(string.Equals(request.ContextCode?.Trim(),WideSearchContexts.Legal,StringComparison.OrdinalIgnoreCase)&&answerStatus!="USER_CLARIFICATION_REQUIRED"&&candidates.Count>0)
+            {
+                llmCalls++;
+                candidateLandscape=await ComposeCandidateLandscapeAsync(request,executionId.ToString(),candidates,answerContext?.WinnerDisplayName,answerStatus,decisionConfidence,finalEntropy,cancellationToken);
+            }
             timer.Stop();
             await wideRepository.CompleteWideExecutionAsync(request.TenantId,request.UserId,executionId,answerStatus,terminationReason,depth,llmCalls,aggregateConfidence,answer.VerificationCode,finalAnswerText,timer.ElapsedMilliseconds,cancellationToken);
             var response=new WideSearchResponse(executionId,request.Query,answerStatus,terminationReason,depth,llmCalls,aggregateConfidence,answer.VerificationCode,finalAnswerText,allBranches.Select(ToDto).ToArray(),relevantEvidence,answer.SuggestedActions.Select(action=>new WideActionSuggestionDto(action.DisplayName,action.NavigationRoute,action.Rationale)).ToArray(),timer.ElapsedMilliseconds){ExternalReferences=MapExternalReferences(answer),InterpretiveResults=interpretiveResults,ExternalKnowledge=externalKnowledge,ProposedLegalAuthorities=MapProposedLegalAuthorities(proposedLegalAuthorities,externalKnowledge),QueryContract=queryContract,
@@ -1495,7 +1505,7 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
             ClarificationOptionItems=clarificationOptionItems,IntentEntropy=intentEntropy,BestClarificationValue=bestClarificationValueOut,
             ClarificationGain=clarificationGain,ClarificationRound=request.ClarificationRound,AnswerContext=answerContext,
             NarrowingIterations=narrowingIterations,FinalNarrowingTrend=narrowingIterations.Count>0?narrowingIterations[^1].TrendCode:null,
-            AnswerKindCode=queryContract?.AnswerKind,AnswerKindRoutingApplied=answerKindRoutingApplied,ProviderCodeUsed=providerCodeUsed,ModelCodeUsed=modelCodeUsed,LlmRawItems=await llmRawTask,AbvAction=abvAction,ResolutionDeliverable=resolutionDeliverable,LegalAnswer=legalAnswer};
+            AnswerKindCode=queryContract?.AnswerKind,AnswerKindRoutingApplied=answerKindRoutingApplied,ProviderCodeUsed=providerCodeUsed,ModelCodeUsed=modelCodeUsed,LlmRawItems=await llmRawTask,AbvAction=abvAction,ResolutionDeliverable=resolutionDeliverable,LegalAnswer=legalAnswer,CandidateLandscape=candidateLandscape};
             return response;
         }
         catch
@@ -1791,6 +1801,207 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
         var hedges=new[]{"cannot","insufficient","unresolved","unable","more information","not enough","depends on","unclear","indeterminate"};
         return !hedges.Any(hedge=>conclusion.Contains(hedge,StringComparison.OrdinalIgnoreCase));
     }
+
+    // Candidate Landscape Narrative Composer output schema (PRESENTATION ONLY). Mirrors
+    // WideCandidateLandscapeDto / WideCandidateNarrativeDto. Every field is prose or a label the UI
+    // renders directly; nothing here is a score or a ranking. POLOXI already decided.
+    private const string CandidateLandscapeSchema="""
+{
+  "type": "object",
+  "properties": {
+    "analysisRunId": { "type": ["string", "null"] },
+    "landscape": {
+      "type": "object",
+      "properties": {
+        "presentationState": { "type": "string" },
+        "executiveSynthesis": { "type": ["string", "null"] },
+        "principalDiscriminators": { "type": "array", "maxItems": 8, "items": { "type": "string" } },
+        "materialUnknowns": { "type": "array", "maxItems": 8, "items": { "type": "string" } }
+      },
+      "required": ["presentationState", "executiveSynthesis", "principalDiscriminators", "materialUnknowns"],
+      "additionalProperties": false
+    },
+    "candidates": {
+      "type": "array",
+      "maxItems": 24,
+      "items": {
+        "type": "object",
+        "properties": {
+          "candidateId": { "type": ["string", "null"] },
+          "candidateName": { "type": "string" },
+          "presentationRole": { "type": "string" },
+          "overviewHeadline": { "type": ["string", "null"] },
+          "overviewNarrative": { "type": "string" },
+          "keyDrivers": {
+            "type": "array",
+            "maxItems": 6,
+            "items": {
+              "type": "object",
+              "properties": {
+                "label": { "type": "string" },
+                "reason": { "type": ["string", "null"] }
+              },
+              "required": ["label", "reason"],
+              "additionalProperties": false
+            }
+          },
+          "primaryRiskLabel": { "type": ["string", "null"] },
+          "primaryRiskReason": { "type": ["string", "null"] },
+          "strongestAlternativeName": { "type": ["string", "null"] },
+          "strongestAlternativeDiscriminator": { "type": ["string", "null"] },
+          "fullAnalysis": {
+            "type": ["object", "null"],
+            "properties": {
+              "executiveAssessment": { "type": ["string", "null"] },
+              "whyCurrentPosition": { "type": ["string", "null"] },
+              "evidenceAndAuthorityPosition": { "type": ["string", "null"] },
+              "comparisonWithStrongestAlternative": { "type": ["string", "null"] },
+              "strongestCaseAgainst": { "type": ["string", "null"] },
+              "materialUncertainty": { "type": ["string", "null"] },
+              "whatStrengthensCandidate": { "type": ["string", "null"] },
+              "whatWeakensCandidate": { "type": ["string", "null"] },
+              "whatCouldChangePosition": { "type": ["string", "null"] },
+              "nextBestInformation": { "type": ["string", "null"] },
+              "currentDecisionPosition": { "type": ["string", "null"] }
+            },
+            "required": ["executiveAssessment", "whyCurrentPosition", "evidenceAndAuthorityPosition", "comparisonWithStrongestAlternative", "strongestCaseAgainst", "materialUncertainty", "whatStrengthensCandidate", "whatWeakensCandidate", "whatCouldChangePosition", "nextBestInformation", "currentDecisionPosition"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["candidateId", "candidateName", "presentationRole", "overviewHeadline", "overviewNarrative", "keyDrivers", "primaryRiskLabel", "primaryRiskReason", "strongestAlternativeName", "strongestAlternativeDiscriminator", "fullAnalysis"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["analysisRunId", "landscape", "candidates"],
+  "additionalProperties": false
+}
+""";
+
+    // LLM proposal shapes for the Candidate Landscape composer (deserialized from CandidateLandscapeSchema).
+    private sealed record CandidateDriverProposal(string? Label,string? Reason);
+    private sealed record CandidateFullAnalysisProposal(string? ExecutiveAssessment,string? WhyCurrentPosition,string? EvidenceAndAuthorityPosition,string? ComparisonWithStrongestAlternative,string? StrongestCaseAgainst,string? MaterialUncertainty,string? WhatStrengthensCandidate,string? WhatWeakensCandidate,string? WhatCouldChangePosition,string? NextBestInformation,string? CurrentDecisionPosition);
+    private sealed record CandidateNarrativeProposal(string? CandidateId,string? CandidateName,string? PresentationRole,string? OverviewHeadline,string? OverviewNarrative,IReadOnlyList<CandidateDriverProposal>? KeyDrivers,string? PrimaryRiskLabel,string? PrimaryRiskReason,string? StrongestAlternativeName,string? StrongestAlternativeDiscriminator,CandidateFullAnalysisProposal? FullAnalysis);
+    private sealed record CandidateLandscapeOuterProposal(string? PresentationState,string? ExecutiveSynthesis,IReadOnlyList<string>? PrincipalDiscriminators,IReadOnlyList<string>? MaterialUnknowns);
+    private sealed record CandidateLandscapeProposal(string? AnalysisRunId,CandidateLandscapeOuterProposal? Landscape,IReadOnlyList<CandidateNarrativeProposal>? Candidates);
+
+    // Builds the deterministic user prompt for the Candidate Landscape composer from state POLOXI already
+    // computed: the whole candidate set with ranks, composite/quality/evidence signals, support tiers,
+    // constraint status, branch-level scores, the resolved interpretation, and residual uncertainty. Zero
+    // new reasoning happens here; the composer only explains the competitive landscape it is handed.
+    private static string BuildCandidateLandscapeContext(WideSearchRequest request,string executionId,IReadOnlyCollection<WideCandidateDto> candidates,string? winnerDisplayName,string presentationState,decimal? decisionConfidence,WideEntropyResult finalEntropy)
+    {
+        var builder=new StringBuilder();
+        builder.Append("QUESTION: ").Append(Truncate(request.Query,3000)).Append('\n');
+        builder.Append("ANALYSIS RUN ID: ").Append(executionId).Append('\n');
+        builder.Append("PRESENTATION STATE: ").Append(presentationState).Append('\n');
+        if(!string.IsNullOrWhiteSpace(winnerDisplayName))
+            builder.Append("CURRENT LEADING INTERPRETATION: ").Append(Truncate(winnerDisplayName,400)).Append('\n');
+        if(decisionConfidence is not null)
+            builder.Append("DECISION CONFIDENCE: ").Append(decisionConfidence.Value.ToString("P0")).Append('\n');
+        builder.Append("RESIDUAL UNCERTAINTY: ").Append(finalEntropy.NormalizedEntropy.ToString("P0")).Append('\n');
+        builder.Append("CANDIDATES (authoritative \u2014 explain every one RELATIVE to the others; never add, drop, re-rank, or re-score):\n");
+        foreach(var candidate in candidates.OrderBy(c=>c.RankNumber))
+        {
+            builder.Append("- #").Append(candidate.RankNumber).Append(' ').Append(Truncate(candidate.DisplayName,200))
+                .Append(" | composite=").Append(candidate.CompositeScore.ToString("0.000"))
+                .Append(" | quality=").Append(candidate.QualityScore.ToString("0.000"))
+                .Append(" | evidenceConfidence=").Append(candidate.EvidenceConfidence.ToString("0.000"))
+                .Append(" | evidenceCoverage=").Append(candidate.EvidenceCoverage.ToString("P0"))
+                .Append(" | supportTier=").Append(candidate.SupportTierCode)
+                .Append(" | admission=").Append(candidate.AdmissionModeCode)
+                .Append(" | interpretiveSupport=").Append(candidate.InterpretiveSupportCount)
+                .Append(" | evidenceHosts=").Append(candidate.EvidenceHostSupportCount);
+            if(candidate.IsConstraintViolation)builder.Append(" | CONSTRAINT_VIOLATION");
+            if(!string.IsNullOrWhiteSpace(candidate.Detail))builder.Append(" | detail=").Append(Truncate(candidate.Detail,400));
+            builder.Append('\n');
+            foreach(var branch in candidate.BranchScores.Take(8))
+                builder.Append("    \u2022 ").Append(Truncate(branch.BranchDisplayName,160)).Append(" = ").Append(branch.EvidenceScore.ToString("0.000")).Append('\n');
+        }
+        builder.Append("\nReturn JSON ONLY matching the schema. Produce a substantive narrative for EVERY candidate above, keep candidate names and identities verbatim, and never introduce new facts, authorities, scores, or rankings.");
+        return builder.ToString();
+    }
+
+    // Candidate Landscape Narrative Composer (PRESENTATION ONLY, legal context + POLOXI engine, fail-soft).
+    // One LLM call turns the whole decided candidate competition into a coherent landscape plus an
+    // individualized per-candidate narrative. It never re-runs reasoning, changes ranking/scores, or
+    // introduces new facts; any failure returns null and the standard POLOXI candidate cards stand.
+    private async Task<WideCandidateLandscapeDto?> ComposeCandidateLandscapeAsync(WideSearchRequest request,string executionId,IReadOnlyCollection<WideCandidateDto> candidates,string? winnerDisplayName,string answerStatus,decimal? decisionConfidence,WideEntropyResult finalEntropy,CancellationToken cancellationToken)
+    {
+        try
+        {
+            if(candidates.Count==0)return null;
+            // INTERPRETIVE until authoritative competition resolves a genuine leader (not a clarification gate).
+            var presentationState=string.Equals(answerStatus,"USER_CLARIFICATION_REQUIRED",StringComparison.OrdinalIgnoreCase)?"INTERPRETIVE"
+                :string.IsNullOrWhiteSpace(winnerDisplayName)?"INTERPRETIVE"
+                :"COMPETED";
+            var userPrompt=BuildCandidateLandscapeContext(request,executionId,candidates,winnerDisplayName,presentationState,decisionConfidence,finalEntropy);
+            var result=await aiProviderRouter.GenerateAsync(request.TenantId,CandidateLandscapeFeatureCode(request),
+                await GetWideSystemPromptAsync(request,IntelligencePromptCodes.WideCandidateLandscape,cancellationToken),
+                userPrompt,
+                CandidateLandscapeSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_CANDIDATE_LANDSCAPE",null,request.CorrelationId,"Intelligent Search Wide"),SynthesisModel(request),cancellationToken);
+            var proposal=JsonSerializer.Deserialize<CandidateLandscapeProposal>(result.Content,JsonOptions);
+            return MapCandidateLandscape(proposal,executionId,candidates,presentationState);
+        }
+        catch(Exception)when(!cancellationToken.IsCancellationRequested)
+        {
+            // Presentation only: never surface composer failures to the user-facing candidate cards.
+            return null;
+        }
+    }
+
+    // Deterministic projection of the composer proposal into the presentation DTO. Preserves candidate
+    // identity (only candidate names matching the authoritative set are kept) and drops the whole result
+    // when no usable narrative survives, so the standard POLOXI cards are shown instead of a partial hybrid.
+    private static WideCandidateLandscapeDto? MapCandidateLandscape(CandidateLandscapeProposal? proposal,string executionId,IReadOnlyCollection<WideCandidateDto> candidates,string presentationState)
+    {
+        if(proposal?.Candidates is null||proposal.Candidates.Count==0)return null;
+        var known=candidates.ToDictionary(c=>c.DisplayName.Trim(),StringComparer.OrdinalIgnoreCase);
+        var narratives=new List<WideCandidateNarrativeDto>();
+        foreach(var candidate in proposal.Candidates)
+        {
+            if(string.IsNullOrWhiteSpace(candidate.CandidateName)||string.IsNullOrWhiteSpace(candidate.OverviewNarrative))continue;
+            var name=candidate.CandidateName.Trim();
+            // Identity guard: keep only candidates that match an authoritative candidate name (either direction).
+            var matched=known.Keys.FirstOrDefault(key=>key.Equals(name,StringComparison.OrdinalIgnoreCase)||key.Contains(name,StringComparison.OrdinalIgnoreCase)||name.Contains(key,StringComparison.OrdinalIgnoreCase));
+            if(matched is null)continue;
+            var drivers=(candidate.KeyDrivers??[])
+                .Where(driver=>!string.IsNullOrWhiteSpace(driver.Label))
+                .Select(driver=>new WideCandidateDriverDto(driver.Label!.Trim(),string.IsNullOrWhiteSpace(driver.Reason)?null:driver.Reason!.Trim()))
+                .ToArray();
+            WideCandidateFullAnalysisNarrativeDto? full=null;
+            if(candidate.FullAnalysis is { } fa)
+                full=new(
+                    CleanOrNull(fa.ExecutiveAssessment),CleanOrNull(fa.WhyCurrentPosition),CleanOrNull(fa.EvidenceAndAuthorityPosition),
+                    CleanOrNull(fa.ComparisonWithStrongestAlternative),CleanOrNull(fa.StrongestCaseAgainst),CleanOrNull(fa.MaterialUncertainty),
+                    CleanOrNull(fa.WhatStrengthensCandidate),CleanOrNull(fa.WhatWeakensCandidate),CleanOrNull(fa.WhatCouldChangePosition),
+                    CleanOrNull(fa.NextBestInformation),CleanOrNull(fa.CurrentDecisionPosition));
+            narratives.Add(new(
+                CleanOrNull(candidate.CandidateId),
+                known[matched].DisplayName,
+                string.IsNullOrWhiteSpace(candidate.PresentationRole)?"OTHER":candidate.PresentationRole!.Trim(),
+                CleanOrNull(candidate.OverviewHeadline),
+                candidate.OverviewNarrative!.Trim(),
+                drivers,
+                CleanOrNull(candidate.PrimaryRiskLabel),
+                CleanOrNull(candidate.PrimaryRiskReason),
+                CleanOrNull(candidate.StrongestAlternativeName),
+                CleanOrNull(candidate.StrongestAlternativeDiscriminator),
+                full));
+        }
+        if(narratives.Count==0)return null;
+        var landscape=proposal.Landscape;
+        var state=string.IsNullOrWhiteSpace(landscape?.PresentationState)?presentationState:landscape!.PresentationState!.Trim();
+        return new(
+            CleanOrNull(proposal.AnalysisRunId)??executionId,
+            state,
+            CleanOrNull(landscape?.ExecutiveSynthesis),
+            (landscape?.PrincipalDiscriminators??[]).Where(x=>!string.IsNullOrWhiteSpace(x)).Select(x=>x.Trim()).ToArray(),
+            (landscape?.MaterialUnknowns??[]).Where(x=>!string.IsNullOrWhiteSpace(x)).Select(x=>x.Trim()).ToArray(),
+            narratives);
+    }
+
+    private static string? CleanOrNull(string? value)=>string.IsNullOrWhiteSpace(value)?null:value.Trim();
 
     // 'POLOXI Engine' filter disabled: complete LLM-based result without POLOXI. One LLM call answers the
     // question directly; the answer is always INTERPRETIVE because nothing is validated against

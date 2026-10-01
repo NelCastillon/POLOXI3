@@ -1,0 +1,588 @@
+@page "/legal/decision/candidate-analysis"
+@using Legal.Application.Features.Intelligence.Decision
+@inject ApiClient Api
+@inject NavigationManager Navigation
+
+<LegalWorkspace ExtraClass="intel-compact">
+    <div class="cfa-page">
+        @if (_loading)
+        {
+            <div class="cfa-loading"><span class="cfa-spinner"></span> Loading candidate analysis…</div>
+        }
+        else if (_loadError is not null)
+        {
+            <div class="cfa-alert" role="alert"><i class="bi bi-exclamation-triangle"></i> @_loadError</div>
+        }
+        else if (_model is null)
+        {
+            <div class="cfa-empty">
+                <i class="bi bi-inbox"></i>
+                <p>No decision analysis is available for this candidate yet. Run a decision for this matter to populate the Full Analysis workspace.</p>
+                <button class="cfa-btn" @onclick="GoBack">← Back to Decision Overview</button>
+            </div>
+        }
+        else
+        {
+            var m = _model;
+
+            <nav class="cfa-breadcrumb" aria-label="Breadcrumb">
+                <a href="/legal/matters">Matters</a>
+                <span>/</span>
+                <a href="@($"/legal/matters/{m.MatterId}")">@m.MatterTitle</a>
+                <span>/</span>
+                <a href="@BackUrl()">Decision</a>
+                <span>/</span>
+                <span class="cfa-breadcrumb-current">@m.CandidateLabel @m.CandidateTitle</span>
+            </nav>
+
+            <button class="cfa-back" @onclick="GoBack"><i class="bi bi-arrow-left"></i> Back to Decision Overview</button>
+
+            var ps = m.Presentation;
+
+            @if (!ps.CanShowCurrentLeader)
+            {
+                <div class="cfa-integrity @IntegrityCls(ps.State)" role="status">
+                    <div class="cfa-integrity-head">
+                        <i class="bi @IntegrityIcon(ps.State)"></i>
+                        <span class="cfa-integrity-title">@IntegrityTitle(ps.State)</span>
+                        <span class="cfa-integrity-sub">@ps.Headline</span>
+                    </div>
+                    <div class="cfa-integrity-gates">
+                        <span class="cfa-gate @(ps.CompetitionExecuted ? "cfa-gate--ok" : "cfa-gate--bad")">Competition @(ps.CompetitionExecuted ? "EXECUTED" : "BLOCKED")</span>
+                        <span class="cfa-gate @(ps.ContractComplete ? "cfa-gate--ok" : "cfa-gate--bad")">Contract @(ps.ContractComplete ? "COMPLETE" : "INCOMPLETE") · @ps.ContractCompletenessPct%</span>
+                        <span class="cfa-gate @(ps.ReadinessPassed ? "cfa-gate--ok" : "cfa-gate--bad")">Readiness @(ps.ReadinessPassed ? "PASSED" : "INCOMPLETE")</span>
+                        <span class="cfa-gate">Entropy @ps.NormalizedEntropyPct%</span>
+                    </div>
+                    @if (!string.IsNullOrWhiteSpace(ps.BlockingReason))
+                    {
+                        <p class="cfa-integrity-reason">@ps.BlockingReason</p>
+                    }
+                    @if (ps.Blockers.Count > 0)
+                    {
+                        <ul class="cfa-integrity-blockers">
+                            @foreach (var b in ps.Blockers)
+                            {
+                                <li>@b</li>
+                            }
+                        </ul>
+                    }
+                </div>
+            }
+
+            @* ── Candidate Decision Header ───────────────────────────────────── *@
+            <header class="cfa-header">
+                <div class="cfa-header-id">
+                    <span class="cfa-chip">@m.CandidateLabel</span>
+                    @if (ps.CanShowCurrentLeader && m.IsLeader)
+                    {
+                        <span class="cfa-chip cfa-chip--leader"><i class="bi bi-trophy"></i> Current Leader</span>
+                    }
+                    else if (m.IsLeader)
+                    {
+                        <span class="cfa-chip cfa-chip--interp"><i class="bi bi-lightbulb"></i> Leading Interpretation</span>
+                        <span class="cfa-chip cfa-chip--notcompeted">NOT COMPETED</span>
+                    }
+                </div>
+                <h1 class="cfa-title">@m.CandidateTitle</h1>
+                @if (!string.IsNullOrWhiteSpace(m.CandidateDescription))
+                {
+                    <p class="cfa-subtitle">@m.CandidateDescription</p>
+                }
+
+                <div class="cfa-header-metrics">
+                    @if (ps.CanShowCurrentLeader)
+                    {
+                        <div class="cfa-metric"><span class="cfa-metric-val">@m.DecisionScorePct%</span><span class="cfa-metric-lbl">Decision Score</span></div>
+                    }
+                    else
+                    {
+                        <div class="cfa-metric"><span class="cfa-metric-val">@ps.InterpretiveSupportPct%</span><span class="cfa-metric-lbl">Interpretive Support</span></div>
+                    }
+                    <div class="cfa-metric"><span class="cfa-metric-val">#@m.RankPosition of @m.RankTotal</span><span class="cfa-metric-lbl">@(ps.CanShowCurrentLeader ? "Current Rank" : "Interpretive Rank")</span></div>
+                    @if (ps.CanShowCurrentLeader)
+                    {
+                        <div class="cfa-metric"><span class="cfa-metric-val">@(m.MarginVsNextPts >= 0 ? "+" : "")@m.MarginVsNextPts pts</span><span class="cfa-metric-lbl">Margin</span></div>
+                    }
+                    else
+                    {
+                        <div class="cfa-metric"><span class="cfa-metric-val">—</span><span class="cfa-metric-lbl">Margin (not competed)</span></div>
+                    }
+                    <div class="cfa-metric"><span class="cfa-metric-val">@m.UncertaintyLabel</span><span class="cfa-metric-lbl">Uncertainty</span></div>
+                    <div class="cfa-metric"><span class="cfa-metric-val">@m.ReadinessLabel</span><span class="cfa-metric-lbl">Readiness</span></div>
+                    @if (m.LastRecalibratedUtc is { } rc)
+                    {
+                        <div class="cfa-metric"><span class="cfa-metric-val">@RelativeTime(rc)</span><span class="cfa-metric-lbl">Last Recalibration</span></div>
+                    }
+                </div>
+
+                @* Multidimensional state bars *@
+                @if (m.Dimensions.Count > 0)
+                {
+                    <div class="cfa-dims">
+                        @foreach (var d in m.Dimensions)
+                        {
+                            <div class="cfa-dim">
+                                <div class="cfa-dim-top"><span>@d.Label</span><strong>@d.ValuePct%</strong></div>
+                                <div class="cfa-bar"><span class="cfa-bar-fill @ToneCls(d.Tone)" style="width:@(d.ValuePct)%"></span></div>
+                            </div>
+                        }
+                    </div>
+                }
+            </header>
+
+            @* ── Tabs ────────────────────────────────────────────────────────── *@
+            <div class="cfa-tabs" role="tablist">
+                @foreach (var t in _tabs)
+                {
+                    <button class="cfa-tab @(t == _activeTab ? "cfa-tab--active" : "")" role="tab" @onclick="() => _activeTab = t">@t</button>
+                }
+            </div>
+
+            <div class="cfa-body">
+                @if (_activeTab is "Summary")
+                {
+                    <div class="cfa-grid-2">
+                        @* 1. Why C1 Leads *@
+                        <section class="cfa-card">
+                            <h2 class="cfa-card-title">@(ps.CanShowCurrentLeader ? $"Why {m.CandidateLabel} Currently Leads" : $"Why {m.CandidateLabel} Leads the Interpretation")</h2>
+                            @if (m.StrongestDrivers.Count == 0)
+                            {
+                                <p class="cfa-muted">No grounded drivers persisted yet.</p>
+                            }
+                            else
+                            {
+                                <div class="cfa-section-label">Strongest Drivers</div>
+                                @foreach (var (d, i) in m.StrongestDrivers.Select((x, i) => (x, i + 1)))
+                                {
+                                    <div class="cfa-driver">
+                                        <span class="cfa-rank">@i</span>
+                                        <div class="cfa-driver-body">
+                                            <div class="cfa-driver-top"><span>@d.Label</span><strong>@d.StrengthPct%</strong></div>
+                                            <div class="cfa-bar"><span class="cfa-bar-fill cfa-tone-ok" style="width:@(d.StrengthPct)%"></span></div>
+                                            <p class="cfa-driver-desc">@d.Description</p>
+                                            @if (d.PropositionCount > 0 || d.EvidenceBindingCount > 0)
+                                            {
+                                                <span class="cfa-driver-meta">@d.PropositionCount propositions · @d.EvidenceBindingCount evidence bindings</span>
+                                            }
+                                        </div>
+                                    </div>
+                                }
+                            }
+
+                            @if (m.StrongestConstraints.Count > 0)
+                            {
+                                <div class="cfa-section-label cfa-mt">Strongest Constraints</div>
+                                @foreach (var (c, i) in m.StrongestConstraints.Select((x, i) => (x, i + 1)))
+                                {
+                                    <div class="cfa-constraint">
+                                        <span class="cfa-rank">@i</span>
+                                        <span class="cfa-constraint-label">@c.Label</span>
+                                        <span class="cfa-pill @ToneCls(c.Tone)">@c.SeverityLabel</span>
+                                    </div>
+                                }
+                            }
+                        </section>
+
+                        @* 8. ADV *@
+                        <section class="cfa-card">
+                            <h2 class="cfa-card-title">Next Best Information (ADV)</h2>
+                            @if (m.NextBestInformation.Count == 0)
+                            {
+                                <p class="cfa-muted">No open investigation frontier — nothing recommended.</p>
+                            }
+                            else
+                            {
+                                @foreach (var a in m.NextBestInformation)
+                                {
+                                    <div class="cfa-adv">
+                                        <div class="cfa-adv-top">
+                                            <span class="cfa-rank">@a.Rank</span>
+                                            <span class="cfa-adv-title">@a.Title</span>
+                                            <span class="cfa-adv-score">ADV @a.Adv.ToString("0.00")</span>
+                                        </div>
+                                        <div class="cfa-adv-metrics">
+                                            <span>Info @a.InformationValue.ToString("0.00")</span>
+                                            <span>Relevance @a.DecisionRelevance.ToString("0.00")</span>
+                                            <span>Flip @a.FlipPotential.ToString("0.00")</span>
+                                            <span>Cost @a.EstimatedCostLabel</span>
+                                        </div>
+                                        @if (!string.IsNullOrWhiteSpace(a.WhyItMatters))
+                                        {
+                                            <p class="cfa-adv-why">@a.WhyItMatters</p>
+                                        }
+                                    </div>
+                                }
+                            }
+                        </section>
+                    </div>
+                }
+                else if (_activeTab is "Hierarchy")
+                {
+                    <section class="cfa-card">
+                        <div class="cfa-chr-head">
+                            <div class="cfa-chr-stat"><strong>@m.Hierarchy.NodeCount</strong><span>Hierarchy Nodes</span></div>
+                            <div class="cfa-chr-stat"><strong>@m.Hierarchy.ResolvedCount / @m.Hierarchy.TotalForResolution</strong><span>Resolved</span></div>
+                            <div class="cfa-chr-stat"><strong>@m.Hierarchy.CoverageLabel</strong><span>Coverage</span></div>
+                            <div class="cfa-chr-stat"><strong>@m.Hierarchy.DepthLabel</strong><span>Depth</span></div>
+                        </div>
+                        @if (m.HierarchyNodes.Count == 0)
+                        {
+                            <p class="cfa-muted">No persisted decision hierarchy for this candidate yet.</p>
+                        }
+                        else
+                        {
+                            <ul class="cfa-tree">
+                                @foreach (var n in m.HierarchyNodes)
+                                {
+                                    <li class="cfa-tree-node" style="padding-left:@((n.Depth - 1) * 20)px">
+                                        <span class="cfa-tree-state cfa-tone-@n.StateTone"></span>
+                                        <span class="cfa-tree-label">@n.Label</span>
+                                        @if (n.StrengthPct is { } sp)
+                                        {
+                                            <span class="cfa-tree-pct">@sp%</span>
+                                        }
+                                        <span class="cfa-pill cfa-tone-@n.StateTone">@n.StateCode</span>
+                                    </li>
+                                }
+                            </ul>
+                        }
+                    </section>
+                }
+                else if (_activeTab is "Propositions")
+                {
+                    <section class="cfa-card">
+                        <h2 class="cfa-card-title">Proposition Inspector</h2>
+                        @if (m.Propositions.Count == 0)
+                        {
+                            <p class="cfa-muted">No propositions grounded to evidence yet.</p>
+                        }
+                        else
+                        {
+                            @foreach (var p in m.Propositions)
+                            {
+                                <div class="cfa-prop">
+                                    <div class="cfa-prop-top">
+                                        <span class="cfa-chip">@p.Code</span>
+                                        <span class="cfa-pill cfa-tone-@p.StatusTone">@p.StatusCode</span>
+                                        <span class="cfa-prop-apr">APR @p.AprLabel</span>
+                                    </div>
+                                    <p class="cfa-prop-text">@p.Text</p>
+                                    @if (p.Evidence.Count > 0)
+                                    {
+                                        <div class="cfa-prop-ev">
+                                            @foreach (var e in p.Evidence)
+                                            {
+                                                <div class="cfa-ev-row">
+                                                    <span class="cfa-pill cfa-tone-@e.RelationshipTone">@e.RelationshipTypeCode</span>
+                                                    <span class="cfa-ev-doc">@e.DocumentFileName@(e.PageNumber is { } pg ? $" · p.{pg}" : "")</span>
+                                                    @if (e.VerificationPct is { } v)
+                                                    {
+                                                        <span class="cfa-ev-ver">Verification @v%</span>
+                                                    }
+                                                </div>
+                                            }
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        }
+                    </section>
+                }
+                else if (_activeTab is "Evidence")
+                {
+                    <section class="cfa-card">
+                        <h2 class="cfa-card-title">Evidence Analysis</h2>
+                        @if (m.EvidenceBreakdown.Count == 0)
+                        {
+                            <p class="cfa-muted">No evidence breakdown available yet.</p>
+                        }
+                        else
+                        {
+                            <table class="cfa-table">
+                                <thead><tr><th>Factor</th><th>Supports</th><th>Contradicts</th><th>Qualifies</th><th>Insufficient</th></tr></thead>
+                                <tbody>
+                                    @foreach (var c in m.EvidenceBreakdown)
+                                    {
+                                        <tr><td>@c.Label</td><td>@c.Supports</td><td>@c.Contradicts</td><td>@c.Qualifies</td><td>@c.Insufficient</td></tr>
+                                    }
+                                </tbody>
+                            </table>
+                        }
+
+                        @if (m.MaterialEvidence.Count > 0)
+                        {
+                            <div class="cfa-section-label cfa-mt">Most Decision-Material Evidence</div>
+                            @foreach (var e in m.MaterialEvidence)
+                            {
+                                <div class="cfa-mat">
+                                    <div class="cfa-mat-top">
+                                        <span class="cfa-mat-doc">@e.DocumentFileName@(e.PageNumber is { } pg ? $" · p.{pg}" : "")</span>
+                                        <span class="cfa-pill cfa-tone-@e.AerTone">@e.AerRelationshipCode</span>
+                                        @if (e.VerificationPct is { } v)
+                                        {
+                                            <span class="cfa-ev-ver">@v%</span>
+                                        }
+                                    </div>
+                                    @if (!string.IsNullOrWhiteSpace(e.SourceAssertion))
+                                    {
+                                        <p class="cfa-mat-src">“@e.SourceAssertion”</p>
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(e.HrrPath))
+                                    {
+                                        <p class="cfa-mat-hrr">HRR: @e.HrrPath</p>
+                                    }
+                                </div>
+                            }
+                        }
+                    </section>
+                }
+                else if (_activeTab is "Authorities")
+                {
+                    <section class="cfa-card">
+                        <h2 class="cfa-card-title">Legal Authority</h2>
+                        <div class="cfa-auth-stats">
+                            <div class="cfa-chr-stat"><strong>@m.Authority.TotalCount</strong><span>Relevant Authorities</span></div>
+                            <div class="cfa-chr-stat"><strong>@m.Authority.VerifiedCount</strong><span>Verified</span></div>
+                            <div class="cfa-chr-stat"><strong>@m.Authority.PendingCount</strong><span>Pending</span></div>
+                        </div>
+                        @if (m.Authority.TotalCount == 0)
+                        {
+                            <p class="cfa-muted">No legal authorities have been attributed to this candidate yet.</p>
+                        }
+                        else if (!string.IsNullOrWhiteSpace(m.Authority.TopAuthorityLabel))
+                        {
+                            <div class="cfa-auth-top">
+                                <div class="cfa-auth-name">@m.Authority.TopAuthorityLabel</div>
+                                @if (!string.IsNullOrWhiteSpace(m.Authority.TopAuthorityCitation))
+                                {
+                                    <div class="cfa-auth-cite">@m.Authority.TopAuthorityCitation</div>
+                                }
+                                <div class="cfa-auth-flags">
+                                    <span class="cfa-pill @(m.Authority.CitationVerified ? "cfa-tone-ok" : "cfa-tone-warn")">Citation @(m.Authority.CitationVerified ? "Verified" : "Pending")</span>
+                                    <span class="cfa-pill @(m.Authority.HoldingVerified ? "cfa-tone-ok" : "cfa-tone-warn")">Holding @(m.Authority.HoldingVerified ? "Verified" : "Pending")</span>
+                                    @if (!string.IsNullOrWhiteSpace(m.Authority.PropositionFitLabel))
+                                    {
+                                        <span class="cfa-pill">Fit @m.Authority.PropositionFitLabel</span>
+                                    }
+                                </div>
+                            </div>
+                        }
+                    </section>
+                }
+                else if (_activeTab is "Flip Points")
+                {
+                    <section class="cfa-card">
+                        <h2 class="cfa-card-title">What Could Flip @m.CandidateLabel?</h2>
+                        @if (m.FlipPoints.Count == 0)
+                        {
+                            <p class="cfa-muted">No flip points persisted for this decision yet.</p>
+                        }
+                        else
+                        {
+                            @foreach (var (f, i) in m.FlipPoints.Select((x, i) => (x, i + 1)))
+                            {
+                                <div class="cfa-flip">
+                                    <div class="cfa-flip-top">
+                                        <span class="cfa-rank">@i</span>
+                                        <span class="cfa-flip-label">@f.Label</span>
+                                        <span class="cfa-pill @ToneCls(f.Tone)">@f.FlipPotentialLabel</span>
+                                    </div>
+                                    <div class="cfa-flip-meta">
+                                        <span>Current: @f.CurrentStateLabel</span>
+                                        @if (!string.IsNullOrWhiteSpace(f.AffectedCandidates))
+                                        {
+                                            <span>@f.AffectedCandidates</span>
+                                        }
+                                    </div>
+                                </div>
+                            }
+                        }
+                    </section>
+                }
+                else if (_activeTab is "Uncertainty")
+                {
+                    <section class="cfa-card">
+                        <h2 class="cfa-card-title">Uncertainty Map</h2>
+                        @if (m.UncertaintyMap.Count == 0)
+                        {
+                            <p class="cfa-muted">No uncertainty data available yet.</p>
+                        }
+                        else
+                        {
+                            @foreach (var u in m.UncertaintyMap)
+                            {
+                                <div class="cfa-dim">
+                                    <div class="cfa-dim-top"><span>@u.Label</span><strong>@u.LevelLabel</strong></div>
+                                    <div class="cfa-bar"><span class="cfa-bar-fill @ToneCls(u.Tone)" style="width:@(u.LevelPct)%"></span></div>
+                                </div>
+                            }
+                        }
+                    </section>
+                }
+                else if (_activeTab is "Change History")
+                {
+                    <section class="cfa-card">
+                        <h2 class="cfa-card-title">Decision Change History (DCI)</h2>
+                        @if (m.ChangeHistory.Count == 0)
+                        {
+                            <p class="cfa-muted">No change events recorded for this matter yet.</p>
+                        }
+                        else
+                        {
+                            <ul class="cfa-timeline">
+                                @foreach (var c in m.ChangeHistory)
+                                {
+                                    <li class="cfa-timeline-item">
+                                        <span class="cfa-timeline-dot cfa-tone-@c.Tone"></span>
+                                        <div>
+                                            <div class="cfa-timeline-label">@c.Label</div>
+                                            <div class="cfa-timeline-when">@c.WhenUtc.ToString("g")</div>
+                                        </div>
+                                    </li>
+                                }
+                            </ul>
+                        }
+                    </section>
+                }
+                else if (_activeTab is "Readiness")
+                {
+                    <section class="cfa-card">
+                        <h2 class="cfa-card-title">@m.CandidateLabel Decision Readiness</h2>
+                        <div class="cfa-readiness-head">
+                            <span class="cfa-pill cfa-tone-warn">@m.Readiness.StateLabel</span>
+                            <strong>@m.Readiness.OverallPct%</strong>
+                        </div>
+                        @if (m.Readiness.Metrics.Count == 0)
+                        {
+                            <p class="cfa-muted">No readiness checklist available yet.</p>
+                        }
+                        else
+                        {
+                            @foreach (var r in m.Readiness.Metrics)
+                            {
+                                <div class="cfa-ready-row">
+                                    <span class="cfa-ready-dot cfa-tone-@r.Tone"></span>
+                                    <span class="cfa-ready-label">@r.Label</span>
+                                    <span class="cfa-ready-val">@r.Value</span>
+                                </div>
+                            }
+                        }
+                        @if (m.Readiness.Blockers.Count > 0)
+                        {
+                            <div class="cfa-section-label cfa-mt">Blockers</div>
+                            @foreach (var b in m.Readiness.Blockers)
+                            {
+                                <div class="cfa-blocker"><i class="bi bi-exclamation-triangle"></i> @b</div>
+                            }
+                        }
+                    </section>
+                }
+                else if (_activeTab is "Full Narrative")
+                {
+                    <section class="cfa-card">
+                        <h2 class="cfa-card-title">Full Decision Analysis</h2>
+                        @if (string.IsNullOrWhiteSpace(m.Narrative))
+                        {
+                            <p class="cfa-muted">No attorney-readable narrative has been generated for this decision yet.</p>
+                        }
+                        else
+                        {
+                            <div class="cfa-narrative">@m.Narrative</div>
+                        }
+                    </section>
+                }
+            </div>
+        }
+    </div>
+</LegalWorkspace>
+
+@code {
+    [SupplyParameterFromQuery(Name = "matterId")] public Guid MatterId { get; set; }
+    [SupplyParameterFromQuery(Name = "candidate")] public int CandidateIndex { get; set; } = 1;
+
+    private readonly string[] _tabs =
+    {
+        "Summary", "Hierarchy", "Propositions", "Evidence", "Authorities",
+        "Flip Points", "Uncertainty", "Change History", "Readiness", "Full Narrative"
+    };
+
+    private string _activeTab = "Summary";
+    private bool _loading = true;
+    private string? _loadError;
+    private CandidateFullAnalysisDto? _model;
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            if (MatterId == Guid.Empty)
+            {
+                _loadError = "No matter was specified for this analysis.";
+                return;
+            }
+            var index = CandidateIndex <= 0 ? 1 : CandidateIndex;
+            _model = await Api.GetLegalCandidateFullAnalysisAsync(MatterId, index);
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load candidate analysis: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private string BackUrl() =>
+        MatterId == Guid.Empty
+            ? "/legal/personalinjury_decision2"
+            : $"/legal/personalinjury_decision2?matterId={MatterId}";
+
+    private void GoBack() => Navigation.NavigateTo(BackUrl());
+
+    private static string ToneCls(string tone) => tone switch
+    {
+        "ok" => "cfa-tone-ok",
+        "warn" => "cfa-tone-warn",
+        "danger" => "cfa-tone-danger",
+        "muted" => "cfa-tone-muted",
+        _ => "cfa-tone-muted"
+    };
+
+    private static string RelativeTime(DateTime utc)
+    {
+        var span = DateTime.UtcNow - utc;
+        if (span.TotalMinutes < 1) return "just now";
+        if (span.TotalMinutes < 60) return $"{(int)span.TotalMinutes} min ago";
+        if (span.TotalHours < 24) return $"{(int)span.TotalHours} hours ago";
+        return $"{(int)span.TotalDays} days ago";
+    }
+
+    private static string IntegrityCls(DecisionPresentationState state) => state switch
+    {
+        DecisionPresentationState.DecisionReady => "cfa-integrity--ready",
+        DecisionPresentationState.Provisional => "cfa-integrity--provisional",
+        DecisionPresentationState.CompetitionBlocked => "cfa-integrity--blocked",
+        _ => "cfa-integrity--none",
+    };
+
+    private static string IntegrityIcon(DecisionPresentationState state) => state switch
+    {
+        DecisionPresentationState.DecisionReady => "bi-check-circle",
+        DecisionPresentationState.Provisional => "bi-hourglass-split",
+        DecisionPresentationState.CompetitionBlocked => "bi-exclamation-triangle",
+        _ => "bi-slash-circle",
+    };
+
+    private static string IntegrityTitle(DecisionPresentationState state) => state switch
+    {
+        DecisionPresentationState.DecisionReady => "DECISION READY",
+        DecisionPresentationState.Provisional => "PROVISIONAL",
+        DecisionPresentationState.CompetitionBlocked => "DECISION NOT READY",
+        _ => "NO DECISION",
+    };
+}

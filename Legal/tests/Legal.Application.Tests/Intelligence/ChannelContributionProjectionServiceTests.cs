@@ -65,6 +65,7 @@ public sealed class ChannelContributionProjectionServiceTests
         VerificationReason: null,
         EffectiveFromUtc: null,
         EffectiveToUtc: null,
+        PlacementMagnitude: null,
         CreatedDateUtc: DateTime.UtcNow);
 
     [Fact]

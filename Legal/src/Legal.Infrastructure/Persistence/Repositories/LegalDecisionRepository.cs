@@ -1524,11 +1524,100 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
         };
     }
 
+    // ── Domain Pack entity/event taxonomy, terminology, and evidence→signal map reads (migration 0373) ──
+    // Global (TenantId NULL) rows are defaults; tenant rows override by business code. Advisory config.
+    public async Task<IReadOnlyCollection<DecisionDomainEntityTypeDto>> GetDomainEntityTypesAsync(Guid tenantId, string packCode, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var packId = await ResolveDomainPackIdOrNullAsync(connection, tenantId, packCode, cancellationToken);
+        if (packId is null)
+            return [];
+        return (await connection.QueryAsync<DecisionDomainEntityTypeDto>(new CommandDefinition(
+            """
+            WITH Ranked AS
+            (
+                SELECT EntityTypeCode, Name, DimensionCode, Description, SortOrder,
+                       ROW_NUMBER() OVER (PARTITION BY EntityTypeCode
+                           ORDER BY CASE WHEN TenantId = @TenantId THEN 0 ELSE 1 END, SortOrder) AS ScopeRank
+                FROM POLOXI.Legal_DecisionDomainEntityType
+                WHERE IsDeleted = 0 AND IsActive = 1 AND DecisionDomainPackId = @PackId
+                  AND (TenantId = @TenantId OR TenantId IS NULL)
+            )
+            SELECT EntityTypeCode, Name, DimensionCode, Description, SortOrder
+            FROM Ranked WHERE ScopeRank = 1 ORDER BY SortOrder, Name;
+            """, new { PackId = packId.Value, TenantId = tenantId }, cancellationToken: cancellationToken))).ToArray();
+    }
+
+    public async Task<IReadOnlyCollection<DecisionDomainEventTypeDto>> GetDomainEventTypesAsync(Guid tenantId, string packCode, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var packId = await ResolveDomainPackIdOrNullAsync(connection, tenantId, packCode, cancellationToken);
+        if (packId is null)
+            return [];
+        return (await connection.QueryAsync<DecisionDomainEventTypeDto>(new CommandDefinition(
+            """
+            WITH Ranked AS
+            (
+                SELECT EventTypeCode, Name, DimensionCode, Description, SortOrder,
+                       ROW_NUMBER() OVER (PARTITION BY EventTypeCode
+                           ORDER BY CASE WHEN TenantId = @TenantId THEN 0 ELSE 1 END, SortOrder) AS ScopeRank
+                FROM POLOXI.Legal_DecisionDomainEventType
+                WHERE IsDeleted = 0 AND IsActive = 1 AND DecisionDomainPackId = @PackId
+                  AND (TenantId = @TenantId OR TenantId IS NULL)
+            )
+            SELECT EventTypeCode, Name, DimensionCode, Description, SortOrder
+            FROM Ranked WHERE ScopeRank = 1 ORDER BY SortOrder, Name;
+            """, new { PackId = packId.Value, TenantId = tenantId }, cancellationToken: cancellationToken))).ToArray();
+    }
+
+    public async Task<IReadOnlyCollection<DecisionDomainTermDto>> GetDomainTermsAsync(Guid tenantId, string packCode, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var packId = await ResolveDomainPackIdOrNullAsync(connection, tenantId, packCode, cancellationToken);
+        if (packId is null)
+            return [];
+        return (await connection.QueryAsync<DecisionDomainTermDto>(new CommandDefinition(
+            """
+            WITH Ranked AS
+            (
+                SELECT TermText, CanonicalCode, TermKindCode, Weight,
+                       ROW_NUMBER() OVER (PARTITION BY TermText, CanonicalCode
+                           ORDER BY CASE WHEN TenantId = @TenantId THEN 0 ELSE 1 END) AS ScopeRank
+                FROM POLOXI.Legal_DecisionDomainTerm
+                WHERE IsDeleted = 0 AND IsActive = 1 AND DecisionDomainPackId = @PackId
+                  AND (TenantId = @TenantId OR TenantId IS NULL)
+            )
+            SELECT TermText, CanonicalCode, TermKindCode, Weight
+            FROM Ranked WHERE ScopeRank = 1 ORDER BY TermText;
+            """, new { PackId = packId.Value, TenantId = tenantId }, cancellationToken: cancellationToken))).ToArray();
+    }
+
+    public async Task<IReadOnlyCollection<DecisionDomainSignalMapDto>> GetDomainSignalMapAsync(Guid tenantId, string packCode, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var packId = await ResolveDomainPackIdOrNullAsync(connection, tenantId, packCode, cancellationToken);
+        if (packId is null)
+            return [];
+        return (await connection.QueryAsync<DecisionDomainSignalMapDto>(new CommandDefinition(
+            """
+            WITH Ranked AS
+            (
+                SELECT EvidenceTypeCode, TargetSignalCode, RelationCode, DimensionCode, SortOrder,
+                       ROW_NUMBER() OVER (PARTITION BY EvidenceTypeCode
+                           ORDER BY CASE WHEN TenantId = @TenantId THEN 0 ELSE 1 END, SortOrder) AS ScopeRank
+                FROM POLOXI.Legal_DecisionDomainSignalMap
+                WHERE IsDeleted = 0 AND IsActive = 1 AND DecisionDomainPackId = @PackId
+                  AND (TenantId = @TenantId OR TenantId IS NULL)
+            )
+            SELECT EvidenceTypeCode, TargetSignalCode, RelationCode, DimensionCode, SortOrder
+            FROM Ranked WHERE ScopeRank = 1 ORDER BY SortOrder, EvidenceTypeCode;
+            """, new { PackId = packId.Value, TenantId = tenantId }, cancellationToken: cancellationToken))).ToArray();
+    }
+
     // ── Domain Pack child CRUD (advisory configuration; upsert by business code, soft-delete) ─────
     // Resolves the effective pack id for a tenant (tenant override first, then global default row).
-    private static async Task<Guid> ResolveDomainPackIdAsync(System.Data.IDbConnection connection, Guid tenantId, string packCode, CancellationToken cancellationToken)
-    {
-        var packId = await connection.ExecuteScalarAsync<Guid?>(new CommandDefinition(
+    private static async Task<Guid?> ResolveDomainPackIdOrNullAsync(System.Data.IDbConnection connection, Guid tenantId, string packCode, CancellationToken cancellationToken)
+        => await connection.ExecuteScalarAsync<Guid?>(new CommandDefinition(
             """
             SELECT TOP 1 DecisionDomainPackId FROM POLOXI.Legal_DecisionDomainPack
             WHERE IsDeleted = 0 AND PackCode = @PackCode AND (TenantId = @TenantId OR TenantId IS NULL)
@@ -1536,6 +1625,10 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
             """,
             new { PackCode = packCode, TenantId = tenantId },
             cancellationToken: cancellationToken));
+
+    private static async Task<Guid> ResolveDomainPackIdAsync(System.Data.IDbConnection connection, Guid tenantId, string packCode, CancellationToken cancellationToken)
+    {
+        var packId = await ResolveDomainPackIdOrNullAsync(connection, tenantId, packCode, cancellationToken);
         if (packId is null)
             throw new InvalidOperationException($"Domain Pack '{packCode}' was not found.");
         return packId.Value;

@@ -1,3 +1,4 @@
+using Legal.Application.Abstractions.Intelligence;
 using Legal.Application.Abstractions.Persistence;
 using Legal.Application.Features.Intelligence.Decision;
 using Legal.Application.Features.Intelligence.Decision.Channels;
@@ -36,6 +37,12 @@ public sealed class DecisionChannelContributionTests
         Assert.Equal(DecisionChannelCodes.TargetSignal.EvidenceSupport, contribution.TargetSignalCode);
         Assert.True(contribution.ContributesPositiveSupport);
         Assert.Equal("Legal_SourceAssertion", contribution.Provenance.SourceTypeCode);
+
+        // Match-confidence magnitude is evidence-INTRINSIC (sharedTokens / nodeSignificantTokens),
+        // bounded to [0,1], and independent of the node's own POLOXI score. POLOXI Wide2 still owns
+        // the scoring consequence; this only scales support strength.
+        Assert.NotNull(contribution.Magnitude);
+        Assert.InRange(contribution.Magnitude!.Value, 0.0, 1.0);
     }
 
     [Fact]
@@ -106,7 +113,8 @@ public sealed class DecisionChannelContributionTests
         var repo = new FakeContributionRepository();
 
         var orchestrator = new DecisionChannelOrchestrator(
-            [channel], repo, NullLogger<DecisionChannelOrchestrator>.Instance);
+            [channel], repo, new NoMatterDecisionRepository(), new NoPackResolver(),
+            NullLogger<DecisionChannelOrchestrator>.Instance);
 
         var result = await orchestrator.IngestContributionsAsync(Tenant, User, Matter, Execution);
 
@@ -117,10 +125,14 @@ public sealed class DecisionChannelContributionTests
         Assert.Equal("Verified", row.VerificationStateCode);
         Assert.Equal(node.HierarchyNodeId, row.HierarchyNodeId);
 
-        // No numeric magnitude anywhere on the persistence row — POLOXI owns the outcome.
+        // The only numeric carried on the persistence row is the OPTIONAL relative-position qualifier
+        // (PlacementMagnitude / match confidence) — never a score. POLOXI Wide2 still owns the outcome.
+        Assert.NotNull(row.PlacementMagnitude);
+        Assert.InRange(row.PlacementMagnitude!.Value, 0.0, 1.0);
         Assert.DoesNotContain(row.GetType().GetProperties(),
-            p => p.PropertyType == typeof(decimal) || p.PropertyType == typeof(decimal?) ||
-                 p.PropertyType == typeof(double) || p.PropertyType == typeof(double?));
+            p => (p.PropertyType == typeof(decimal) || p.PropertyType == typeof(decimal?) ||
+                  p.PropertyType == typeof(double) || p.PropertyType == typeof(double?))
+                 && p.Name != nameof(ChannelContributionPersistence.PlacementMagnitude));
     }
 
     [Fact]
@@ -128,7 +140,8 @@ public sealed class DecisionChannelContributionTests
     {
         var repo = new FakeContributionRepository();
         var orchestrator = new DecisionChannelOrchestrator(
-            [new ThrowingChannel()], repo, NullLogger<DecisionChannelOrchestrator>.Instance);
+            [new ThrowingChannel()], repo, new NoMatterDecisionRepository(), new NoPackResolver(),
+            NullLogger<DecisionChannelOrchestrator>.Instance);
 
         var result = await orchestrator.IngestContributionsAsync(Tenant, User, Matter, Execution);
 
@@ -136,7 +149,34 @@ public sealed class DecisionChannelContributionTests
         Assert.Empty(repo.Saved);
     }
 
-    // ── helpers ──────────────────────────────────────────────────────────────────────────────────
+    [Fact]
+    public async Task Preserves_AER_contradicts_relation_from_proposition_support_edge()
+    {
+        // The hierarchy node asserts the breach proposition; the verified anchor pins an AER edge whose
+        // RelationshipTypeCode is CONTRADICTS. The channel must report Contradicts (never flip to Supports)
+        // and must NOT feed positive support into POLOXI. "Retrieval Target != Expected Answer".
+        var breachNode = Node("Defendant was using a phone immediately before the collision impact.", "PROPOSITION");
+        var hierarchy = HierarchyRepo(breachNode);
+
+        var supportId = Guid.NewGuid();
+        var proposition = Proposition(
+            "Defendant was using a phone immediately before the collision impact.",
+            Support(supportId, LegalDocumentRelationshipTypes.Contradicts));
+        var assertion = VerifiedAssertion("the defendant was not using a phone before impact") with
+        {
+            LegalPropositionSupportId = supportId,
+        };
+        var corpus = CorpusRepo([proposition], assertion);
+
+        var channel = new DocumentEvidenceChannel(corpus, hierarchy);
+        var contribution = Assert.Single(await channel.ResolveContributionsAsync(Context()));
+
+        Assert.Equal(breachNode.HierarchyNodeId, contribution.HierarchyNodeId);
+        Assert.Equal(ContributionRelation.Contradicts, contribution.Relation);
+        Assert.False(contribution.ContributesPositiveSupport);
+    }
+
+    // ── helpers ────────────────────────────────────────────────────────────────────────────
 
     private static DecisionChannelResolveContext Context() => new()
     {
@@ -190,7 +230,27 @@ public sealed class DecisionChannelContributionTests
         => new(nodes.Length == 0 ? null : nodes);
 
     private static FakeCorpusRepository CorpusRepo(params LegalSourceAssertionDto[] assertions)
-        => new(assertions);
+        => new([], assertions);
+
+    private static FakeCorpusRepository CorpusRepo(LegalEvidenceGraphPropositionDto[] propositions, params LegalSourceAssertionDto[] assertions)
+        => new(propositions, assertions);
+
+    private static LegalEvidenceGraphPropositionDto Proposition(string text, params LegalPropositionSupportDto[] support) => new(
+        LegalFactPropositionId: Guid.NewGuid(),
+        MatterId: Matter,
+        PropositionText: text,
+        FactStateCode: "DISPUTED",
+        GenerationOriginCode: "DYNAMIC_LLM",
+        Confidence: null,
+        IsDecisionAuthoritative: true,
+        Support: support);
+
+    private static LegalPropositionSupportDto Support(Guid supportId, string relationshipTypeCode) => new(
+        LegalPropositionSupportId: supportId,
+        LegalFactPropositionId: Guid.NewGuid(),
+        LegalEvidenceItemId: Guid.NewGuid(),
+        RelationshipTypeCode: relationshipTypeCode,
+        AssessmentReason: null);
 
     private sealed class FakeHierarchyRepository(HierarchyNodeDto[]? nodes) : ILegalHierarchyExecutionRepository
     {
@@ -215,10 +275,10 @@ public sealed class DecisionChannelContributionTests
     }
 
     // Only GetMatterEvidenceGraphAsync is used by the channel; every other member throws.
-    private sealed class FakeCorpusRepository(LegalSourceAssertionDto[] assertions) : StubCorpusRepository
+    private sealed class FakeCorpusRepository(LegalEvidenceGraphPropositionDto[] propositions, LegalSourceAssertionDto[] assertions) : StubCorpusRepository
     {
         public override Task<LegalMatterEvidenceGraphDto> GetMatterEvidenceGraphAsync(Guid tenantId, Guid matterId, CancellationToken cancellationToken = default)
-            => Task.FromResult(new LegalMatterEvidenceGraphDto(matterId, 1, [], [], assertions));
+            => Task.FromResult(new LegalMatterEvidenceGraphDto(matterId, 1, [], propositions, assertions));
     }
 
     private sealed class FakeContributionRepository : IChannelContributionRepository
@@ -242,5 +302,18 @@ public sealed class DecisionChannelContributionTests
         public DecisionChannelType ChannelType => DecisionChannelType.DocumentEvidence;
         public Task<IReadOnlyList<DecisionContribution>> ResolveContributionsAsync(DecisionChannelResolveContext context, CancellationToken cancellationToken = default)
             => throw new InvalidOperationException("boom");
+    }
+
+    // Returns no matter so the orchestrator skips pack resolution and channels keep default behavior.
+    private sealed class NoMatterDecisionRepository : StubDecisionRepository
+    {
+        public override Task<DecisionMatterDto?> GetMatterAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default)
+            => Task.FromResult<DecisionMatterDto?>(null);
+    }
+
+    private sealed class NoPackResolver : IDomainPackResolver
+    {
+        public Task<ResolvedDomainPack> ResolveAsync(Guid tenantId, string? packCode, CancellationToken cancellationToken = default)
+            => Task.FromResult(new ResolvedDomainPack(packCode ?? string.Empty, string.Empty, [], [], [], [], []));
     }
 }

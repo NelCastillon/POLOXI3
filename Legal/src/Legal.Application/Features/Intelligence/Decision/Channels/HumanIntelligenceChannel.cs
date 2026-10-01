@@ -56,7 +56,9 @@ public sealed class HumanIntelligenceChannel(
         if (signalNodes.Length == 0)
             return [];
 
-        var nodeIndex = ChannelNodeTextMatcher.BuildNodeIndex(execution.Nodes);
+        // Domain Pack synonym terminology (advisory) only ADDS node-match recall; null pack = raw overlap.
+        var termLookup = context.ResolvedPack?.TermLookup;
+        var nodeIndex = ChannelNodeTextMatcher.BuildNodeIndex(execution.Nodes, termLookup);
         if (nodeIndex.Count == 0)
             return [];
 
@@ -65,13 +67,21 @@ public sealed class HumanIntelligenceChannel(
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var bestNode = ChannelNodeTextMatcher.BestMatch(attorneyNode.NodeText, nodeIndex, MinimumSharedTokens, out var bestOverlap);
+            var bestNode = ChannelNodeTextMatcher.BestMatch(attorneyNode.NodeText, nodeIndex, MinimumSharedTokens, termLookup, out var bestOverlap);
             if (bestNode is null)
                 continue;
 
             // A governance-approved matter assessment is a VERIFIED human confirmation of the node.
             if (attorneyNode.ApprovedAssessment is { } approval)
             {
+                // The attorney's placement location IS the intelligence: express it as the relative
+                // position WITHIN the sibling band the attorney chose within ((value - lower)/(upper -
+                // lower)). This carries the deliberate judgment — including a value overwritten in the UI
+                // — through to POLOXI's δ. Null when there is no comparable band; the adapter then falls
+                // back to its fixed magnitude. POLOXI Core still owns the scoring consequence.
+                var magnitude = ComputeRelativePlacement(
+                    approval.ConfirmedValue, approval.PreviousSiblingValue, approval.NextSiblingValue);
+
                 contributions.Add(new DecisionContribution
                 {
                     TenantId = context.TenantId,
@@ -82,6 +92,7 @@ public sealed class HumanIntelligenceChannel(
                     Relation = ContributionRelation.Supports,
                     VerificationState = ContributionVerificationState.Verified,
                     TargetSignalCode = DecisionChannelCodes.TargetSignal.FactSupport,
+                    Magnitude = magnitude,
                     ActorUserId = approval.ApprovedByUserId,
                     Provenance = new ContributionProvenance
                     {
@@ -121,5 +132,24 @@ public sealed class HumanIntelligenceChannel(
         }
 
         return contributions;
+    }
+
+    // Relative position of the attorney's confirmed value within the comparable sibling band
+    // [lower, upper]. Returns a normalized [0,1] magnitude, or null when no comparable band exists
+    // (BoundedEntry / PendingAssessment) — there is then no frame to express the placement within, and
+    // the signal adapter falls back to its fixed magnitude. Degenerate bands (lower == upper) yield null.
+    private static double? ComputeRelativePlacement(decimal value, decimal? previousSiblingValue, decimal? nextSiblingValue)
+    {
+        if (previousSiblingValue is not { } prev || nextSiblingValue is not { } next)
+            return null;
+
+        var lower = Math.Min(prev, next);
+        var upper = Math.Max(prev, next);
+        var span = upper - lower;
+        if (span <= 0m)
+            return null;
+
+        var clamped = Math.Clamp(value, lower, upper);
+        return (double)((clamped - lower) / span);
     }
 }

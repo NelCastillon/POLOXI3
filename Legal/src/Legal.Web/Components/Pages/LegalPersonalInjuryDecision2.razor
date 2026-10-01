@@ -5,6 +5,7 @@
 @implements IAsyncDisposable
 @inject ApiClient Api
 @inject BreadcrumbService Breadcrumbs
+@inject DecisionOverviewStateCache OverviewState
 @inject NavigationManager Navigation
 @inject IConfiguration Configuration
 @inject IWebHostEnvironment HostEnvironment
@@ -69,19 +70,19 @@
                 @if (DfiShowCommandCenter)
                 {
                     <div class="dfi-kpi-grid @(DfiLiveProvisional ? "dfi-kpi-grid--analyzing" : null)">
-                        <div class="dfi-kpi">
+                        <div class="dfi-kpi dfi-kpi--click @(_ovKpiFilter is null ? "dfi-kpi--active" : "")" @onclick='() => SetOvKpiFilter("__all")' title="Show all scored candidates">
                             <span class="dfi-kpi-val">@DfiScoredCandidateCount</span>
                             <span class="dfi-kpi-lbl">Scored candidates @if (DfiLiveProvisional) {<span class="dfi-kpi-live">analyzing…</span>}</span>
                         </div>
-                        <div class="dfi-kpi">
+                        <div class="dfi-kpi dfi-kpi--click @(_ovKpiFilter == "dependencies" ? "dfi-kpi--active" : "")" @onclick='() => SetOvKpiFilter("dependencies")' title="Filter outcomes that have critical dependencies">
                             <span class="dfi-kpi-val">@DfiDependencyCount</span>
                             <span class="dfi-kpi-lbl">Dependencies</span>
                         </div>
-                        <div class="dfi-kpi">
+                        <div class="dfi-kpi dfi-kpi--click @(_ovKpiFilter == "evidence" ? "dfi-kpi--active" : "")" @onclick='() => SetOvKpiFilter("evidence")' title="Filter evidence-backed outcomes">
                             <span class="dfi-kpi-val">@DfiEvidenceCoveragePct.ToString("P0")</span>
                             <span class="dfi-kpi-lbl">Evidence coverage</span>
                         </div>
-                        <div class="dfi-kpi">
+                        <div class="dfi-kpi dfi-kpi--click @(_ovKpiFilter == "leader" ? "dfi-kpi--active" : "")" @onclick='() => SetOvKpiFilter("leader")' title="Filter to the current leader">
                             <span class="dfi-kpi-val">@DfiTopKStabilityPct.ToString("P0")</span>
                             <span class="dfi-kpi-lbl">Top-3 stability</span>
                         </div>
@@ -100,6 +101,8 @@
                 @if (DfiShowWorkspace)
                 {
                 <div class="dfi-workspace">
+                    @if (DfiShowCommandCenter)
+                    {
                     <h3 class="dfi-workspace-title">Decision workspace</h3>
                     <div class="dfi-tabs" role="tablist">
                         @foreach (var tab in DfiTabs)
@@ -109,6 +112,7 @@
                                     @onclick="() => SelectDfiTab(tab)">@tab</button>
                         }
                     </div>
+                    }
 
                     <div class="dfi-tabpanel">
                         @if (DfiShowLiveExecution)
@@ -252,6 +256,25 @@
                                 {
                                     <div class="ov-landscape">
                                         @{ var ovLeader = OvOutcomes[0]; }
+
+                                        @* ── Decision KPI strip ───────────────────────────────────────── *@
+                                        @* ── Decision Status trust strip ──────────────────────────────────────────── *@
+                                        <div class="ov-status">
+                                            <div class="ov-status-lead">
+                                                <span class="ov-status-state ov-status-state--@OvDecisionStateTone">@OvDecisionStateLabel.ToUpperInvariant()</span>
+                                                <span class="ov-status-headline">C@(ovLeader.Index) @ovLeader.Title leads at @ovLeader.SupportPct% support</span>
+                                            </div>
+                                            <div class="ov-status-chips">
+                                                @foreach (var chip in OvDecisionStatusChips)
+                                                {
+                                                    <div class="ov-status-chip ov-status-chip--@chip.Tone">
+                                                        <span class="ov-status-chip-val">@chip.Value</span>
+                                                        <span class="ov-status-chip-lbl">@chip.Label</span>
+                                                    </div>
+                                                }
+                                            </div>
+                                        </div>
+
                                         <div class="ov-outcomes-head">
                                             <div>
                                                 <h4 class="ov-section-title">Decision Outcomes</h4>
@@ -273,7 +296,7 @@
                                         @if (_ovComparisonView == "Cards")
                                         {
                                             <div class="ov-cards">
-                                                @foreach (var o in OvOutcomes)
+                                                @foreach (var o in OvFilteredOutcomes)
                                                 {
                                                     <div class="ov-card ov-card--@(o.IsLeader ? "leader" : "compete") ov-card--c@(o.Index)">
                                                         <div class="ov-card-top">
@@ -289,7 +312,11 @@
                                                         </div>
                                                         <div class="ov-card-track"><div class="ov-card-fill" style="width:@(o.SupportPct)%"></div></div>
                                                         <h5 class="ov-card-title">@o.Title</h5>
-                                                        @if (!string.IsNullOrWhiteSpace(o.Detail))
+                                                        @if (!string.IsNullOrWhiteSpace(o.Narrative))
+                                                        {
+                                                            <p class="ov-card-detail">@o.Narrative</p>
+                                                        }
+                                                        else if (!string.IsNullOrWhiteSpace(o.Detail))
                                                         {
                                                             <p class="ov-card-detail">@o.Detail</p>
                                                         }
@@ -300,12 +327,12 @@
                                                             }
                                                         </div>
                                                         <ul class="ov-card-metrics">
-                                                            <li><span class="ov-metric-ic"><i class="bi bi-check2-circle"></i></span><span class="ov-metric-lbl">Key supporting factors</span><span class="ov-metric-val">@o.KeySupportingFactors</span></li>
-                                                            <li><span class="ov-metric-ic"><i class="bi bi-diagram-2"></i></span><span class="ov-metric-lbl">Critical dependencies</span><span class="ov-metric-val">@o.CriticalDependencies</span></li>
-                                                            <li><span class="ov-metric-ic ov-metric-ic--warn"><i class="bi bi-exclamation-circle"></i></span><span class="ov-metric-lbl">Missing or unverified evidence</span><span class="ov-metric-val">@o.MissingEvidence</span></li>
-                                                            <li><span class="ov-metric-ic ov-metric-ic--danger"><i class="bi bi-shield-exclamation"></i></span><span class="ov-metric-lbl">Main vulnerabilities</span><span class="ov-metric-val">@o.MainVulnerabilities</span></li>
+                                                            <li class="ov-metric-click @(_ovKpiFilter == "supporting" ? "ov-metric-click--active" : "")" @onclick='() => SetOvKpiFilter("supporting")' title="Filter outcomes that have key supporting factors"><span class="ov-metric-ic"><i class="bi bi-check2-circle"></i></span><span class="ov-metric-lbl">Key supporting factors</span><span class="ov-metric-val">@o.KeySupportingFactors</span></li>
+                                                            <li class="ov-metric-click @(_ovKpiFilter == "dependencies" ? "ov-metric-click--active" : "")" @onclick='() => SetOvKpiFilter("dependencies")' title="Filter outcomes that have critical dependencies"><span class="ov-metric-ic"><i class="bi bi-diagram-2"></i></span><span class="ov-metric-lbl">Critical dependencies</span><span class="ov-metric-val">@o.CriticalDependencies</span></li>
+                                                            <li class="ov-metric-click @(_ovKpiFilter == "missing" ? "ov-metric-click--active" : "")" @onclick='() => SetOvKpiFilter("missing")' title="Filter outcomes with missing or unverified evidence"><span class="ov-metric-ic ov-metric-ic--warn"><i class="bi bi-exclamation-circle"></i></span><span class="ov-metric-lbl">Missing or unverified evidence</span><span class="ov-metric-val">@o.MissingEvidence</span></li>
+                                                            <li class="ov-metric-click @(_ovKpiFilter == "vulnerabilities" ? "ov-metric-click--active" : "")" @onclick='() => SetOvKpiFilter("vulnerabilities")' title="Filter outcomes with main vulnerabilities"><span class="ov-metric-ic ov-metric-ic--danger"><i class="bi bi-shield-exclamation"></i></span><span class="ov-metric-lbl">Main vulnerabilities</span><span class="ov-metric-val">@o.MainVulnerabilities</span></li>
                                                         </ul>
-                                                        <button type="button" class="ov-card-cta ov-card-cta--@(o.IsLeader ? "leader" : "compete")" @onclick='() => _dfiTab = "Competition"'>View full analysis →</button>
+                                                        <button type="button" class="ov-card-cta ov-card-cta--@(o.IsLeader ? "leader" : "compete")" @onclick="() => OpenCandidateAnalysis(o.Index)">View full analysis →</button>
                                                     </div>
                                                 }
                                             </div>
@@ -547,16 +574,356 @@
                                                         }
                                                     </ul>
                                                 }
-                                                else
-                                                {
-                                                    <p class="dfi-empty">No insights are available for this execution yet.</p>
-                                                }
-                                            </div>
-                                        </div>
+                                                        else
+                                                        {
+                                                            <p class="dfi-empty">No insights are available for this execution yet.</p>
+                                                        }
                                                     </div>
-                                                }
-                                                break;
-                                            case "Decision Analysis":
+                                                </div>
+
+                                                @* ── Why It Leads · What Could Flip It · What To Resolve Next ──────── *@
+                                                <div class="ov-intel-grid ov-intel-grid--three ov-decision-row">
+                                                    <div class="ov-panel ov-panel--why">
+                                                        <div class="ov-panel-head">
+                                                            <h5 class="ov-panel-title"><i class="bi bi-trophy" aria-hidden="true"></i> Why C@(ovLeader.Index) Leads</h5>
+                                                            <button type="button" class="ov-insights-link" @onclick='() => _dfiTab = "Competition"'>Evidence →</button>
+                                                        </div>
+                                                        @if (OvWhyItLeads.Count > 0)
+                                                        {
+                                                            <ul class="ov-factor-list">
+                                                                @foreach (var f in OvWhyItLeads)
+                                                                {
+                                                                    <li class="ov-factor">
+                                                                        <span class="ov-factor-name">@f.Name</span>
+                                                                        <span class="ov-factor-track"><span class="ov-factor-fill ov-factor-fill--@f.Tone" style="width:@f.Pct%"></span></span>
+                                                                        <span class="ov-factor-pct">@f.Pct%</span>
+                                                                    </li>
+                                                                }
+                                                            </ul>
+                                                        }
+                                                        else
+                                                        {
+                                                            <p class="dfi-empty">The leading outcome has no scored supporting dimensions yet.</p>
+                                                        }
+                                                    </div>
+
+                                                    <div class="ov-panel ov-panel--flip">
+                                                        <div class="ov-panel-head">
+                                                            <h5 class="ov-panel-title"><i class="bi bi-shuffle" aria-hidden="true"></i> What Could Flip It</h5>
+                                                            <button type="button" class="ov-insights-link" @onclick='() => _dfiTab = "Decision Analysis"'>Flip points →</button>
+                                                        </div>
+                                                        @if (OvWhatCouldFlipIt.Count > 0)
+                                                        {
+                                                            <ul class="ov-flip-list">
+                                                                @foreach (var fp in OvWhatCouldFlipIt)
+                                                                {
+                                                                    <li class="ov-flip">
+                                                                        <span class="ov-flip-ic ov-flip-ic--@fp.Tone"><i class="bi bi-exclamation-triangle"></i></span>
+                                                                        <span class="ov-flip-name">@fp.Name</span>
+                                                                        <span class="ov-flip-state ov-flip-state--@fp.Tone">@fp.StateLabel</span>
+                                                                    </li>
+                                                                }
+                                                            </ul>
+                                                        }
+                                                        else
+                                                        {
+                                                            <p class="dfi-empty">No contradicted or unresolved factors could currently flip the decision.</p>
+                                                        }
+                                                    </div>
+
+                                                    <div class="ov-panel ov-panel--resolve">
+                                                        <div class="ov-panel-head">
+                                                            <h5 class="ov-panel-title"><i class="bi bi-flag" aria-hidden="true"></i> What To Resolve Next</h5>
+                                                            <button type="button" class="ov-insights-link" @onclick='() => _dfiTab = "Continuous Decision Calibration (CDC)"'>All actions →</button>
+                                                        </div>
+                                                        @if (OvNextBestActions.Count > 0)
+                                                        {
+                                                            <ol class="ov-action-list">
+                                                                @{ var ovri = 0; }
+                                                                @foreach (var a in OvNextBestActions.Take(3))
+                                                                {
+                                                                    ovri++;
+                                                                    <li class="ov-action">
+                                                                        <span class="ov-action-rank">@ovri</span>
+                                                                        <span class="ov-action-body">
+                                                                            <span class="ov-action-title">@a.Title</span>
+                                                                            @if (!string.IsNullOrWhiteSpace(a.Context))
+                                                                            {
+                                                                                <span class="ov-action-ctx">@a.Context</span>
+                                                                            }
+                                                                        </span>
+                                                                        <span class="ov-action-meta">
+                                                                            <span class="ov-impact ov-impact--@a.ImpactTone">@a.ImpactLabel</span>
+                                                                            <span class="ov-adv">ADV @a.Adv.ToString("0.00")</span>
+                                                                        </span>
+                                                                    </li>
+                                                                }
+                                                            </ol>
+                                                        }
+                                                        else
+                                                        {
+                                                            <p class="dfi-empty">No outstanding information-value targets. Run proposition scoring to surface next best actions.</p>
+                                                        }
+                                                    </div>
+                                                </div>
+
+                                                @* ── Decision Structure (CHR/APR) · Latest Intelligence (HRR/AER) ──── *@
+                                                <div class="ov-intel-grid ov-intel-grid--two">
+                                                    <div class="ov-panel ov-panel--structure">
+                                                        <div class="ov-panel-head">
+                                                            <h5 class="ov-panel-title"><i class="bi bi-diagram-3" aria-hidden="true"></i> Decision Structure (CHR / APR)</h5>
+                                                            <button type="button" class="ov-insights-link" @onclick='() => _dfiTab = "Hierarchy"'>Explore hierarchy →</button>
+                                                        </div>
+                                                        <div class="ov-struct-stats">
+                                                            <div class="ov-struct-stat">
+                                                                <span class="ov-struct-val">@OvHierarchyNodeCount</span>
+                                                                <span class="ov-struct-lbl">Hierarchy nodes (CHR)</span>
+                                                            </div>
+                                                            <div class="ov-struct-stat">
+                                                                <span class="ov-struct-val">@OvAprResolvedCount / @OvAprTotalCount</span>
+                                                                <span class="ov-struct-lbl">Atomic propositions resolved (APR)</span>
+                                                            </div>
+                                                            <div class="ov-struct-stat">
+                                                                <span class="ov-struct-val">@OvAprResolvedPct%</span>
+                                                                <span class="ov-struct-lbl">APR resolution</span>
+                                                            </div>
+                                                        </div>
+                                                        <div class="ov-struct-track"><div class="ov-struct-fill" style="width:@OvAprResolvedPct%"></div></div>
+                                                    </div>
+
+                                                    <div class="ov-panel ov-panel--intel">
+                                                        <div class="ov-panel-head">
+                                                            <h5 class="ov-panel-title"><i class="bi bi-activity" aria-hidden="true"></i> Latest Intelligence (HRR / AER)</h5>
+                                                            <button type="button" class="ov-insights-link" @onclick='() => _dfiTab = "Decision Change Intelligence (DCI)"'>Full DCI trace →</button>
+                                                        </div>
+                                                        @if (OvLatestIntelligence is { } li)
+                                                        {
+                                                            <div class="ov-intel-lineage">
+                                                                <span class="ov-intel-node">@li.Factor</span>
+                                                                <i class="bi bi-arrow-down ov-intel-arrow"></i>
+                                                                <span class="ov-intel-edge">HRR → AER</span>
+                                                                <i class="bi bi-arrow-down ov-intel-arrow"></i>
+                                                                <span class="ov-intel-outcome ov-intel-outcome--@li.ImpactTone">@li.Impact impact · @li.LinkedCandidates</span>
+                                                            </div>
+                                                            <p class="ov-intel-reason">@li.Reason</p>
+                                                        }
+                                                        else
+                                                        {
+                                                            <p class="dfi-empty">No decision-affecting intelligence has been recorded for this matter yet.</p>
+                                                        }
+                                                    </div>
+                                                </div>
+
+                                                @* ── Document Intelligence ────────────────────────────────────────── *@
+                                                <div class="ov-panel ov-panel--docintel">
+                                                    <div class="ov-panel-head">
+                                                        <h5 class="ov-panel-title"><i class="bi bi-files" aria-hidden="true"></i> Document Intelligence</h5>
+                                                        <button type="button" class="ov-insights-link" @onclick='() => _dfiTab = "Documents"'>Open document intelligence →</button>
+                                                    </div>
+                                                    @if (OvDocumentIntelligence.Count > 0)
+                                                    {
+                                                        <div class="ov-docintel-stats">
+                                                            @foreach (var s in OvDocumentIntelligence)
+                                                            {
+                                                                <div class="ov-docintel-stat">
+                                                                    <span class="ov-docintel-val">@s.Value</span>
+                                                                    <span class="ov-docintel-lbl">@s.Label</span>
+                                                                </div>
+                                                            }
+                                                        </div>
+                                                    }
+                                                    else
+                                                    {
+                                                        <p class="dfi-empty">Document intelligence has not been projected for this matter yet.</p>
+                                                    }
+                                                </div>
+
+                                                @* ── Decision Confidence · Key Factors · Next Best Actions ───────── *@
+                                                <div class="ov-intel-grid ov-intel-grid--three">
+                                                    <div class="ov-panel ov-panel--confidence">
+                                                        <div class="ov-panel-head">
+                                                            <h5 class="ov-panel-title">Decision Confidence</h5>
+                                                            <span class="dfi-pill dfi-pill-@OvConfidenceTone">H = @OvEntropy.ToString("0.00")</span>
+                                                        </div>
+                                                        <div class="ov-confidence-body">
+                                                            <div class="ov-donut" style="--ov-donut:@OvConfidencePct%">
+                                                                <div class="ov-donut-hole">
+                                                                    <span class="ov-donut-val">@OvConfidenceLabel</span>
+                                                                    <span class="ov-donut-sub">Confidence</span>
+                                                                </div>
+                                                            </div>
+                                                            <ul class="ov-confidence-legend">
+                                                                @foreach (var o in OvOutcomes)
+                                                                {
+                                                                    <li>
+                                                                        <span class="ov-legend-dot" style="background:@OvOutcomeColor(o.Index - 1)"></span>
+                                                                        <span class="ov-legend-name">C@(o.Index) @o.Title</span>
+                                                                        <span class="ov-legend-pct">@o.SupportPct%</span>
+                                                                    </li>
+                                                                }
+                                                            </ul>
+                                                        </div>
+                                                        <p class="ov-panel-foot">Confidence reflects winner separation, evidence grounding, and ranking stability. Additional evidence could materially change the outcome.</p>
+                                                    </div>
+
+                                                    <div class="ov-panel ov-panel--factors">
+                                                        <div class="ov-panel-head">
+                                                            <h5 class="ov-panel-title">Key Factors Impacting Outcomes</h5>
+                                                            <button type="button" class="ov-insights-link" @onclick='() => _dfiTab = "Decision Analysis"'>View all →</button>
+                                                        </div>
+                                                        @if (OvKeyFactors.Count > 0)
+                                                        {
+                                                            <ul class="ov-factor-list">
+                                                                @foreach (var f in OvKeyFactors)
+                                                                {
+                                                                    <li class="ov-factor">
+                                                                        <span class="ov-factor-name">@f.Name</span>
+                                                                        <span class="ov-factor-track"><span class="ov-factor-fill ov-factor-fill--@f.Tone" style="width:@f.Pct%"></span></span>
+                                                                        <span class="ov-factor-pct">@f.Pct%</span>
+                                                                    </li>
+                                                                }
+                                                            </ul>
+                                                        }
+                                                        else
+                                                        {
+                                                            <p class="dfi-empty">No scored decision factors are available for this execution yet.</p>
+                                                        }
+                                                    </div>
+
+                                                    <div class="ov-panel ov-panel--actions">
+                                                        <div class="ov-panel-head">
+                                                            <h5 class="ov-panel-title">Next Best Actions</h5>
+                                                            <button type="button" class="ov-insights-link" @onclick='() => _dfiTab = "Continuous Decision Calibration (CDC)"'>View all →</button>
+                                                        </div>
+                                                        @if (OvNextBestActions.Count > 0)
+                                                        {
+                                                            <ol class="ov-action-list">
+                                                                @{ var oai = 0; }
+                                                                @foreach (var a in OvNextBestActions)
+                                                                {
+                                                                    oai++;
+                                                                    <li class="ov-action">
+                                                                        <span class="ov-action-rank">@oai</span>
+                                                                        <span class="ov-action-body">
+                                                                            <span class="ov-action-title">@a.Title</span>
+                                                                            @if (!string.IsNullOrWhiteSpace(a.Context))
+                                                                            {
+                                                                                <span class="ov-action-ctx">@a.Context</span>
+                                                                            }
+                                                                        </span>
+                                                                        <span class="ov-action-meta">
+                                                                            <span class="ov-impact ov-impact--@a.ImpactTone">@a.ImpactLabel</span>
+                                                                            <span class="ov-adv">ADV @a.Adv.ToString("0.00")</span>
+                                                                        </span>
+                                                                    </li>
+                                                                }
+                                                            </ol>
+                                                        }
+                                                        else
+                                                        {
+                                                            <p class="dfi-empty">No outstanding information-value targets. Run proposition scoring to surface next best actions.</p>
+                                                        }
+                                                    </div>
+                                                </div>
+
+                                                @* ── Matter Snapshot · Progress to Decision Readiness ───────────── *@
+                                                <div class="ov-intel-grid ov-intel-grid--two">
+                                                    <div class="ov-panel ov-panel--matter">
+                                                        <h5 class="ov-panel-title">Matter Snapshot</h5>
+                                                        <dl class="ov-snapshot">
+                                                            @foreach (var s in OvMatterSnapshot)
+                                                            {
+                                                                <div class="ov-snapshot-item">
+                                                                    <dt><i class="bi @s.Icon" aria-hidden="true"></i> @s.Label</dt>
+                                                                    <dd>@(string.IsNullOrWhiteSpace(s.Value) ? "—" : s.Value)</dd>
+                                                                </div>
+                                                            }
+                                                        </dl>
+                                                    </div>
+
+                                                    <div class="ov-panel ov-panel--readiness">
+                                                        <div class="ov-panel-head">
+                                                            <h5 class="ov-panel-title">Progress to Decision Readiness</h5>
+                                                            <span class="ov-readiness-pct">@OvReadinessPct%</span>
+                                                        </div>
+                                                        <div class="ov-readiness-track"><div class="ov-readiness-fill ov-readiness-fill--@DfiReadinessTone" style="width:@OvReadinessPct%"></div></div>
+                                                        <ul class="ov-readiness-steps">
+                                                            @foreach (var step in OvReadinessSteps)
+                                                            {
+                                                                <li class="ov-rstep ov-rstep--@step.Tone">
+                                                                    <span class="ov-rstep-ic"><i class="bi @(step.Tone == "ok" ? "bi-check-circle-fill" : "bi-clock")"></i></span>
+                                                                    <span class="ov-rstep-lbl">@step.Label</span>
+                                                                                    <span class="ov-rstep-val">@step.Value</span>
+                                                                                </li>
+                                                                            }
+                                                                        </ul>
+                                                                        @if (OvReadinessBlockers.Count > 0)
+                                                                        {
+                                                                            <div class="ov-blockers">
+                                                                                <span class="ov-blockers-title"><i class="bi bi-exclamation-octagon" aria-hidden="true"></i> Blockers</span>
+                                                                                <ul class="ov-blockers-list">
+                                                                                    @foreach (var b in OvReadinessBlockers)
+                                                                                    {
+                                                                                        <li>@b</li>
+                                                                                    }
+                                                                                </ul>
+                                                                            </div>
+                                                                        }
+                                                                    </div>
+                                                </div>
+
+                                                @* ── Recent Activity · Analyst Summary ──────────────────────────── *@
+                                                <div class="ov-intel-grid ov-intel-grid--two">
+                                                    <div class="ov-panel ov-panel--activity">
+                                                        <div class="ov-panel-head">
+                                                            <h5 class="ov-panel-title">Recent Activity</h5>
+                                                            <button type="button" class="ov-insights-link" @onclick='() => _dfiTab = "Decision Change Intelligence (DCI)"'>View all →</button>
+                                                        </div>
+                                                        @if (CdcRecentActivity.Count > 0)
+                                                        {
+                                                            <ul class="ov-activity-list">
+                                                                @foreach (var act in CdcRecentActivity)
+                                                                {
+                                                                    <li class="ov-activity">
+                                                                        <span class="ov-activity-ic ov-activity-ic--@act.Tone"><i class="bi bi-dot"></i></span>
+                                                                        <span class="ov-activity-body">
+                                                                            <span class="ov-activity-title">@act.Title</span>
+                                                                            @if (!string.IsNullOrWhiteSpace(act.Detail))
+                                                                            {
+                                                                                <span class="ov-activity-detail">@act.Detail</span>
+                                                                            }
+                                                                        </span>
+                                                                        <span class="ov-activity-when">@OvRelativeTime(act.When)</span>
+                                                                    </li>
+                                                                }
+                                                            </ul>
+                                                        }
+                                                        else
+                                                        {
+                                                            <p class="dfi-empty">No recent matter activity has been recorded yet.</p>
+                                                        }
+                                                    </div>
+
+                                                    <div class="ov-panel ov-panel--summary">
+                                                        <div class="ov-panel-head">
+                                                            <h5 class="ov-panel-title"><i class="bi bi-stars" aria-hidden="true"></i> Decision Brief</h5>
+                                                        </div>
+                                                        <p class="ov-summary-text">@OvExecutiveSummary</p>
+                                                        <div class="ov-summary-chips">
+                                                            @foreach (var chip in OvSummaryChips)
+                                                            {
+                                                                <div class="ov-summary-chip ov-summary-chip--@chip.Tone">
+                                                                    <span class="ov-summary-chip-head"><i class="bi @chip.Icon"></i> @chip.Title</span>
+                                                                    <span class="ov-summary-chip-text">@chip.Text</span>
+                                                                </div>
+                                                            }
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                                                       </div>
+                                                                                   }
+                                                                                  break;
+                                                                              case "Decision Analysis":
                                                 @DecisionAnalysisDashboard
                                                 break;
                                             case "Continuous Decision Calibration (CDC)":
@@ -3264,6 +3631,229 @@
 
         }
     </div>
+
+    @if (_analysisPopupOutcome is { } cfa)
+    {
+        <div class="um-modal-backdrop" @onclick="CloseCandidateAnalysis">
+            <div class="um-modal um-modal--lg cfa-popup" @onclick:stopPropagation="true">
+                <div class="um-modal-header">
+                    <i class="bi @(cfa.IsLeader ? "bi-trophy" : "bi-diagram-3")"></i>
+                    <span>C@(cfa.Index) · @cfa.Title — Full Analysis</span>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseCandidateAnalysis"><i class="bi bi-x-lg"></i></button>
+                </div>
+                <div class="um-modal-body">
+                    <div class="cfa-popup-top">
+                        <span class="cfa-popup-flag cfa-popup-flag--@(cfa.IsLeader ? "leader" : "compete")">
+                            @if (cfa.IsLeader)
+                            {
+                                <i class="bi bi-trophy" aria-hidden="true"></i>
+                            }
+                            @(cfa.IsLeader ? "Current Leader" : "Competing Outcome")
+                        </span>
+                        <span class="cfa-popup-viability ov-tag--@cfa.ViabilityTone">@cfa.ViabilityLabel</span>
+                        <span class="cfa-popup-support">@cfa.SupportPct% support</span>
+                    </div>
+                    <div class="cfa-popup-track"><div class="cfa-popup-fill" style="width:@(cfa.SupportPct)%"></div></div>
+
+                    @if (!string.IsNullOrWhiteSpace(cfa.Detail))
+                    {
+                        <p class="cfa-popup-detail">@cfa.Detail</p>
+                    }
+
+                    @if (cfa.Tags.Count > 0)
+                    {
+                        <div class="cfa-popup-tags">
+                            @foreach (var tag in cfa.Tags)
+                            {
+                                <span class="ov-tag ov-tag--@tag.Tone">@tag.Label</span>
+                            }
+                        </div>
+                    }
+
+                    <div class="cfa-popup-metrics">
+                        <div class="cfa-popup-metric"><span class="cfa-popup-metric-lbl">Key supporting factors</span><span class="cfa-popup-metric-val">@cfa.KeySupportingFactors</span></div>
+                        <div class="cfa-popup-metric"><span class="cfa-popup-metric-lbl">Critical dependencies</span><span class="cfa-popup-metric-val">@cfa.CriticalDependencies</span></div>
+                        <div class="cfa-popup-metric"><span class="cfa-popup-metric-lbl">Missing / unverified evidence</span><span class="cfa-popup-metric-val cfa-popup-metric-val--warn">@cfa.MissingEvidence</span></div>
+                        <div class="cfa-popup-metric"><span class="cfa-popup-metric-lbl">Main vulnerabilities</span><span class="cfa-popup-metric-val cfa-popup-metric-val--danger">@cfa.MainVulnerabilities</span></div>
+                    </div>
+
+                    @if (!string.IsNullOrWhiteSpace(cfa.EstimatedResolutionLabel) || !string.IsNullOrWhiteSpace(cfa.EstimatedCostBand))
+                    {
+                        <div class="cfa-popup-estimates">
+                            @if (!string.IsNullOrWhiteSpace(cfa.EstimatedResolutionLabel))
+                            {
+                                <span class="cfa-popup-estimate"><i class="bi bi-clock-history"></i> @cfa.EstimatedResolutionLabel</span>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(cfa.EstimatedCostBand))
+                            {
+                                <span class="cfa-popup-estimate"><i class="bi bi-cash-coin"></i> @cfa.EstimatedCostBand</span>
+                            }
+                        </div>
+                    }
+
+                    @if (cfa.BranchScores.Count > 0)
+                    {
+                        <div class="cfa-popup-section">
+                            <h5 class="cfa-popup-section-title">Decision dimension support</h5>
+                            <ul class="cfa-popup-dims">
+                                @foreach (var b in cfa.BranchScores)
+                                {
+                                    var pct = (int)Math.Round((double)b.EvidenceScore * 100);
+                                    <li class="cfa-popup-dim">
+                                        <span class="cfa-popup-dim-lbl">@b.BranchDisplayName</span>
+                                        <span class="cfa-popup-dim-track"><span class="cfa-popup-dim-fill" style="width:@(pct)%"></span></span>
+                                        <span class="cfa-popup-dim-val">@pct%</span>
+                                    </li>
+                                }
+                            </ul>
+                        </div>
+                    }
+
+                    @* ── DB-backed full candidate analysis (loaded on demand) ───────────────────── *@
+                    @if (_analysisPopupLoading)
+                    {
+                        <div class="cfa-popup-section cfa-popup-loading">
+                            <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                            <span>Loading full analysis…</span>
+                        </div>
+                    }
+                    else if (!string.IsNullOrWhiteSpace(_analysisPopupError))
+                    {
+                        <div class="alert alert-danger" role="alert" style="border-left: 4px solid #dc3545;">@_analysisPopupError</div>
+                    }
+                    else if (_analysisPopupModel is { } fa)
+                    {
+                        @if (!string.IsNullOrWhiteSpace(fa.Narrative))
+                        {
+                            <div class="cfa-popup-section">
+                                <h5 class="cfa-popup-section-title">Analysis narrative</h5>
+                                <p class="cfa-popup-detail">@fa.Narrative</p>
+                            </div>
+                        }
+
+                        @if (fa.Dimensions.Count > 0)
+                        {
+                            <div class="cfa-popup-section">
+                                <h5 class="cfa-popup-section-title">Multidimensional support</h5>
+                                <ul class="cfa-popup-dims">
+                                    @foreach (var d in fa.Dimensions)
+                                    {
+                                        <li class="cfa-popup-dim">
+                                            <span class="cfa-popup-dim-lbl">@d.Label</span>
+                                            <span class="cfa-popup-dim-track"><span class="cfa-popup-dim-fill" style="width:@(d.ValuePct)%"></span></span>
+                                            <span class="cfa-popup-dim-val">@d.ValuePct%</span>
+                                        </li>
+                                    }
+                                </ul>
+                            </div>
+                        }
+
+                        @if (fa.StrongestDrivers.Count > 0)
+                        {
+                            <div class="cfa-popup-section">
+                                <h5 class="cfa-popup-section-title">Strongest drivers</h5>
+                                <ul class="cfa-popup-dims">
+                                    @foreach (var d in fa.StrongestDrivers)
+                                    {
+                                        <li class="cfa-popup-dim">
+                                            <span class="cfa-popup-dim-lbl">@d.Label</span>
+                                            <span class="cfa-popup-dim-track"><span class="cfa-popup-dim-fill" style="width:@(d.StrengthPct)%"></span></span>
+                                            <span class="cfa-popup-dim-val">@d.StrengthPct%</span>
+                                        </li>
+                                    }
+                                </ul>
+                            </div>
+                        }
+
+                        @if (fa.StrongestConstraints.Count > 0)
+                        {
+                            <div class="cfa-popup-section">
+                                <h5 class="cfa-popup-section-title">Strongest constraints</h5>
+                                <div class="cfa-popup-tags">
+                                    @foreach (var c in fa.StrongestConstraints)
+                                    {
+                                        <span class="ov-tag ov-tag--@c.Tone">@c.Label · @c.SeverityLabel</span>
+                                    }
+                                </div>
+                            </div>
+                        }
+
+                        @if (fa.Propositions.Count > 0)
+                        {
+                            <div class="cfa-popup-section">
+                                <h5 class="cfa-popup-section-title">Key propositions</h5>
+                                <ul class="cfa-popup-props">
+                                    @foreach (var p in fa.Propositions.Take(6))
+                                    {
+                                        <li class="cfa-popup-prop">
+                                            <span class="ov-tag ov-tag--@p.StatusTone">@p.Code</span>
+                                            <span class="cfa-popup-prop-text">@p.Text</span>
+                                            @if (p.Evidence.Count > 0)
+                                            {
+                                                <span class="cfa-popup-prop-meta">@p.Evidence.Count evidence</span>
+                                            }
+                                        </li>
+                                    }
+                                </ul>
+                            </div>
+                        }
+
+                        @if (fa.MaterialEvidence.Count > 0)
+                        {
+                            <div class="cfa-popup-section">
+                                <h5 class="cfa-popup-section-title">Material evidence</h5>
+                                <ul class="cfa-popup-props">
+                                    @foreach (var e in fa.MaterialEvidence.Take(6))
+                                    {
+                                        <li class="cfa-popup-prop">
+                                            <span class="ov-tag ov-tag--@e.AerTone">@e.AerRelationshipCode</span>
+                                            <span class="cfa-popup-prop-text">@e.DocumentFileName@(e.PageNumber is { } pg ? $" · p.{pg}" : "")</span>
+                                            @if (e.VerificationPct is { } vp)
+                                            {
+                                                <span class="cfa-popup-prop-meta">@vp% verified</span>
+                                            }
+                                        </li>
+                                    }
+                                </ul>
+                            </div>
+                        }
+
+                        @if (fa.Authority.TotalCount > 0)
+                        {
+                            <div class="cfa-popup-section">
+                                <h5 class="cfa-popup-section-title">Legal authority</h5>
+                                <div class="cfa-popup-metrics">
+                                    <div class="cfa-popup-metric"><span class="cfa-popup-metric-lbl">Total</span><span class="cfa-popup-metric-val">@fa.Authority.TotalCount</span></div>
+                                    <div class="cfa-popup-metric"><span class="cfa-popup-metric-lbl">Verified</span><span class="cfa-popup-metric-val">@fa.Authority.VerifiedCount</span></div>
+                                    <div class="cfa-popup-metric"><span class="cfa-popup-metric-lbl">Pending</span><span class="cfa-popup-metric-val cfa-popup-metric-val--warn">@fa.Authority.PendingCount</span></div>
+                                </div>
+                                @if (!string.IsNullOrWhiteSpace(fa.Authority.TopAuthorityLabel))
+                                {
+                                    <p class="cfa-popup-detail">@fa.Authority.TopAuthorityLabel@(string.IsNullOrWhiteSpace(fa.Authority.TopAuthorityCitation) ? "" : $" — {fa.Authority.TopAuthorityCitation}")</p>
+                                }
+                            </div>
+                        }
+
+                        @if (fa.Readiness.Blockers.Count > 0)
+                        {
+                            <div class="cfa-popup-section">
+                                <h5 class="cfa-popup-section-title">Readiness blockers</h5>
+                                <ul class="cfa-popup-props">
+                                    @foreach (var blocker in fa.Readiness.Blockers)
+                                    {
+                                        <li class="cfa-popup-prop"><span class="ov-tag ov-tag--warn">Blocker</span><span class="cfa-popup-prop-text">@blocker</span></li>
+                                    }
+                                </ul>
+                            </div>
+                        }
+                    }
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-primary" @onclick="CloseCandidateAnalysis">Close</button>
+                </div>
+            </div>
+        </div>
+    }
 </LegalWorkspace>
 
 @code {
@@ -3273,6 +3863,43 @@
 
     private DecisionMatterDto? _matter;
     private IReadOnlyCollection<LegalDocumentDto> _documents = [];
+
+    // Opens the Candidate Full Analysis as an in-page popup for the given 1-based candidate rank index.
+    // The compact OvOutcome powers the header instantly; the rich, DB-backed CandidateFullAnalysisDto
+    // is then loaded on demand from the API so the popup shows authoritative persisted sections.
+    private async Task OpenCandidateAnalysis(int candidateIndex)
+    {
+        _analysisPopupOutcome = OvOutcomes.FirstOrDefault(o => o.Index == candidateIndex);
+        _analysisPopupModel = null;
+        _analysisPopupError = null;
+
+        var matterId = _matter?.DecisionMatterId ?? MatterId;
+        if (matterId is not { } mid || mid == Guid.Empty)
+            return;
+
+        _analysisPopupLoading = true;
+        try
+        {
+            _analysisPopupModel = await Api.GetLegalCandidateFullAnalysisAsync(mid, candidateIndex);
+        }
+        catch (Exception ex)
+        {
+            _analysisPopupError = $"Unable to load full analysis: {ex.Message}";
+        }
+        finally
+        {
+            _analysisPopupLoading = false;
+        }
+    }
+
+    private void CloseCandidateAnalysis()
+    {
+        _analysisPopupOutcome = null;
+        _analysisPopupModel = null;
+        _analysisPopupError = null;
+        _analysisPopupLoading = false;
+    }
+
     private bool _uploading;
     private int _uploadTotal;
     private int _uploadIndex;
@@ -3640,6 +4267,21 @@
             _uploadIndex = 0;
             StateHasChanged();
         }
+    }
+
+    // Refreshes the DB-backed intelligence layers the Overview depends on AFTER an answer runs.
+    // Without this, the Document Intelligence / Decision Structure (CHR-APR), Latest Intelligence
+    // (HRR-AER), change drivers, and readiness blockers render empty: _cdcChangeEvents is only loaded
+    // once in OnInitializedAsync (before any answer), and _evidenceGraph is only loaded inside the
+    // corpus-activation path which early-returns for matters whose corpus was already activated. Both
+    // are reloaded here so every live Overview panel reflects the just-produced decision. Fail-soft.
+    private async Task RefreshPostAnswerIntelligenceAsync()
+    {
+        if (MatterId is not { } matterId || matterId == Guid.Empty)
+            return;
+        await LoadCalibrationDataAsync(matterId);
+        if (!_evidenceGraphLoading)
+            await LoadEvidenceGraphAsync();
     }
 
     private async Task LoadEvidenceGraphAsync()
@@ -6614,6 +7256,14 @@
     private string? _error;
     private WideSearchResponse? _response;
 
+    // Candidate Full Analysis popup: the selected outcome to show in the in-page modal (null = closed).
+    private OvOutcome? _analysisPopupOutcome;
+
+    // DB-backed full candidate analysis loaded on demand for the popup (null until loaded).
+    private CandidateFullAnalysisDto? _analysisPopupModel;
+    private bool _analysisPopupLoading;
+    private string? _analysisPopupError;
+
     // ── Real-time SignalR KPI feed ────────────────────────────────────────────────────────────
     // The Wide2 pipeline pushes provisional KPI snapshots through the Wide2ProgressHub while the
     // background search runs. _liveProgress holds the latest snapshot; it is set when a run starts
@@ -7434,6 +8084,46 @@
     private string _ovComparisonView = "Cards";
     private static readonly string[] OvComparisonViews = ["Cards", "Table", "Graph"];
 
+    // Active Decision-Outcomes KPI/metric filter. null = show all. Values:
+    //   "leader"         → only the current leader
+    //   "competing"      → only competing (non-leader) outcomes
+    //   "evidence"       → outcomes that are evidence-backed
+    //   "supporting"     → outcomes that have key supporting factors
+    //   "dependencies"   → outcomes that have critical dependencies
+    //   "missing"        → outcomes with missing/unverified evidence
+    //   "vulnerabilities"→ outcomes with main vulnerabilities
+    private string? _ovKpiFilter;
+
+    // The outcomes rendered by the Cards/Table/Graph views after applying the active KPI filter.
+    private IReadOnlyList<OvOutcome> OvFilteredOutcomes
+    {
+        get
+        {
+            var all = OvOutcomes;
+            return _ovKpiFilter switch
+            {
+                "leader" => all.Where(o => o.IsLeader).ToList(),
+                "competing" => all.Where(o => !o.IsLeader).ToList(),
+                "evidence" => all.Where(o => o.Tags.Any(t => t.Label == "Evidence backed")).ToList(),
+                "supporting" => all.Where(o => o.KeySupportingFactors > 0).ToList(),
+                "dependencies" => all.Where(o => o.CriticalDependencies > 0).ToList(),
+                "missing" => all.Where(o => o.MissingEvidence > 0).ToList(),
+                "vulnerabilities" => all.Where(o => o.MainVulnerabilities > 0).ToList(),
+                _ => all is List<OvOutcome> list ? list : all.ToList(),
+            };
+        }
+    }
+
+    private void SetOvKpiFilter(string filter)
+    {
+        if (filter == "__all")
+        {
+            _ovKpiFilter = null;
+            return;
+        }
+        _ovKpiFilter = string.Equals(_ovKpiFilter, filter, StringComparison.Ordinal) ? null : filter;
+    }
+
     private sealed record OvOutcome(
         int Index,
         string Title,
@@ -7450,7 +8140,47 @@
         int MainVulnerabilities,
         string? EstimatedResolutionLabel,
         string? EstimatedCostBand,
-        IReadOnlyList<WideCandidateBranchScoreDto> BranchScores);
+        IReadOnlyList<WideCandidateBranchScoreDto> BranchScores)
+    {
+        // LLM-composed, candidate-landscape overview narrative (55-90 words) for this outcome. When present
+        // it replaces the raw Detail text in the Overview card. Null degrades to the existing Detail.
+        public string? Narrative { get; init; }
+    }
+
+    // Resolves the candidate-landscape overview narrative for a candidate display name from the Wide
+    // response (fail-soft: null when the composer did not run or produced nothing for this candidate).
+    private string? OvNarrativeFor(string displayName)
+    {
+        var candidates = _response?.CandidateLandscape?.Candidates;
+        if (candidates is null || string.IsNullOrWhiteSpace(displayName)) return null;
+        var match = candidates.FirstOrDefault(c =>
+            string.Equals(c.CandidateName, displayName, StringComparison.OrdinalIgnoreCase)
+            || c.CandidateName.Contains(displayName, StringComparison.OrdinalIgnoreCase)
+            || displayName.Contains(c.CandidateName, StringComparison.OrdinalIgnoreCase));
+        return string.IsNullOrWhiteSpace(match?.OverviewNarrative) ? null : match!.OverviewNarrative;
+    }
+
+    // Returns every persisted branch descending from the given root branch (its full subtree,
+    // excluding the root). Used to derive honest supporting/dependency/missing/vulnerability counts
+    // for the L1-branch Overview fallback from real persisted data instead of hardcoded zeros.
+    private static List<WideBranchDto> OvDescendantBranches(WideBranchDto root, IReadOnlyCollection<WideBranchDto> all)
+    {
+        var result = new List<WideBranchDto>();
+        var frontier = new Queue<Guid>();
+        frontier.Enqueue(root.WideBranchId);
+        var guard = 0;
+        while (frontier.Count > 0 && guard++ < 1000)
+        {
+            var parentId = frontier.Dequeue();
+            foreach (var child in all.Where(x => x.ParentWideBranchId == parentId))
+            {
+                if (result.Any(r => r.WideBranchId == child.WideBranchId)) continue;
+                result.Add(child);
+                frontier.Enqueue(child.WideBranchId);
+            }
+        }
+        return result;
+    }
 
     private IReadOnlyList<OvOutcome> OvOutcomes
     {
@@ -7483,6 +8213,7 @@
                     .Take(3)
                     .ToList();
                 if (l1.Count == 0) return [];
+                var allBranches = _response?.Branches ?? [];
                 var confSum = l1.Sum(b => b.Confidence);
                 var branchOutcomes = new List<OvOutcome>();
                 for (var i = 0; i < l1.Count; i++)
@@ -7490,6 +8221,17 @@
                     var b = l1[i];
                     var supportPct = confSum > 0 ? (int)Math.Round((double)(b.Confidence / confSum) * 100) : 0;
                     var evidenceBacked = b.EvidenceCount > 0;
+
+                    // Derive honest counts from the persisted branch subtree rooted at this L1 branch
+                    // instead of hardcoding zeros. Supporting factors = grounded child branches;
+                    // dependencies = all child branches; missing = children lacking evidence;
+                    // vulnerabilities = eliminated children. Nothing fabricated.
+                    var subtree = OvDescendantBranches(b, allBranches);
+                    var keySupporting = subtree.Count(x => x.EvidenceCount > 0 && !x.IsEliminated);
+                    var dependencies = subtree.Count;
+                    var missingEvidence = subtree.Count(x => x.EvidenceCount == 0 && !x.IsEliminated);
+                    var vulnerabilities = subtree.Count(x => x.IsEliminated);
+
                     var tags = new List<(string, string)>
                     {
                         (i == 0 ? "Higher likelihood" : "In contention", i == 0 ? "ok" : "warn"),
@@ -7506,13 +8248,14 @@
                         "Moderate viability",
                         "warn",
                         tags,
-                        0,
-                        0,
-                        0,
-                        0,
+                        keySupporting,
+                        dependencies,
+                        missingEvidence,
+                        vulnerabilities,
                         null,
                         null,
-                        [new WideCandidateBranchScoreDto(b.DisplayName, b.Confidence)]));
+                        [new WideCandidateBranchScoreDto(b.DisplayName, b.Confidence)])
+                        { Narrative = OvNarrativeFor(b.DisplayName) });
                 }
                 return branchOutcomes;
             }
@@ -7572,7 +8315,8 @@
                     vulns,
                     c.EstimatedResolutionLabel,
                     c.EstimatedCostBand,
-                    c.BranchScores.Take(8).ToArray()));
+                    c.BranchScores.Take(8).ToArray())
+                    { Narrative = OvNarrativeFor(c.DisplayName) });
             }
             return outcomes;
         }
@@ -7635,6 +8379,324 @@
                 insights.Add((blocker, "warn"));
             return insights.Take(5).ToList();
         }
+    }
+
+    // ── Enterprise Overview read model ───────────────────────────────────────────────────────────
+    // Pure presentation projections over the authoritative live Wide2 response, matter, evidence,
+    // documents, and CDC change-event state. Never fabricates values the pipeline did not emit; all
+    // panels degrade honestly (em dash / empty state) when a signal is absent.
+    private sealed record OvKpiTile(string Icon, string Value, string Label, string Tone);
+    private IReadOnlyList<OvKpiTile> OvKpiTiles
+    {
+        get
+        {
+            var verifiedAuthorities = _response?.ProposedLegalAuthorities.Count(a => a.VerificationStatus == "VERIFIED") ?? 0;
+            var openQuestions = _response?.DecisionInspector?.FactorInventory?.MissingFactorCount ?? DfiMissingFactorCount;
+            return
+            [
+                new("bi-diagram-2", OvOutcomes.Count.ToString(), "Decision Outcomes", "info"),
+                new("bi-file-earmark-text", _documents.Count.ToString(), "Total Documents", "info"),
+                new("bi-shield-check", TotalEvidenceCount.ToString(), "Verified Evidence Items", TotalEvidenceCount > 0 ? "ok" : "warn"),
+                new("bi-bank", verifiedAuthorities.ToString(), "Key Authorities", verifiedAuthorities > 0 ? "ok" : "warn"),
+                new("bi-question-circle", openQuestions.ToString(), "Open Questions", openQuestions > 0 ? "warn" : "ok"),
+                new("bi-graph-up-arrow", $"{OvReadinessPct}%", "Readiness", DfiReadinessTone),
+            ];
+        }
+    }
+
+    // Overall decision confidence (evidence-weighted when competition ran, else interpretation prior).
+    private decimal OvConfidenceValue => _response?.DecisionConfidence ?? _response?.FinalConfidence ?? 0m;
+    private int OvConfidencePct => (int)Math.Round(OvConfidenceValue * 100m);
+    private decimal OvEntropy => _response?.FinalNormalizedEntropy ?? 0m;
+    private string OvConfidenceLabel => OvConfidenceValue switch
+    {
+        >= 0.75m => "High",
+        >= 0.5m => "Moderate",
+        > 0m => "Low",
+        _ => "—",
+    };
+    private string OvConfidenceTone => OvConfidenceValue switch
+    {
+        >= 0.75m => "ok",
+        >= 0.5m => "warn",
+        _ => "warn",
+    };
+
+    // Key factors impacting outcomes: scored decision factors projected to a 0-100 strength bar from
+    // their validated binding/verification state, newest/most-impactful first.
+    private sealed record OvFactor(string Name, int Pct, string Tone);
+    private IReadOnlyList<OvFactor> OvKeyFactors
+    {
+        get
+        {
+            var factors = DfiFactors;
+            if (factors.Count == 0) return [];
+            return factors
+                .Select(f =>
+                {
+                    var (state, tone) = DfiFactorState(f);
+                    var pct = state switch
+                    {
+                        "SUPPORTED" => 85,
+                        "SUPPLIED" => 55,
+                        _ => 30,
+                    };
+                    return new OvFactor(f.FactorName, pct, tone);
+                })
+                .OrderByDescending(f => f.Pct)
+                .Take(6)
+                .ToList();
+        }
+    }
+
+    // Next best actions: highest information-value propositions become ADV-ranked investigation targets.
+    private sealed record OvAction(string Title, string? Context, decimal Adv, string ImpactLabel, string ImpactTone);
+    private IReadOnlyList<OvAction> OvNextBestActions
+    {
+        get
+        {
+            var props = PropositionInfoValues;
+            if (props.Count == 0) return [];
+            var max = PropositionInfoValueMax;
+            return props
+                .Select(p =>
+                {
+                    var adv = max <= 0m ? 0m : Math.Round(p.InformationValue / max, 2);
+                    var impactLabel = p.DecisionImpact switch
+                    {
+                        >= 0.66m => "High Impact",
+                        >= 0.33m => "Medium Impact",
+                        _ => "Low Impact",
+                    };
+                    var impactTone = p.DecisionImpact switch
+                    {
+                        >= 0.66m => "danger",
+                        >= 0.33m => "warn",
+                        _ => "info",
+                    };
+                    return new OvAction(p.PropositionText, p.VerificationStateCode, adv, impactLabel, impactTone);
+                })
+                .ToList();
+        }
+    }
+
+    // Matter snapshot: authoritative matter attributes (never hardcoded).
+    private sealed record OvSnapshotItem(string Icon, string Label, string? Value);
+    private IReadOnlyList<OvSnapshotItem> OvMatterSnapshot =>
+    [
+        new("bi-folder2-open", "Case Type", (_matter?.ClaimTypeCode ?? _matter?.MatterTypeCode)?.Replace('_', ' ')),
+        new("bi-geo-alt", "Jurisdiction", _matter?.State ?? _matter?.Jurisdiction),
+        new("bi-flag", "Status", _matter?.Posture ?? _matter?.RequestedDisposition ?? _matter?.StatusCode),
+        new("bi-calendar-event", "Filed Date", _matter?.CreatedDateUtc.ToString("MMM dd, yyyy")),
+        new("bi-flag-fill", "Current Outcome", _matter?.CurrentOutcome),
+        new("bi-building", "Practice Area", (_matter?.PracticeAreaCode)?.Replace('_', ' ')),
+    ];
+
+    // Readiness progress: coverage/structure/evidence/analysis/open-question gates, each a 0-100 signal.
+    private sealed record OvReadinessStep(string Label, string Value, string Tone);
+    private IReadOnlyList<OvReadinessStep> OvReadinessSteps
+    {
+        get
+        {
+            var structurePct = (_response?.DepthReached ?? 0) >= 2 && SurvivingBranches.Count > 0 ? 100 : 40;
+            var evidencePct = (int)Math.Round(DfiEvidenceCoveragePct * 100m);
+            var analysisPct = FinalRankedCandidates.Count > 0 ? 100 : OvOutcomes.Count > 0 ? 70 : 30;
+            var missing = DfiMissingFactorCount;
+            var total = Math.Max(1, DfiFactorCount);
+            var openQuestionPct = (int)Math.Round((1m - (decimal)missing / total) * 100m);
+            return
+            [
+                new("Structure", $"{structurePct}%", structurePct >= 80 ? "ok" : "warn"),
+                new("Evidence", $"{evidencePct}%", evidencePct >= 70 ? "ok" : "warn"),
+                new("Analysis", $"{analysisPct}%", analysisPct >= 80 ? "ok" : "warn"),
+                new("Open Questions", $"{openQuestionPct}%", openQuestionPct >= 80 ? "ok" : "warn"),
+                new("Readiness", $"{OvReadinessPct}%", DfiReadinessTone),
+            ];
+        }
+    }
+
+    private int OvReadinessPct
+    {
+        get
+        {
+            var structure = (_response?.DepthReached ?? 0) >= 2 && SurvivingBranches.Count > 0 ? 1m : 0.4m;
+            var evidence = DfiEvidenceCoveragePct;
+            var analysis = FinalRankedCandidates.Count > 0 ? 1m : OvOutcomes.Count > 0 ? 0.7m : 0.3m;
+            var missing = DfiMissingFactorCount;
+            var total = Math.Max(1, DfiFactorCount);
+            var openQ = 1m - (decimal)missing / total;
+            var avg = (structure + evidence + analysis + openQ) / 4m;
+            return (int)Math.Round(Math.Clamp(avg, 0m, 1m) * 100m);
+        }
+    }
+
+    // Executive / Analyst summary: a grounded decision brief, not generated prose.
+    private string OvExecutiveSummary
+    {
+        get
+        {
+            var leader = OvOutcomes.FirstOrDefault();
+            if (leader is null) return "No decision outcome has been established yet. Run an analysis to generate the decision landscape.";
+            var conf = OvConfidenceValue > 0m ? $"{OvConfidenceValue:P0} confidence" : "provisional confidence";
+            var evidence = TotalEvidenceCount > 0
+                ? $"supported by {TotalEvidenceCount} admitted evidence item{(TotalEvidenceCount == 1 ? "" : "s")} at {DfiEvidenceCoveragePct:P0} decision coverage"
+                : "with no independently verified evidence admitted yet";
+            var nextAction = OvNextBestActions.FirstOrDefault();
+            var nextText = nextAction is not null
+                ? $" The highest-value next step is to resolve \"{nextAction.Title}\" (ADV {nextAction.Adv:0.00}), which could materially change the ranking."
+                : string.Empty;
+            return $"Based on current evidence, {leader.Title} remains the most supportable outcome with {leader.SupportPct}% support and {conf}, {evidence}. The decision is currently {DfiReadinessLabel.ToLowerInvariant()}.{nextText}";
+        }
+    }
+
+    private sealed record OvSummaryChip(string Icon, string Title, string Text, string Tone);
+    private IReadOnlyList<OvSummaryChip> OvSummaryChips
+    {
+        get
+        {
+            var chips = new List<OvSummaryChip>();
+            var leader = OvOutcomes.FirstOrDefault();
+            if (leader is not null && leader.KeySupportingFactors > 0)
+                chips.Add(new("bi-shield-check", "Key Strength", $"{leader.KeySupportingFactors} supporting factor(s) behind the leading outcome", "ok"));
+            var topRisk = OvOutcomes.FirstOrDefault(o => o.MainVulnerabilities > 0);
+            if (topRisk is not null)
+                chips.Add(new("bi-exclamation-triangle", "Key Risk", $"{topRisk.Title} carries {topRisk.MainVulnerabilities} unresolved risk(s)", "warn"));
+            var nextAction = OvNextBestActions.FirstOrDefault();
+            if (nextAction is not null)
+                chips.Add(new("bi-flag", "Next Milestone", nextAction.Title, "info"));
+            return chips;
+        }
+    }
+
+    // ── Decision Intelligence Overview projections (live-data only) ────────────────────────────────
+    // Decision Status trust strip: the authoritative at-a-glance state of the decision. Every value is
+    // derived from the live Wide2 response / factor inventory; nothing is fabricated.
+    private sealed record OvStatusChip(string Label, string Value, string Tone);
+    private string OvDecisionStateLabel => DfiReadinessLabel;
+    private string OvDecisionStateTone => DfiReadinessTone;
+    private IReadOnlyList<OvStatusChip> OvDecisionStatusChips
+    {
+        get
+        {
+            var verifiedAuthorities = _response?.ProposedLegalAuthorities.Count(a => a.VerificationStatus == "VERIFIED") ?? 0;
+            var openQuestions = _response?.DecisionInspector?.FactorInventory?.MissingFactorCount ?? DfiMissingFactorCount;
+            return
+            [
+                new("Candidates", OvOutcomes.Count.ToString(), "info"),
+                new("Verified Evidence", TotalEvidenceCount.ToString(), TotalEvidenceCount > 0 ? "ok" : "warn"),
+                new("Verified Authorities", verifiedAuthorities.ToString(), verifiedAuthorities > 0 ? "ok" : "warn"),
+                new("Open Questions", openQuestions.ToString(), openQuestions > 0 ? "warn" : "ok"),
+                new("Decision Readiness", $"{OvReadinessPct}%", DfiReadinessTone),
+                new("Confidence", OvConfidenceValue > 0m ? $"{OvConfidencePct}%" : "—", OvConfidenceTone),
+            ];
+        }
+    }
+
+    // Why It Leads: the leading candidate's strongest scored dimensions (branch evidence scores 0-100).
+    private sealed record OvLeaderFactor(string Name, int Pct, string Tone);
+    private IReadOnlyList<OvLeaderFactor> OvWhyItLeads
+    {
+        get
+        {
+            var leader = OvOutcomes.FirstOrDefault();
+            if (leader is null) return [];
+            return leader.BranchScores
+                .OrderByDescending(b => b.EvidenceScore)
+                .Take(5)
+                .Select(b =>
+                {
+                    var pct = (int)Math.Round((double)Math.Clamp(b.EvidenceScore, 0m, 1m) * 100);
+                    var tone = pct >= 70 ? "ok" : pct >= 45 ? "warn" : "danger";
+                    return new OvLeaderFactor(b.BranchDisplayName, pct, tone);
+                })
+                .ToList();
+        }
+    }
+
+    // What Could Flip It: factors that are contradicted or unresolved — the live risks that could change
+    // the ranking. Contradictions first, then unsupported factors. Derived from the factor inventory.
+    private sealed record OvFlipPoint(string Name, string StateLabel, string Tone);
+    private IReadOnlyList<OvFlipPoint> OvWhatCouldFlipIt
+    {
+        get
+        {
+            var factors = DfiFactors;
+            if (factors.Count == 0) return [];
+            var flips = new List<OvFlipPoint>();
+            foreach (var f in factors.Where(f => f.Contradictions.Count > 0))
+                flips.Add(new OvFlipPoint(f.FactorName, "Contradicted", "danger"));
+            foreach (var f in factors.Where(f => f.Contradictions.Count == 0))
+            {
+                var (state, _) = DfiFactorState(f);
+                if (state != "SUPPORTED")
+                    flips.Add(new OvFlipPoint(f.FactorName, state == "SUPPLIED" ? "Unverified" : "Unsupported", state == "SUPPLIED" ? "warn" : "danger"));
+            }
+            return flips.Take(5).ToList();
+        }
+    }
+
+    // Decision Structure (CHR / APR): hierarchy node count and atomic-proposition resolution, from the
+    // surviving branch tree and the evidence-graph proposition support edges.
+    private int OvHierarchyNodeCount => SurvivingBranches.Count;
+    private int OvAprResolvedCount => _evidenceGraph?.Propositions.Count(p => p.Support.Count > 0) ?? 0;
+    private int OvAprTotalCount => _evidenceGraph?.Propositions.Count ?? 0;
+    private int OvAprResolvedPct => OvAprTotalCount <= 0 ? 0 : (int)Math.Round((double)OvAprResolvedCount / OvAprTotalCount * 100);
+
+    // Latest Intelligence (HRR / AER): the most recent decision-affecting change driver, with the
+    // affected factor and direction. Null when no change events have been recorded yet.
+    private CdcDriver? OvLatestIntelligence => CdcKeyDrivers.FirstOrDefault();
+
+    // Document Intelligence overview stats, from the matter evidence graph.
+    private sealed record OvDocStat(string Label, string Value);
+    private IReadOnlyList<OvDocStat> OvDocumentIntelligence
+    {
+        get
+        {
+            if (_evidenceGraph is null) return [];
+            var verified = _evidenceGraph.Evidence.Count(e =>
+                string.Equals(e.EvidenceStateCode, "VERIFIED", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(e.EvidenceStateCode, "SUPPORTED", StringComparison.OrdinalIgnoreCase));
+            var contradictions = _evidenceGraph.Propositions.Sum(p =>
+                p.Support.Count(s => string.Equals(s.RelationshipTypeCode, "CONTRADICTS", StringComparison.OrdinalIgnoreCase)));
+            return
+            [
+                new("Documents", _evidenceGraph.DocumentCount.ToString()),
+                new("Source Assertions", _evidenceGraph.SourceAssertions.Count.ToString()),
+                new("Evidence Bindings", _evidenceGraph.Evidence.Count.ToString()),
+                new("Fact Propositions", _evidenceGraph.Propositions.Count.ToString()),
+                new("Verified", verified.ToString()),
+                new("Contradictions", contradictions.ToString()),
+            ];
+        }
+    }
+
+    // Decision Readiness blockers: the live, material items preventing an established decision.
+    private IReadOnlyList<string> OvReadinessBlockers
+    {
+        get
+        {
+            var blockers = new List<string>();
+            foreach (var f in DfiFactors.Where(f => f.Contradictions.Count > 0).Take(3))
+                blockers.Add($"{f.FactorName} has conflicting sources");
+            if (DfiMissingFactorCount > 0)
+                blockers.Add($"{DfiMissingFactorCount} decision factor(s) missing a verified value");
+            if (TotalEvidenceCount == 0)
+                blockers.Add("No independently verified evidence admitted yet");
+            var topRisk = OvOutcomes.FirstOrDefault(o => o.MainVulnerabilities > 0);
+            if (topRisk is not null)
+                blockers.Add($"{topRisk.Title} carries {topRisk.MainVulnerabilities} unresolved risk(s)");
+            return blockers.Take(4).ToList();
+        }
+    }
+
+    private static string OvRelativeTime(DateTime when)
+    {
+        var delta = DateTime.UtcNow - when.ToUniversalTime();
+        if (delta < TimeSpan.Zero) delta = TimeSpan.Zero;
+        if (delta.TotalMinutes < 1) return "just now";
+        if (delta.TotalMinutes < 60) return $"{(int)delta.TotalMinutes} min ago";
+        if (delta.TotalHours < 24) return $"{(int)delta.TotalHours} hour{((int)delta.TotalHours == 1 ? "" : "s")} ago";
+        return $"{(int)delta.TotalDays} day{((int)delta.TotalDays == 1 ? "" : "s")} ago";
     }
 
     private void SetOverviewView(string view) => _ovComparisonView = view;
@@ -8279,6 +9341,10 @@
         Breadcrumbs.SetCrumbs(new("Home", "/"), new("Intelligence", "/intelligence"), new("Personal Injury Decision 2", "/legal/personalinjury_decision2"));
         if (MatterId is { } matterId && matterId != Guid.Empty)
         {
+            // Restore the last Overview result for this matter so returning from the
+            // Candidate Full Analysis drill-down shows exactly what the user was viewing
+            // instead of a blank page. The cache is circuit-scoped working memory.
+            _response = OverviewState.TryGet(matterId);
             try
             {
                 _matter = await Api.GetLegalDecisionMatterAsync(matterId);
@@ -8315,6 +9381,13 @@
             if (defaultContext is not null) _selectedContextCode = defaultContext.ContextCode;
         }
         catch { _contexts = []; }
+        // If a cached Overview result was restored above, reload the DB-backed intelligence
+        // layers it depends on so the restored view shows real Document Intelligence,
+        // Decision Structure, and readiness values instead of empty panels.
+        if (_response is not null)
+        {
+            try { await RefreshPostAnswerIntelligenceAsync(); } catch { /* fail-soft: keep the restored answer visible */ }
+        }
     }
 
     private async Task SearchAsync()
@@ -8357,10 +9430,19 @@
         {
             _loading = false;
             await StopLiveProgressAsync();
+            // Reload the DB-backed intelligence layers the Overview depends on so Document Intelligence,
+            // Decision Structure, Latest Intelligence, change drivers, and readiness blockers show real values.
+            if (_response is not null)
+            {
+                // Cache the result so navigating into Full Analysis and back restores this view.
+                if (MatterId is { } matterId && matterId != Guid.Empty)
+                    OverviewState.Save(matterId, _response);
+                await RefreshPostAnswerIntelligenceAsync();
+            }
         }
     }
 
-    // Drives just-in-time corpus activation on the Disambiguate & Answer path. Uploaded documents are
+    // Drives just-in-time corpus activation on the Disambiguate & Answer path.
     // prepared only (extracted text, no propositions); this enriches the pending versions and runs CDC
     // in bounded batches, animating the integrated pipeline's "Activated on answer" chips, before the
     // answer request runs. Fail-soft: any activation failure is surfaced only in stage state, never fatal.
@@ -8531,6 +9613,14 @@
         {
             _loading = false;
             await StopLiveProgressAsync();
+            // Reload the DB-backed intelligence layers so the Overview reflects the refined decision.
+            if (_response is not null)
+            {
+                // Cache the refined result so navigating into Full Analysis and back restores this view.
+                if (MatterId is { } matterId && matterId != Guid.Empty)
+                    OverviewState.Save(matterId, _response);
+                await RefreshPostAnswerIntelligenceAsync();
+            }
         }
     }
 

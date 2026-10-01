@@ -59,6 +59,14 @@ public interface ILegalDecisionRepository
     Task<DecisionDomainPackDto?> GetDomainPackAsync(Guid tenantId, string packCode, CancellationToken cancellationToken = default);
     Task<IReadOnlyCollection<DecisionDomainPackDto>> GetDomainPacksAsync(Guid tenantId, CancellationToken cancellationToken = default);
 
+    // Domain Pack entity/event taxonomy, terminology, and evidence→signal map (migration 0373). These
+    // are the DOMAIN SEMANTICS the Decision Channels and the semantic interpreter resolve through.
+    // Global (TenantId NULL) rows are defaults; tenant rows override. Advisory configuration only.
+    Task<IReadOnlyCollection<DecisionDomainEntityTypeDto>> GetDomainEntityTypesAsync(Guid tenantId, string packCode, CancellationToken cancellationToken = default);
+    Task<IReadOnlyCollection<DecisionDomainEventTypeDto>> GetDomainEventTypesAsync(Guid tenantId, string packCode, CancellationToken cancellationToken = default);
+    Task<IReadOnlyCollection<DecisionDomainTermDto>> GetDomainTermsAsync(Guid tenantId, string packCode, CancellationToken cancellationToken = default);
+    Task<IReadOnlyCollection<DecisionDomainSignalMapDto>> GetDomainSignalMapAsync(Guid tenantId, string packCode, CancellationToken cancellationToken = default);
+
     // Domain Pack child CRUD (advisory domain configuration). All scoped to a pack by PackCode.
     Task SaveDomainPackDimensionAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackDimensionRequest request, CancellationToken cancellationToken = default);
     Task DeleteDomainPackDimensionAsync(Guid tenantId, Guid actorUserId, string packCode, string dimensionCode, CancellationToken cancellationToken = default);
