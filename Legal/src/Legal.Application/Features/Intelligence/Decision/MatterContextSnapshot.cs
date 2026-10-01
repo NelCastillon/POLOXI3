@@ -72,6 +72,17 @@ public sealed record MatterContextSnapshot(
         PersonalInjuryProfile.Count(f => f.HasValue) + Facts.Count(f => f.HasValue) +
         Evidence.Count(f => f.HasValue);
 
+    // Material matter facts eligible to be projected as branch-attributed enterprise evidence. Only the
+    // substantive PI-profile status/stage fields, alleged fact summaries, and the available-evidence
+    // inventory participate — the Decision/LegalScope groups are routing metadata, not case evidence.
+    // Each returned field keeps its distinct label, saved value, and provenance so the downstream
+    // fact-binding gate can classify it; this method performs NO inference and promotes nothing.
+    public IReadOnlyList<MatterContextField> MaterialFacts() =>
+        PersonalInjuryProfile.Where(f => f.HasValue)
+            .Concat(Facts.Where(f => f.HasValue))
+            .Concat(Evidence.Where(f => f.HasValue))
+            .ToArray();
+
     // Deterministic, human/LLM-readable serialization used both for prompt projection and DEV
     // diagnostics. Groups render in a fixed order; empty fields are omitted so the payload stays
     // bounded, but each legal field keeps its distinct label + provenance tag.

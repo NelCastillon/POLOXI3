@@ -16,7 +16,7 @@ namespace Legal.Api.Controllers;
 // (/legal/decision). Evolves independently from the Intelligence Wide (/legal/search) controller.
 [ApiController]
 [Route("api/legal_decision")]
-public sealed class LegalDecisionController(ILegalDecisionService service,IIntelligenceExecutionService executionService,ILegalDocumentCorpusRepository documentCorpusRepository,IAttorneyDecisionInputRepository attorneyDecisionInputRepository,IAttorneyDecisionInputService attorneyDecisionInputService,ILegalDecisionContractService decisionContractService,ILegalDocumentIntakeService documentIntakeService,ILegalMatterCorpusActivationService corpusActivationService,IDecisionIntegrityRepository integrityRepository,IMatterPropositionInformationValueService propositionInformationValueService,IOptions<DocumentIntelligenceOptions> documentOptions) : ControllerBase
+public sealed class LegalDecisionController(ILegalDecisionService service,IIntelligenceExecutionService executionService,ILegalDocumentCorpusRepository documentCorpusRepository,IAttorneyDecisionInputRepository attorneyDecisionInputRepository,IAttorneyDecisionInputService attorneyDecisionInputService,ILegalDecisionContractService decisionContractService,ILegalDocumentIntakeService documentIntakeService,ILegalMatterCorpusActivationService corpusActivationService,IDecisionIntegrityRepository integrityRepository,IMatterPropositionInformationValueService propositionInformationValueService,INextBestActionService nextBestActionService,IOptions<DocumentIntelligenceOptions> documentOptions) : ControllerBase
 {
     private const string CapabilityCode = JudzCapabilities.LegalDecision;
     private Guid TenantId => AuthenticatedRequestContext.GetTenantId(User) ?? throw new UnauthorizedAccessException("An authenticated tenant context is required.");
@@ -350,6 +350,14 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
     [Authorize(Policy = IntelligencePolicies.Search)]
     public async Task<IActionResult> MatterPropositionInformationValue(Guid matterId, Guid sessionId, CancellationToken cancellationToken)
         => Ok(await propositionInformationValueService.ScoreAsync(TenantId, matterId, sessionId, ActorUserId, persist: true, cancellationToken));
+
+    // Next Best Action: advisory, decision-directed actions that resolve the highest-value unresolved
+    // propositions. POLOXI selects what matters, HRR supplies where/why, the Domain Pack supplies domain
+    // actions, an LLM proposes and a deterministic gate selects. Display-only — never alters the decision.
+    [HttpGet("matters/{matterId:guid}/sessions/{sessionId:guid}/next-best-actions")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> MatterNextBestActions(Guid matterId, Guid sessionId, CancellationToken cancellationToken)
+        => Ok(await nextBestActionService.GenerateAsync(TenantId, matterId, sessionId, ActorUserId, cancellationToken));
 
     // Generates a randomized, source-traceable test corpus for a matter (used by "Generate Test Matter").
     // Idempotent: returns the number of documents created (0 when the matter already has documents).

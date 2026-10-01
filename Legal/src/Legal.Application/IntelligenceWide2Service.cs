@@ -970,6 +970,34 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             }
             // V2.1 three-score model: Interpretation Prior (LLM), Evidence Support (deterministic, from
             // enterprise evidence and matched external snippets), POLOXI Confidence (weighted combination).
+            // Matter-fact grounding: Wide2 is knowledge-only, so the enterprise `evidence` pool was always
+            // empty and legal decision runs reported "0 enterprise evidence / 2% coverage" even when the
+            // matter had a policy, injuries, bills, a demand, and witnesses on file. Project the immutable
+            // Matter Context Snapshot into branch-attributed evidence rows so those saved facts count toward
+            // EvidenceSupport and coverage. Every (fact → proposition) pair clears the SAME fact-binding gate
+            // the Factor Inventory uses, so status enums still cannot establish settlement propositions.
+            IReadOnlyList<PoloxiEvidenceDto> matterFactEvidenceAdmitted=[];
+            if(_matterContext is not null)
+            {
+                var matterFactEvidence=BuildMatterFactEvidence(survivorsFinal,_matterContext,_factBindingValidator,_factBindingSemanticProbe);
+                if(matterFactEvidence.Count>0)
+                {
+                    evidence.AddRange(matterFactEvidence);
+                    matterFactEvidenceAdmitted=matterFactEvidence;
+                    foreach(var branch in survivorsFinal)
+                    {
+                        var branchMatterCount=matterFactEvidence.Count(item=>item.HierarchyBranchId==branch.WideBranchId);
+                        if(branchMatterCount>0)
+                        {
+                            var index=allBranches.FindIndex(item=>item.WideBranchId==branch.WideBranchId);
+                            if(index>=0)
+                                allBranches[index]=allBranches[index] with{EvidenceCount=allBranches[index].EvidenceCount+branchMatterCount};
+                        }
+                    }
+                    survivorsFinal=allBranches.Where(branch=>!branch.IsEliminated).ToArray();
+                    logger.LogInformation("Wide2 matter-fact grounding for matter {MatterId}: admitted {Count} matter-fact evidence row(s) across {Branches} branch(es).",_matterContext.MatterId,matterFactEvidence.Count,matterFactEvidence.Select(item=>item.HierarchyBranchId).Distinct().Count());
+                }
+            }
             survivorsFinal=survivorsFinal.Select(branch=>
             {
                 var support=ComputeEvidenceSupport(branch,evidence,externalKnowledge,configuration);
@@ -1358,6 +1386,12 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             // records); such evidence must not surface or inflate confidence.
             var relevantNumbers=(answer.RelevantEvidenceNumbers??[]).ToHashSet();
             var relevantEvidence=ranked.Where(item=>relevantNumbers.Contains(item.RankNumber)).ToArray();
+            // Matter-fact evidence is deterministic, already fact-binding-gated grounding and is not part of
+            // the LLM-numbered external ranking, so fold the admitted rows in directly. This makes the
+            // reported EnterpriseEvidenceCount reflect the saved matter data (policy/injuries/bills/etc.)
+            // instead of the historical "0 enterprise evidence".
+            if(matterFactEvidenceAdmitted.Count>0)
+                relevantEvidence=relevantEvidence.Concat(matterFactEvidenceAdmitted).ToArray();
             if(answer.VerificationCode=="INTERPRETIVE"||relevantEvidence.Length==0)aggregateConfidence=Math.Min(aggregateConfidence,Math.Clamp(answer.Confidence,0,1));
             // V2.1 Candidate x Branch competition: extract candidates from the interpretive result sets,
             // enforce hard constraints (PRUNED with a reason, never silently dropped), and compute a
@@ -1449,7 +1483,9 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             if(IsLegalDecisionEvaluationRun&&_legalNormalization is{} reg&&reg.Plan.IsValid)
                 _decisionReadinessStatus=DeliveredCandidateCount(candidates)>=2
                     ? "CANDIDATES_REGISTERED_AND_COMPETED"
-                    : "REGISTERED_SCORING_BLOCKED (registration succeeded; evidence/readiness rules prevented an authoritative winner)";
+                    : DeliveredCandidateCount(candidates)==1
+                        ? "PROVISIONAL_LEADER (single grounded candidate; disclosed as risk-bearing, not an authoritative winner)"
+                        : "REGISTERED_SCORING_BLOCKED (registration succeeded; evidence/readiness rules prevented an authoritative winner)";
             // R3 competition accountability: record a TYPED status for candidate competition so an EVALUATE
             // run can never silently deliver no competition. On a legal EVALUATE run the status is always
             // populated: RAN when competing candidates were produced, NO_COMPETING_CANDIDATES when the pool
@@ -1762,10 +1798,20 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             // narrative. Never on the clarification gate; any failure leaves CandidateLandscape null and the
             // standard POLOXI candidate cards stand \u2014 POLOXI Core ranking/scoring is untouched.
             WideCandidateLandscapeDto? candidateLandscape=null;
-            if(string.Equals(request.ContextCode?.Trim(),WideSearchContexts.Legal,StringComparison.OrdinalIgnoreCase)&&answerStatus!="USER_CLARIFICATION_REQUIRED"&&candidates.Count>0)
+            if(string.Equals(request.ContextCode?.Trim(),WideSearchContexts.Legal,StringComparison.OrdinalIgnoreCase)&&answerStatus!="USER_CLARIFICATION_REQUIRED")
             {
-                llmCalls++;
-                candidateLandscape=await ComposeCandidateLandscapeAsync(request,executionId.ToString(),candidates,answerContext?.WinnerDisplayName,answerStatus,decisionConfidence,finalEntropy,cancellationToken);
+                // Narrative source: the authoritative scored candidates when candidate competition produced
+                // them. On a BLOCKED / interpretation-only run no candidate cleared scoring, so the Overview
+                // falls back to the top-level (L1) competing outcome branches. Compose the landscape narrative
+                // over those SAME branches (projected as provisional candidates) so the Overview cards always
+                // carry a narrative. Presentation-only: identities, confidence, and interpretation all come
+                // from persisted branches; nothing is re-ranked, re-scored, or fabricated.
+                var landscapeCandidates=candidates.Count>0?candidates:BuildFallbackLandscapeCandidates(survivorsFinal);
+                if(landscapeCandidates.Count>0)
+                {
+                    llmCalls++;
+                    candidateLandscape=await ComposeCandidateLandscapeAsync(request,executionId.ToString(),landscapeCandidates,answerContext?.WinnerDisplayName,answerStatus,decisionConfidence,finalEntropy,cancellationToken);
+                }
             }
             timer.Stop();
             await wideRepository.CompleteWideExecutionAsync(request.TenantId,request.UserId,executionId,answerStatus,terminationReason,depth,llmCalls,aggregateConfidence,answer.VerificationCode,finalAnswerText,timer.ElapsedMilliseconds,cancellationToken);
@@ -2161,6 +2207,31 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         return builder.ToString();
     }
 
+    // Fallback landscape candidates for a BLOCKED / interpretation-only run that produced no scored
+    // candidate. Projects the top-level (L1) competing interpretation branches that survived grounding into
+    // provisional WideCandidateDto rows so the Candidate Landscape composer can still produce a per-outcome
+    // narrative that the Overview renders. These mirror EXACTLY the branches the Overview L1 fallback cards
+    // show (top 3 non-eliminated L1 branches by confidence). Presentation-only: DisplayName, Interpretation,
+    // and Confidence are copied verbatim from the persisted branches; no new facts, scores, or rankings.
+    private static IReadOnlyCollection<WideCandidateDto> BuildFallbackLandscapeCandidates(IReadOnlyCollection<WideBranchRecord> survivorsFinal)
+    {
+        var l1=survivorsFinal
+            .Where(branch=>branch.LevelNumber==1&&!branch.IsEliminated)
+            .OrderByDescending(branch=>branch.Confidence)
+            .Take(3)
+            .ToArray();
+        if(l1.Length==0)return [];
+        var rank=0;
+        return l1.Select(branch=>new WideCandidateDto(
+                Guid.NewGuid(),
+                ++rank,
+                branch.DisplayName,
+                branch.Interpretation,
+                branch.Confidence,
+                [new WideCandidateBranchScoreDto(branch.DisplayName,branch.Confidence)]))
+            .ToArray();
+    }
+
     // Candidate Landscape Narrative Composer (PRESENTATION ONLY, legal context + POLOXI engine, fail-soft).
     // One LLM call turns the whole decided candidate competition into a coherent landscape plus an
     // individualized per-candidate narrative. It never re-runs reasoning, changes ranking/scores, or
@@ -2182,9 +2253,12 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             var proposal=JsonSerializer.Deserialize<CandidateLandscapeProposal>(result.Content,JsonOptions);
             return MapCandidateLandscape(proposal,executionId,candidates,presentationState);
         }
-        catch(Exception)when(!cancellationToken.IsCancellationRequested)
+        catch(Exception ex)when(!cancellationToken.IsCancellationRequested)
         {
-            // Presentation only: never surface composer failures to the user-facing candidate cards.
+            // Presentation only: never surface composer failures to the user-facing candidate cards,
+            // but DO log them. A silent null here produces a blank Overview narrative that is otherwise
+            // impossible to diagnose from the client.
+            logger.LogWarning(ex,"Candidate landscape composition failed for execution {ExecutionId}; Overview will fall back to candidate detail. {Message}",executionId,ex.Message);
             return null;
         }
     }

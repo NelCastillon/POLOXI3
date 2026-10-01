@@ -190,7 +190,11 @@ public sealed partial class IntelligenceWide2Service
                 missingInformation = $"No case-specific value for '{dep.Label}' found in matter data or uploaded documents.";
                 source = definitionSource;
                 validationStatus = AvailIncomplete;
-                missingCount++;
+                // Only ATOMIC leaf factors are decision-material "open questions". PARENT grouping nodes
+                // (broad L1/L2 categories) never carry an atomic matter value and must not inflate the
+                // missing/open-question count surfaced in the KPI strip and inventory status.
+                if (dep.NodeKind != LegalDecisionService.DependencyNodeKind.Parent)
+                    missingCount++;
                 if (isRequiredFactor)
                     blockingObligations.Add($"Establish required factor '{dep.Label}' — no value in matter data or documents.");
             }
@@ -280,6 +284,16 @@ public sealed partial class IntelligenceWide2Service
             blockingObligations.Add(
                 $"{unsatisfiedRequiredCount} REQUIRED dependency(ies) are not established — strong support for other requirements does not satisfy an unresolved requirement.");
 
+        // ── Matter-lifecycle (posture) reconciliation ──────────────────────────────────────────────
+        // Independent of per-factor binding: contradictory lifecycle status fields (e.g. a disbursed
+        // settlement while the stage still reads active litigation, or an open demand) mean the matter's
+        // own posture data is internally inconsistent. We surface this as an explicit blocking obligation
+        // so the decision stays provisional until the operational record is reconciled — we never pick a
+        // "winning" status or silently normalize the conflict away.
+        var postureConflicts = DetectPostureReconciliationConflicts(matterContext);
+        foreach (var conflict in postureConflicts)
+            blockingObligations.Add(conflict);
+
         return new WideFactorInventoryDto(
             Factors: factors,
             Relationships: relationships,
@@ -355,6 +369,111 @@ public sealed partial class IntelligenceWide2Service
             .ToArray();
     }
 
+    // ── Matter lifecycle (posture) reconciliation ──────────────────────────────────────────────────
+    // Deterministic cross-field consistency check over the saved matter lifecycle status fields. Unlike
+    // DetectContradictions (which compares multiple sources for ONE proposition), this inspects the single
+    // authoritative posture record for mutually exclusive states — e.g. a settlement reported as disbursed
+    // while litigation is still active, or a settlement disbursed while a demand is still open. It performs
+    // NO inference and selects NO winner; it only reports the conflict as a blocking obligation so the
+    // decision stays provisional until the operational matter data is reconciled. Returns empty when the
+    // posture fields are absent or internally consistent.
+    private static IReadOnlyList<string> DetectPostureReconciliationConflicts(MatterContextSnapshot? matterContext)
+    {
+        if (matterContext is null)
+            return [];
+
+        static string? Lookup(MatterContextSnapshot ctx, string label) =>
+            ctx.PersonalInjuryProfile
+                .Concat(ctx.Decision)
+                .FirstOrDefault(f => f.HasValue && string.Equals(f.Label, label, StringComparison.OrdinalIgnoreCase))
+                ?.Value?.Trim();
+
+        var stage = Lookup(matterContext, "Current Stage");
+        var litigation = Lookup(matterContext, "Litigation Status");
+        var demand = Lookup(matterContext, "Demand Status");
+        var settlement = Lookup(matterContext, "Settlement Status");
+
+        static bool Mentions(string? value, params string[] tokens) =>
+            !string.IsNullOrWhiteSpace(value) && tokens.Any(t => value.Contains(t, StringComparison.OrdinalIgnoreCase));
+
+        var settlementConcluded = Mentions(settlement, "Disbursed", "Settled", "Paid", "Closed");
+        var litigationActive = Mentions(litigation, "Active", "Pending", "Discovery", "Trial", "Filed", "Open");
+        var demandOpen = Mentions(demand, "Open", "Outstanding", "Pending", "Sent", "Awaiting");
+        var stageActive = Mentions(stage, "Discovery", "Litigation", "Trial", "Investigation", "Pre-Suit", "Demand");
+
+        var conflicts = new List<string>();
+        if (settlementConcluded && litigationActive)
+            conflicts.Add($"Reconcile matter posture: Settlement Status '{settlement}' indicates the matter concluded, but Litigation Status '{litigation}' is still active. Confirm the operational record before relying on either state.");
+        if (settlementConcluded && demandOpen)
+            conflicts.Add($"Reconcile matter posture: Settlement Status '{settlement}' indicates the matter concluded, but Demand Status '{demand}' is still open. Confirm the operational record before relying on either state.");
+        if (settlementConcluded && stageActive)
+            conflicts.Add($"Reconcile matter posture: Settlement Status '{settlement}' indicates the matter concluded, but Current Stage '{stage}' reflects an active pre-resolution phase. Confirm the operational record before relying on either state.");
+        return conflicts;
+    }
+
+
+    // ── Matter-fact enterprise evidence projection ───────────────────────────────────────────────────
+    // Wide2 is knowledge-only (it never grounds branches against AMS capability search), so the scoring
+    // pool never saw the saved matter data and every legal decision run reported "0 enterprise evidence".
+    // This projects the immutable Matter Context Snapshot into branch-attributed PoloxiEvidenceDto rows so
+    // the saved case facts (policy, injuries, bills, documented damages, demands, witnesses, alleged
+    // summaries) actually count toward EvidenceSupport / coverage. It is deterministic, adds NO LLM call,
+    // and binds NOTHING on its own authority: every (field → branch proposition) pair must clear the SAME
+    // PropositionFactBindingValidator gate used by the Factor Inventory. A category mismatch (e.g.
+    // SettlementStatus=Disbursed → "a settlement offer was made") is rejected and produces no evidence row,
+    // so blocker #3 (status enums are not proof of settlement propositions) is preserved exactly.
+    internal static IReadOnlyList<PoloxiEvidenceDto> BuildMatterFactEvidence(
+        IReadOnlyCollection<WideBranchRecord> branches,
+        MatterContextSnapshot? matterContext,
+        PropositionFactBindingValidator? validator,
+        FactBindingSemanticProbe? semanticProbe)
+    {
+        if (matterContext is null || branches.Count == 0)
+            return [];
+        var materialFacts = matterContext.MaterialFacts();
+        if (materialFacts.Count == 0)
+            return [];
+        validator ??= new PropositionFactBindingValidator(PropositionFactBindingValidator.DefaultConfig());
+
+        var evidence = new List<PoloxiEvidenceDto>();
+        var rank = 0;
+        foreach (var branch in branches)
+        {
+            // The branch proposition is its interpretation when present, else its display name.
+            var proposition = string.IsNullOrWhiteSpace(branch.Interpretation) ? branch.DisplayName : branch.Interpretation;
+            if (string.IsNullOrWhiteSpace(proposition))
+                continue;
+            foreach (var field in materialFacts)
+            {
+                if (!field.HasValue)
+                    continue;
+                // Deterministic guardrail: only consider a fact whose LABEL is lexically relevant to the
+                // branch proposition before the semantic gate runs, so the admissibility check is not asked
+                // about obviously unrelated field/proposition pairs. This mirrors the Factor Inventory match.
+                if (!FieldMatchesFactor(field.Label, proposition) && !FieldMatchesFactor(field.Label, branch.DisplayName))
+                    continue;
+                var verdict = validator.Validate(field.Label, field.Value, proposition, semanticProbe);
+                // ADMITTED only. Rejected / RequiresVerification facts are preserved elsewhere as
+                // obligations but must NEVER be credited as grounding evidence — the admission gate is
+                // never lowered here.
+                if (!verdict.Establishes)
+                    continue;
+                evidence.Add(new PoloxiEvidenceDto(
+                    HierarchyBranchId: branch.WideBranchId,
+                    SearchDocumentId: Guid.Empty,
+                    EntityTypeCode: "MATTER_FACT",
+                    EntityId: matterContext.MatterId,
+                    ModuleCode: "LEGAL_MATTER",
+                    Title: field.Label,
+                    Excerpt: field.Value,
+                    NavigationRoute: null,
+                    RelevanceScore: 1m,
+                    RankNumber: ++rank,
+                    MatchedBranches: [branch.DisplayName]));
+            }
+        }
+        return evidence;
+    }
 
     private static IEnumerable<(string GroupName, IReadOnlyList<MatterContextField> Fields)> EnumerateMatterGroups(
         MatterContextSnapshot ctx)

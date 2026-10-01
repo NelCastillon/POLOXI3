@@ -139,6 +139,11 @@ public static class ServiceCollectionExtensions
         // composes the scoped corpus + epistemic-claim repositories.
         services.AddScoped<IMatterPropositionInformationValueService, MatterPropositionInformationValueService>();
 
+        // Next Best Action: thin advisory composition over the proposition VIV frontier + evidence graph +
+        // Domain Pack. POLOXI selects what matters, HRR supplies where/why, the Domain Pack supplies domain
+        // actions, an LLM proposes and a deterministic gate selects. Never recomputes IV/ADV; fails soft.
+        services.AddScoped<INextBestActionService, NextBestActionService>();
+
         // Attorney Decision Input (Human Intelligence) write path: the orchestration service and the
         // thin non-committing POLOXI preview adapter (§13/§15/§19). POLOXI remains the authoritative evaluator.
         services.AddScoped<IExistingPoloxiEvaluationAdapter, ExistingPoloxiEvaluationAdapter>();
