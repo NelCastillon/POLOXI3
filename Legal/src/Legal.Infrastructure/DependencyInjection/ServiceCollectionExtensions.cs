@@ -144,6 +144,11 @@ public static class ServiceCollectionExtensions
         // actions, an LLM proposes and a deterministic gate selects. Never recomputes IV/ADV; fails soft.
         services.AddScoped<INextBestActionService, NextBestActionService>();
 
+        // What To Resolve Next: a thin projection over the SAME proposition VIV / LegalADV frontier. It
+        // surfaces ranked unresolved decision-material propositions with four explicit states and never
+        // recomputes scores or generates an operational action (that is NBA's job). Fails soft to Blocked.
+        services.AddScoped<IWhatToResolveNextService, WhatToResolveNextService>();
+
         // Attorney Decision Input (Human Intelligence) write path: the orchestration service and the
         // thin non-committing POLOXI preview adapter (§13/§15/§19). POLOXI remains the authoritative evaluator.
         services.AddScoped<IExistingPoloxiEvaluationAdapter, ExistingPoloxiEvaluationAdapter>();

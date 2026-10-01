@@ -32,6 +32,18 @@ public sealed partial class IntelligenceWide2Service
         @"\b\d+\s+C\.?\s?F\.?\s?R\.?\s+(?:§+\s*)?\d[\w.\-]*",
         System.Text.RegularExpressions.RegexOptions.Compiled|System.Text.RegularExpressions.RegexOptions.IgnoreCase|System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
+    // Matches California state statutory citations in their common Bluebook/abbreviated and spelled-out
+    // forms (e.g. "California Code of Civil Procedure section 377.60", "Cal. Civ. Proc. Code § 377.60",
+    // "Cal. Civ. Code § 1550", "California Vehicle Code sec. 23152"). The named California code may appear
+    // before the word "Code" ("Civil Procedure Code") or after it ("Code of Civil Procedure"); both
+    // orderings are accepted. The captured citation text is routed to the already-seeded California
+    // authority-source descriptors (POLOXI.Legal_AuthoritySource, JurisdictionCode NAME:CALIFORNIA), whose
+    // CitationPattern values match these same forms. Deterministic and fail-soft: yields nothing when no
+    // California citation is present, and the mandatory identity gate still drops any mis-resolved snippet.
+    private static readonly System.Text.RegularExpressions.Regex LegalCaliforniaStatuteCitationRegex=new(
+        @"\bCal(?:ifornia|\.)?\s+(?:Code\s+(?:of\s+)?Civ(?:il)?\.?\s+Proc(?:edure)?\.?|Civ(?:il)?\.?\s+Proc(?:edure)?\.?\s+Code|Civ(?:il)?\.?\s+Code|Pen(?:al)?\.?\s+Code|Prob(?:ate)?\.?\s+Code|Evid(?:ence)?\.?\s+Code|Veh(?:icle)?\.?\s+Code|Corp(?:orations)?\.?\s+Code|Fam(?:ily)?\.?\s+Code|Gov(?:ernment|t)?\.?'?\s+Code|Lab(?:or)?\.?\s+Code|Ins(?:urance)?\.?\s+Code|Bus(?:iness)?\.?\s*(?:and|&)?\s*Prof(?:essions)?\.?\s+Code|Health\s*(?:and|&)?\s*Saf(?:ety)?\.?\s+Code)\s*(?:§+|section|sec\.?)?\s*\d[\dA-Za-z.:\-]*",
+        System.Text.RegularExpressions.RegexOptions.Compiled|System.Text.RegularExpressions.RegexOptions.IgnoreCase|System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
     // Generic corporate/legal-entity tokens that never distinguish one party from another; excluded
     // from case verification tokens so matching relies on the distinctive party names.
     private static readonly HashSet<string> CaseTokenStopwords=new(StringComparer.OrdinalIgnoreCase)
@@ -56,6 +68,8 @@ public sealed partial class IntelligenceWide2Service
         foreach(System.Text.RegularExpressions.Match match in LegalCaseCitationRegex.Matches(text))
             Add(match.Value,LegalAuthorityKind.Case,CaseVerificationTokens(match.Value));
         foreach(System.Text.RegularExpressions.Match match in LegalStatuteCitationRegex.Matches(text))
+            Add(match.Value,LegalAuthorityKind.Statute,CitationVerificationTokens(match.Value));
+        foreach(System.Text.RegularExpressions.Match match in LegalCaliforniaStatuteCitationRegex.Matches(text))
             Add(match.Value,LegalAuthorityKind.Statute,CitationVerificationTokens(match.Value));
         foreach(System.Text.RegularExpressions.Match match in LegalRegulationCitationRegex.Matches(text))
             Add(match.Value,LegalAuthorityKind.Regulation,CitationVerificationTokens(match.Value));

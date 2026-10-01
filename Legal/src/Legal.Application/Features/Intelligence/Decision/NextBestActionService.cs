@@ -195,8 +195,9 @@ public sealed class NextBestActionService(
                 adv));
         }
 
-        // Cap the requirement set so we only ask the model about the highest-value frontier.
-        return requirements.Take(6).ToList();
+        // Present the full unresolved decision-material frontier (highest-value first). The model is
+        // asked about every requirement so the cockpit can list all next best actions, not just a preview.
+        return requirements;
     }
 
     private static bool IsUnresolved(string? factStateCode)
@@ -232,35 +233,38 @@ public sealed class NextBestActionService(
     }
 
     // ── NBA: ask the LLM for domain-appropriate candidate actions (fail-soft) ───────────────────────
-    private const string ActionsSchema = """
-    {
-      "type": "object",
-      "properties": {
-        "actions": {
-          "type": "array",
-          "maxItems": 6,
-          "items": {
-            "type": "object",
-            "properties": {
-              "propositionId": { "type": "string" },
-              "title": { "type": "string" },
-              "informationSought": { "type": "string" },
-              "context": { "type": ["string", "null"] }
-            },
-            "required": ["propositionId", "title", "informationSought", "context"],
-            "additionalProperties": false
-          }
-        }
-      },
-      "required": ["actions"],
-      "additionalProperties": false
-    }
-    """;
-
     private sealed record ActionProposalEnvelope(IReadOnlyList<ActionProposal>? Actions);
     private sealed record ActionProposal(string? PropositionId, string? Title, string? InformationSought, string? Context);
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+
+    // Build the actions output schema so maxItems tracks the supplied unresolved frontier (one action per
+    // proposition), instead of a fixed small cap.
+    private static string BuildActionsSchema(int maxItems) =>
+        $$"""
+        {
+          "type": "object",
+          "properties": {
+            "actions": {
+              "type": "array",
+              "maxItems": {{Math.Max(maxItems, 1)}},
+              "items": {
+                "type": "object",
+                "properties": {
+                  "propositionId": { "type": "string" },
+                  "title": { "type": "string" },
+                  "informationSought": { "type": "string" },
+                  "context": { "type": ["string", "null"] }
+                },
+                "required": ["propositionId", "title", "informationSought", "context"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": ["actions"],
+          "additionalProperties": false
+        }
+        """;
 
     private async Task<IReadOnlyList<ActionProposal>> ProposeActionsAsync(
         Guid tenantId,
@@ -277,16 +281,16 @@ public sealed class NextBestActionService(
                 "of the supplied propositions (by propositionId) and MUST state the SPECIFIC information it " +
                 "would obtain to resolve that proposition's missing information. Prefer actions grounded in the " +
                 "domain-appropriate information sources provided. Do NOT propose generic actions such as " +
-                "'conduct discovery' or 'investigate further'. Return at most 3 materially distinct actions, " +
-                "the most decision-impactful first. Do not predetermine the outcome — an action seeks information, " +
-                "it does not assume what that information will show.";
+                "'conduct discovery' or 'investigate further'. Propose one materially distinct action for EACH " +
+                "supplied proposition that warrants one, the most decision-impactful first. Do not predetermine " +
+                "the outcome — an action seeks information, it does not assume what that information will show.";
 
             var result = await aiProviderRouter.GenerateAsync(
                 tenantId,
                 "INTELLIGENCE_WIDE_ANSWER",
                 system,
                 BuildActionUserPrompt(matter, pack, requirements),
-                ActionsSchema,
+                BuildActionsSchema(requirements.Count),
                 Guid.NewGuid().ToString("N"),
                 new AiExecutionContext("Intelligence", "DecisionMatter", matter?.DecisionMatterId, null, "NEXT_BEST_ACTION", null, null, "Next Best Action"),
                 null,
@@ -386,10 +390,9 @@ public sealed class NextBestActionService(
                 impactTone));
         }
 
-        // Rank by ADV (LegalAdv frontier) descending; present the top 3.
+        // Rank by ADV (LegalAdv frontier) descending; present the full eligible frontier.
         return actions
             .OrderByDescending(a => a.Adv)
-            .Take(3)
             .ToList();
     }
 
