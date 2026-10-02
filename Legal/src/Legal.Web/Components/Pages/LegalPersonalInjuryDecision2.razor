@@ -1905,23 +1905,26 @@
                                                                         <div class="adi-tree">
                                                                             @if (_adiTreeView == "Hierarchy")
                                                                             {
-                                                                                @foreach (var cand in AdiCandidates)
+                                                                                @if (!AdiHasLiveHierarchy)
                                                                                 {
-                                                                                    var candScore = AdiNodeScore(cand);
-                                                                                    var candCollapsed = AdiIsCollapsed(cand.DecisionNodeId);
+                                                                                    <p class="adi-tree-empty">No decision hierarchy yet. Run a decision analysis so the hierarchy (L1/L2/L3…) is available for placement.</p>
+                                                                                }
+                                                                                @foreach (var root in AdiBranchRoots)
+                                                                                {
+                                                                                    var rootCollapsed = AdiBranchCollapsed(root.WideBranchId);
                                                                                     <div class="adi-tree-group">
-                                                                                        <button type="button" class="adi-tree-row adi-tree-row--candidate @(_adiCandidateNodeId == cand.DecisionNodeId ? "adi-tree-row--active" : "")"
-                                                                                                @onclick="() => _adiCandidateNodeId = cand.DecisionNodeId">
-                                                                                            <span class="adi-tree-caret" @onclick:stopPropagation="true" @onclick="() => AdiToggleNode(cand.DecisionNodeId)">
-                                                                                                <i class="bi @(candCollapsed ? "bi-chevron-right" : "bi-chevron-down")"></i>
+                                                                                        <button type="button" class="adi-tree-row adi-tree-row--candidate @(_adiBranchId == root.WideBranchId ? "adi-tree-row--active" : "")"
+                                                                                                @onclick="() => AdiSelectBranch(root.WideBranchId)">
+                                                                                            <span class="adi-tree-caret" @onclick:stopPropagation="true" @onclick="() => AdiToggleBranch(root.WideBranchId)">
+                                                                                                <i class="bi @(rootCollapsed ? "bi-chevron-right" : "bi-chevron-down")"></i>
                                                                                             </span>
-                                                                                            <span class="adi-tree-code">@AdiCandidateCode(cand.DecisionNodeId)</span>
-                                                                                            <span class="adi-tree-text" title="@cand.NodeText">@cand.NodeText</span>
-                                                                                            <span class="adi-score adi-score--@AdiScoreTone(candScore)">@(candScore?.ToString("0") ?? "—")</span>
+                                                                                            <span class="adi-tree-code">@AdiBranchCode(root)</span>
+                                                                                            <span class="adi-tree-text" title="@root.Interpretation">@root.DisplayName</span>
+                                                                                            <span class="adi-tree-lvl">L1</span>
                                                                                         </button>
-                                                                                        @if (!candCollapsed)
+                                                                                        @if (!rootCollapsed)
                                                                                         {
-                                                                                            @AdiTreeChildren(cand.DecisionNodeId, 1)
+                                                                                            @AdiBranchTree(root.WideBranchId, 1)
                                                                                         }
                                                                                     </div>
                                                                                 }
@@ -4563,6 +4566,62 @@
         }
     };
 
+    // Recursive renderer for the live-hierarchy branch tree used by the Add-Proposition placement panel.
+    // Each branch is selectable as the placement parent; descendants (L2/L3/L4/L5) indent by depth.
+    private RenderFragment AdiBranchTree(Guid parentBranchId, int depth) => builder =>
+    {
+        var seq = 0;
+        foreach (var child in AdiBranchChildren(parentBranchId))
+        {
+            var grandchildren = AdiBranchChildren(child.WideBranchId);
+            var collapsed = AdiBranchCollapsed(child.WideBranchId);
+            var isSelected = _adiBranchId == child.WideBranchId;
+            var captured = child.WideBranchId;
+
+            builder.OpenElement(seq++, "button");
+            builder.AddAttribute(seq++, "type", "button");
+            builder.AddAttribute(seq++, "class", $"adi-tree-row adi-tree-row--node{(isSelected ? " adi-tree-row--active" : "")}");
+            builder.AddAttribute(seq++, "style", $"padding-left:{8 + depth * 16}px");
+            builder.AddAttribute(seq++, "onclick", Microsoft.AspNetCore.Components.EventCallback.Factory.Create(this, () => AdiSelectBranch(captured)));
+
+            if (grandchildren.Count > 0)
+            {
+                builder.OpenElement(seq++, "span");
+                builder.AddAttribute(seq++, "class", "adi-tree-caret");
+                builder.AddEventStopPropagationAttribute(seq++, "onclick", true);
+                builder.AddAttribute(seq++, "onclick", Microsoft.AspNetCore.Components.EventCallback.Factory.Create(this, () => AdiToggleBranch(captured)));
+                builder.OpenElement(seq++, "i");
+                builder.AddAttribute(seq++, "class", $"bi {(collapsed ? "bi-chevron-right" : "bi-chevron-down")}");
+                builder.CloseElement();
+                builder.CloseElement();
+            }
+            else
+            {
+                builder.OpenElement(seq++, "span");
+                builder.AddAttribute(seq++, "class", "adi-tree-caret adi-tree-caret--leaf");
+                builder.CloseElement();
+            }
+
+            builder.OpenElement(seq++, "span");
+            builder.AddAttribute(seq++, "class", "adi-tree-lvl");
+            builder.AddContent(seq++, $"L{child.LevelNumber}");
+            builder.CloseElement();
+
+            builder.OpenElement(seq++, "span");
+            builder.AddAttribute(seq++, "class", "adi-tree-text");
+            builder.AddAttribute(seq++, "title", child.Interpretation ?? child.DisplayName);
+            builder.AddContent(seq++, child.DisplayName);
+            builder.CloseElement();
+
+            builder.CloseElement(); // button
+
+            if (!collapsed && grandchildren.Count > 0)
+            {
+                builder.AddContent(seq++, AdiBranchTree(child.WideBranchId, depth + 1));
+            }
+        }
+    };
+
     // ── Add-Proposition wizard (Attorney Decision Input write path) ──────────────────────────────
     private static readonly string[] AdiSteps = ["Define", "Placement", "Preview Impact", "Confirm"];
     private static readonly (string Kind, int Level, string Label)[] AdiTypeOptions =
@@ -4597,7 +4656,7 @@
 
     private bool AdiCanAdvance => _adiStep switch
     {
-        1 => !string.IsNullOrWhiteSpace(_adiText) && _adiCandidateNodeId is not null,
+        1 => !string.IsNullOrWhiteSpace(_adiText) && (_adiBranchId is not null || _adiCandidateNodeId is not null),
         _ => true
     };
 
@@ -4620,7 +4679,12 @@
         _adiTreeView = "Hierarchy";
         _adiTreeSearch = string.Empty;
         _adiCollapsed.Clear();
+        _adiBranchCollapsed.Clear();
+        _adiBranchId = null;
         _adiCandidateNodeId = HiNodes.FirstOrDefault(n => n.NodeLevel == 1)?.DecisionNodeId;
+        // Prefer the live hierarchy (Hierarchy tab) as the data source for placement.
+        if (AdiBranchRoots.FirstOrDefault() is { } firstRoot)
+            AdiSelectBranch(firstRoot.WideBranchId);
         try
         {
             if (MatterId is { } matterId)
@@ -4640,6 +4704,86 @@
     }
 
     private void CloseAddProposition() => _adiShowWizard = false;
+
+    // ── Live-hierarchy branch sourcing for the Add-Proposition wizard ──────────────────────────────
+    // The wizard's "Decision Model Hierarchy" and the owning-candidate / parent selectors are seeded from
+    // the SAME surviving Wide branches that drive the Hierarchy tab (WideBranchDto), not the ADI node
+    // projection (which is empty until attorneys add nodes). On save the selected branch and its ancestor
+    // chain are resolved to real decision nodes (§2/§7) so the proposition attaches to a DB-backed node.
+    private Guid? _adiBranchId;                 // selected placement branch (parent of the new proposition)
+    private readonly HashSet<Guid> _adiBranchCollapsed = new();
+
+    // L1 roots from the live hierarchy (same source as the Hierarchy tab).
+    private IReadOnlyList<WideBranchDto> AdiBranchRoots
+        => SurvivingBranches.Where(b => b.LevelNumber == 1).OrderBy(b => b.SortOrder).ToList();
+
+    private IReadOnlyList<WideBranchDto> AdiBranchChildren(Guid parentBranchId)
+        => SurvivingBranches.Where(b => b.ParentWideBranchId == parentBranchId)
+            .OrderBy(b => b.SortOrder).ToList();
+
+    private WideBranchDto? AdiBranch(Guid id) => SurvivingBranches.FirstOrDefault(b => b.WideBranchId == id);
+
+    private bool AdiBranchCollapsed(Guid id) => _adiBranchCollapsed.Contains(id);
+    private void AdiToggleBranch(Guid id) { if (!_adiBranchCollapsed.Add(id)) _adiBranchCollapsed.Remove(id); }
+
+    private bool AdiHasLiveHierarchy => SurvivingBranches.Count > 0;
+
+    // Short display code for a branch — its own BranchCode, else a derived L{level} label.
+    private static string AdiBranchCode(WideBranchDto b)
+        => string.IsNullOrWhiteSpace(b.BranchCode) ? $"L{b.LevelNumber}" : b.BranchCode;
+
+    // The ordered ancestor chain root(L1) → branch, used to materialize decision nodes on save.
+    private IReadOnlyList<WideBranchDto> AdiBranchChain(Guid branchId)
+    {
+        var byId = SurvivingBranches.ToDictionary(b => b.WideBranchId);
+        var chain = new List<WideBranchDto>();
+        var guard = 0;
+        var cur = byId.TryGetValue(branchId, out var start) ? start : null;
+        while (cur is not null && guard++ < 25)
+        {
+            chain.Add(cur);
+            cur = cur.ParentWideBranchId is { } pid && byId.TryGetValue(pid, out var parent) ? parent : null;
+        }
+        chain.Reverse();
+        return chain;
+    }
+
+    // Map a Wide level to the ADI node kind code used by the decision model.
+    private static string AdiKindForLevel(int level) => level switch
+    {
+        1 => "Candidate",
+        2 => "Factor",
+        _ => "Proposition"
+    };
+
+    private void AdiSelectBranch(Guid branchId)
+    {
+        _adiBranchId = branchId;
+        if (AdiBranch(branchId) is { } b)
+        {
+            // Default the new proposition to one level deeper than the chosen placement branch.
+            _adiLevel = Math.Clamp(b.LevelNumber + 1, 2, 5);
+            _adiKind = AdiKindForLevel(_adiLevel);
+        }
+    }
+
+    // Resolve the selected branch chain into real decision nodes and bind the candidate/parent scope.
+    private async Task<bool> AdiEnsureBranchResolvedAsync(Guid matterId)
+    {
+        if (_adiBranchId is not { } branchId) return _adiCandidateNodeId is not null;
+        var chain = AdiBranchChain(branchId);
+        if (chain.Count == 0) return _adiCandidateNodeId is not null;
+
+        var descriptors = chain.Select(b => new Legal.Application.Features.Intelligence.Decision.BranchNodeDescriptor(
+            b.WideBranchId, b.ParentWideBranchId, b.LevelNumber, AdiKindForLevel(b.LevelNumber), b.DisplayName)).ToList();
+
+        var resolved = await Api.ResolveLegalBranchNodeAsync(matterId, new(matterId, descriptors));
+        if (resolved is null) return false;
+
+        _adiCandidateNodeId = resolved.CandidateNodeId;
+        _adiParentNodeId = resolved.DecisionNodeId; // the selected branch node becomes the parent
+        return true;
+    }
 
     private void SelectAdiType(string kind, int level)
     {
@@ -4665,7 +4809,13 @@
             switch (_adiStep)
             {
                 case 1:
-                    // Define → run deterministic structural checks, then advance to placement.
+                    // Define → resolve the selected live-hierarchy branch into real decision nodes, run
+                    // deterministic structural checks, then advance to placement.
+                    if (!await AdiEnsureBranchResolvedAsync(matterId))
+                    {
+                        _adiError = "Select a placement in the decision model hierarchy first.";
+                        return;
+                    }
                     _adiDraft = await Api.CreateLegalAttorneyDraftAsync(matterId, new(
                         matterId, _adiParentNodeId, _adiCandidateNodeId!.Value, _adiKind, _adiLevel, _adiText, _adiRationale));
                     await AdiLoadPlacementAsync(matterId);

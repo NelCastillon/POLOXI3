@@ -164,6 +164,14 @@ public sealed class AzureOpenAiProvider(HttpClient httpClient,ILogger<AzureOpenA
         // than the small mechanical-extraction cap. Capping DISCOVERY at 4000 truncates the forest and
         // surfaces a misleading "increase MaximumOutputTokens" error even when it is already at the max.
         if(featureCode.Contains("DISCOVERY",StringComparison.OrdinalIgnoreCase))return configuredBudget;
+        // INFORMATION_VALUE backs the legal-authority PROPOSAL step (up to 8 authorities, each with a
+        // name + relevance), whose JSON is likewise far larger than a mechanical extraction. Under the
+        // 4000 cap a reasoning model (e.g. gpt-6-astra) spends most of that budget on hidden reasoning
+        // tokens, truncates the proposal JSON (finish_reason=length), and ProposeLegalAuthoritiesAsync
+        // fail-softs to an EMPTY authority list -> zero retrieval -> zero admitted evidence. Non-reasoning
+        // models (gpt-4.1-mini) keep the full configured budget and are unaffected, which is why the step
+        // only failed on astra. Granting the full configured budget restores parity.
+        if(featureCode.Contains("INFORMATION_VALUE",StringComparison.OrdinalIgnoreCase))return configuredBudget;
         var stageCap=featureCode.Equals("DECISION_GRAPH",StringComparison.OrdinalIgnoreCase)?8000:4000;
         return Math.Min(configuredBudget,stageCap);
     }

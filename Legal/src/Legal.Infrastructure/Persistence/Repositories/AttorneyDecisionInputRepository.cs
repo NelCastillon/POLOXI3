@@ -549,6 +549,115 @@ public sealed class AttorneyDecisionInputRepository(ISqlConnectionFactory connec
         catch { tx.Rollback(); throw; }
     }
 
+    // ── §2/§7 resolve-or-create the decision node for a selected Wide branch (and its ancestor chain) ──
+    // The chain is ordered root (L1) → selected branch. Each branch is materialized once per matter,
+    // keyed on SourceWideBranchId, so repeated "Add proposition from this branch" actions reuse nodes.
+    public async Task<ResolvedBranchNode> ResolveBranchNodeAsync(
+        Guid tenantId, Guid actorUserId, ResolveBranchNodeCommand command, CancellationToken cancellationToken = default)
+    {
+        if (command.AncestorChain is null || command.AncestorChain.Count == 0)
+            throw new InvalidOperationException("ResolveBranchNodeAsync requires a non-empty ancestor chain.");
+
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        using var tx = connection.BeginTransaction(IsolationLevel.Serializable);
+        try
+        {
+            Guid? parentNodeId = null;
+            Guid candidateNodeId = Guid.Empty;
+            Guid resolvedNodeId = Guid.Empty;
+            string resolvedCanonicalKey = string.Empty;
+            int resolvedLevel = 0;
+            bool resolvedCreated = false;
+
+            foreach (var branch in command.AncestorChain)
+            {
+                var canonicalKey = $"wb:{branch.WideBranchId:N}";
+
+                // Resolve existing materialized node for this Wide branch (idempotent).
+                var existing = await connection.QuerySingleOrDefaultAsync<(Guid DecisionNodeId, Guid? ParentNodeId, string CanonicalKey, int NodeLevel)?>(
+                    new CommandDefinition(
+                        """
+                        SELECT TOP 1 DecisionNodeId, ParentNodeId, CanonicalKey, NodeLevel
+                        FROM POLOXI.Legal_DecisionNode
+                        WHERE TenantId = @TenantId AND MatterId = @MatterId
+                          AND SourceWideBranchId = @WideBranchId AND IsDeleted = 0;
+                        """,
+                        new { TenantId = tenantId, command.MatterId, branch.WideBranchId },
+                        transaction: tx, cancellationToken: cancellationToken));
+
+                Guid nodeId;
+                bool created;
+                if (existing is { } row)
+                {
+                    nodeId = row.DecisionNodeId;
+                    resolvedCanonicalKey = row.CanonicalKey;
+                    created = false;
+                }
+                else
+                {
+                    nodeId = Guid.NewGuid();
+                    resolvedCanonicalKey = canonicalKey;
+                    created = true;
+                    await connection.ExecuteAsync(new CommandDefinition(
+                        """
+                        INSERT INTO POLOXI.Legal_DecisionNode
+                            (DecisionNodeId, MatterId, ParentNodeId, CanonicalKey, NodeKindCode, NodeLevel, NodeText,
+                             OriginCode, NodeVersion, StructuralStateCode, EvidenceStateCode, AuthorityStateCode,
+                             SourceWideBranchId, TenantId, CreatedByUserId)
+                        VALUES
+                            (@DecisionNodeId, @MatterId, @ParentNodeId, @CanonicalKey, @NodeKindCode, @NodeLevel, @NodeText,
+                             N'SystemDerived', 1, N'Valid', N'NotEvaluated', N'NotRequired',
+                             @WideBranchId, @TenantId, @Actor);
+                        """,
+                        new
+                        {
+                            DecisionNodeId = nodeId, command.MatterId, ParentNodeId = parentNodeId, CanonicalKey = canonicalKey,
+                            branch.NodeKindCode, branch.NodeLevel, branch.NodeText, branch.WideBranchId,
+                            TenantId = tenantId, Actor = actorUserId
+                        },
+                        transaction: tx, cancellationToken: cancellationToken));
+
+                    if (parentNodeId is { } parentId)
+                    {
+                        await connection.ExecuteAsync(new CommandDefinition(
+                            """
+                            IF NOT EXISTS (SELECT 1 FROM POLOXI.Legal_DecisionNodeEdge
+                                           WHERE TenantId = @TenantId AND MatterId = @MatterId
+                                             AND FromNodeId = @FromNodeId AND ToNodeId = @ToNodeId AND EdgeTypeCode = N'CHILD_OF')
+                            INSERT INTO POLOXI.Legal_DecisionNodeEdge
+                                (NodeEdgeId, MatterId, FromNodeId, ToNodeId, EdgeKindCode, EdgeTypeCode, EdgeVersion, TenantId, CreatedByUserId)
+                            VALUES
+                                (NEWID(), @MatterId, @FromNodeId, @ToNodeId, N'Structural', N'CHILD_OF', 1, @TenantId, @Actor);
+                            """,
+                            new { command.MatterId, FromNodeId = nodeId, ToNodeId = parentId, TenantId = tenantId, Actor = actorUserId },
+                            transaction: tx, cancellationToken: cancellationToken));
+                    }
+                }
+
+                if (candidateNodeId == Guid.Empty) candidateNodeId = nodeId;
+                resolvedNodeId = nodeId;
+                resolvedLevel = branch.NodeLevel;
+                resolvedCreated = created;
+                parentNodeId = nodeId; // next descendant's parent is this node
+            }
+
+            // parentNodeId now equals the selected node; the actual parent is the one before it.
+            Guid? selectedParent = command.AncestorChain.Count >= 2
+                ? await connection.QuerySingleOrDefaultAsync<Guid?>(new CommandDefinition(
+                    """
+                    SELECT ParentNodeId FROM POLOXI.Legal_DecisionNode
+                    WHERE TenantId = @TenantId AND MatterId = @MatterId AND DecisionNodeId = @DecisionNodeId;
+                    """,
+                    new { TenantId = tenantId, command.MatterId, DecisionNodeId = resolvedNodeId },
+                    transaction: tx, cancellationToken: cancellationToken))
+                : null;
+
+            tx.Commit();
+            return new ResolvedBranchNode(resolvedNodeId, candidateNodeId, selectedParent, resolvedLevel, resolvedCanonicalKey, resolvedCreated);
+        }
+        catch { tx.Rollback(); throw; }
+    }
+
     // Transactional-outbox enqueue that enlists in the caller's transaction (reuses SaaS.SaaS_Outbox, §17).
     private static async Task EnqueueOutboxAsync(IDbConnection connection, IDbTransaction tx, string messageType, string payloadJson, CancellationToken cancellationToken)
     {

@@ -78,16 +78,21 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     // Model selection: Auto routes to MINI; otherwise route every wide LLM call through the requested model.
     private static string? ModelOverride(WideSearchRequest request)=>string.IsNullOrWhiteSpace(request.ModelCode)||request.ModelCode.Trim().Equals("Auto",StringComparison.OrdinalIgnoreCase)?"gpt-4.1-mini":request.ModelCode.Trim();
 
+    // True when the user explicitly picked a model in the dropdown (anything other than empty/"Auto").
+    private static bool IsExplicitModelSelection(WideSearchRequest request)=>
+        !(string.IsNullOrWhiteSpace(request.ModelCode)||request.ModelCode.Trim().Equals("Auto",StringComparison.OrdinalIgnoreCase));
+
     // Tiered model routing (highest-leverage latency lever; DB-seeded via migration 0205).
     // Mechanical strict-JSON stages (intent, hierarchy step, query contract, candidate enumeration,
     // legal-authority proposal, information value, challenge round, candidate matrix, ABV) NEVER need a
     // reasoning model: their output is a bounded schema a fast model produces reliably and quickly, and
     // every seed/score they emit still faces the deterministic filters and evidence gates downstream.
-    // Forcing them onto the fast tier means selecting a reasoning model (e.g. Astra) only costs reasoning
-    // latency on the handful of user-facing SYNTHESIS calls, not on the ~9 mechanical calls per run.
+    // Tiered fast-tier routing only applies to Auto: when the user explicitly selects a model in the
+    // dropdown (e.g. gpt-6-astra) that single model is honored across EVERY stage - mechanical and
+    // synthesis alike - so the selection is used all throughout and never silently downgraded.
     // When tiered routing is disabled, every stage routes through the requested model (legacy behavior).
     private static string? MechanicalModel(WideConfiguration configuration,WideSearchRequest request)=>
-        request.ForceRequestedModelAllStages
+        request.ForceRequestedModelAllStages||IsExplicitModelSelection(request)
             ?ModelOverride(request)
             :configuration.EnableTieredModelRouting
                 ?(string.IsNullOrWhiteSpace(configuration.FastModelCode)?"gpt-4.1-mini":configuration.FastModelCode.Trim())
@@ -5093,6 +5098,18 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         {
             var tokens=CitationVerificationTokens(statuteMatch.Value);
             return tokens.Count==0?null:new(NormalizeQuery(statuteMatch.Value),LegalAuthorityKind.Statute,tokens);
+        }
+        // California state statutes (e.g. "California Code of Civil Procedure section 377.60") are NOT
+        // captured by the federal U.S.C./Public-Law regex, so without this branch an LLM-proposed CA
+        // citation would fall through to the weak generic fallback and route as Any. Classifying it with
+        // the SAME California regex used for branch-cited authorities routes it as a Statute to the seeded
+        // CALIFORNIA authority-source descriptors and derives the distinctive section tokens the identity
+        // gate needs to VERIFY it.
+        var californiaMatch=LegalCaliforniaStatuteCitationRegex.Match(name);
+        if(californiaMatch.Success)
+        {
+            var tokens=CitationVerificationTokens(californiaMatch.Value);
+            return tokens.Count==0?null:new(NormalizeQuery(californiaMatch.Value),LegalAuthorityKind.Statute,tokens);
         }
         var regulationMatch=LegalRegulationCitationRegex.Match(name);
         if(regulationMatch.Success)

@@ -31,6 +31,9 @@ public interface IAttorneyDecisionInputService
 
     // Reposition an existing node — creates a new version and DecisionDelta (§4).
     Task<CommitResult> RepositionAsync(Guid tenantId, Guid actorUserId, RepositionNodeCommand command, CancellationToken cancellationToken = default);
+
+    // §2/§7 resolve-or-create the decision node (and ancestor chain) for a selected live Wide branch.
+    Task<ResolvedBranchNode> ResolveBranchNodeAsync(Guid tenantId, Guid actorUserId, ResolveBranchNodeCommand command, CancellationToken cancellationToken = default);
 }
 
 // ── Thin adapter over the existing POLOXI evaluation path (§13, §15) ─────────────────────────────

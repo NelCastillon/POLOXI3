@@ -343,6 +343,18 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
     }
 
 
+    // Resolve-or-create the decision node for a selected live Wide hierarchy branch (and ancestor chain)
+    // so an attorney can add a proposition from the Hierarchy tab's surviving branches (§2/§7). Idempotent.
+    [HttpPost("matters/{matterId:guid}/decision-input/resolve-branch-node")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> ResolveBranchNode(Guid matterId, [FromBody] ResolveBranchNodeCommand command, CancellationToken cancellationToken)
+    {
+        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, CapabilityCode, matterId, null, cancellationToken);
+        if (denied is not null) return denied;
+        return Ok(await attorneyDecisionInputService.ResolveBranchNodeAsync(TenantId, ActorUserId, command with { MatterId = matterId }, cancellationToken));
+    }
+
+
     // Advisory proposition-level Information Value: scores each atomic matter fact-proposition on POLOXI's
     // shared VIV scale (reusing ClaimVerificationPrioritizer) so the cockpit can surface which propositions
     // are most worth investigating next. Display-only — it never blocks or alters the authoritative decision.

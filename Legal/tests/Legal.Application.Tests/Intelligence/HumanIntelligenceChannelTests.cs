@@ -290,5 +290,7 @@ public sealed class HumanIntelligenceChannelTests
             => throw new NotSupportedException();
         public Task<CommitResult> RepositionAsync(Guid tenantId, Guid actorUserId, RepositionNodeCommand command, CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
+        public Task<ResolvedBranchNode> ResolveBranchNodeAsync(Guid tenantId, Guid actorUserId, ResolveBranchNodeCommand command, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
     }
 }

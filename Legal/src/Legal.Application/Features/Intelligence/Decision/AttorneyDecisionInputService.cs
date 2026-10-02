@@ -132,6 +132,9 @@ public sealed class AttorneyDecisionInputService(
         return repository.RepositionAsync(tenantId, actorUserId, command with { ConfirmedValue = value }, cancellationToken);
     }
 
+    public Task<ResolvedBranchNode> ResolveBranchNodeAsync(Guid tenantId, Guid actorUserId, ResolveBranchNodeCommand command, CancellationToken cancellationToken = default)
+        => repository.ResolveBranchNodeAsync(tenantId, actorUserId, command, cancellationToken);
+
     // Deterministic atomicity heuristic — a conservative pre-check, not the authoritative APR gate (§8).
     private static string EvaluateAtomicity(string text)
     {

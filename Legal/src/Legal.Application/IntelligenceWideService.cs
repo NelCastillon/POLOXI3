@@ -26,18 +26,25 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
     // Model selection: Auto routes to MINI; otherwise route every wide LLM call through the requested model.
     private static string? ModelOverride(WideSearchRequest request)=>string.IsNullOrWhiteSpace(request.ModelCode)||request.ModelCode.Trim().Equals("Auto",StringComparison.OrdinalIgnoreCase)?"gpt-4.1-mini":request.ModelCode.Trim();
 
+    // True when the user explicitly picked a model in the dropdown (anything other than empty/"Auto").
+    private static bool IsExplicitModelSelection(WideSearchRequest request)=>
+        !(string.IsNullOrWhiteSpace(request.ModelCode)||request.ModelCode.Trim().Equals("Auto",StringComparison.OrdinalIgnoreCase));
+
     // Tiered model routing (highest-leverage latency lever; DB-seeded via migration 0205).
     // Mechanical strict-JSON stages (intent, hierarchy step, query contract, candidate enumeration,
     // legal-authority proposal, information value, challenge round, candidate matrix, ABV) NEVER need a
     // reasoning model: their output is a bounded schema a fast model produces reliably and quickly, and
     // every seed/score they emit still faces the deterministic filters and evidence gates downstream.
-    // Forcing them onto the fast tier means selecting a reasoning model (e.g. Astra) only costs reasoning
-    // latency on the handful of user-facing SYNTHESIS calls, not on the ~9 mechanical calls per run.
+    // Tiered fast-tier routing only applies to Auto: when the user explicitly selects a model in the
+    // dropdown (e.g. gpt-6-astra) that single model is honored across EVERY stage - mechanical and
+    // synthesis alike - so the selection is used all throughout and never silently downgraded.
     // When tiered routing is disabled, every stage routes through the requested model (legacy behavior).
     private static string? MechanicalModel(WideConfiguration configuration,WideSearchRequest request)=>
-        configuration.EnableTieredModelRouting
-            ?(string.IsNullOrWhiteSpace(configuration.FastModelCode)?"gpt-4.1-mini":configuration.FastModelCode.Trim())
-            :ModelOverride(request);
+        IsExplicitModelSelection(request)
+            ?ModelOverride(request)
+            :configuration.EnableTieredModelRouting
+                ?(string.IsNullOrWhiteSpace(configuration.FastModelCode)?"gpt-4.1-mini":configuration.FastModelCode.Trim())
+                :ModelOverride(request);
 
     // Synthesis stages: honor the requested reasoning model (Auto still falls back to the fast tier).
     private static string? SynthesisModel(WideSearchRequest request)=>ModelOverride(request);

@@ -227,6 +227,36 @@ public sealed record RaiseChallengeCommand(
     string ChallengeText,
     Guid IdempotencyKey);
 
+// ── Wide-branch → decision-node materialization ───────────────────────────────────────────────────
+// When an attorney adds a proposition from the live POLOXI hierarchy (the Hierarchy tab's surviving
+// Wide branches), the chosen branch and its ancestor chain are materialized once into canonical
+// decision nodes so the proposition attaches to a real DB-backed node. Idempotent on SourceWideBranchId.
+
+// One branch in the ancestor chain, ordered root (L1) → selected branch. Text/level/kind describe the
+// node to resolve-or-create; SourceWideBranchId is the provenance key for idempotent reuse.
+public sealed record BranchNodeDescriptor(
+    Guid WideBranchId,
+    Guid? ParentWideBranchId,
+    int NodeLevel,
+    string NodeKindCode,     // Candidate | Factor | Proposition
+    string NodeText);
+
+// §2/§7 resolve-or-create the decision node for a selected Wide branch (and its ancestor chain).
+// Chain MUST be ordered from the root candidate (L1) down to the selected branch so parent linkage
+// is materialized before children.
+public sealed record ResolveBranchNodeCommand(
+    Guid MatterId,
+    IReadOnlyList<BranchNodeDescriptor> AncestorChain);
+
+// The resolved decision node for the selected branch plus the resolved candidate (L1) scope node.
+public sealed record ResolvedBranchNode(
+    Guid DecisionNodeId,
+    Guid CandidateNodeId,
+    Guid? ParentNodeId,
+    int NodeLevel,
+    string CanonicalKey,
+    bool Created);
+
 // §4 reposition an existing node — creates a new version and DecisionDelta.
 public sealed record RepositionNodeCommand(
     Guid MatterId,

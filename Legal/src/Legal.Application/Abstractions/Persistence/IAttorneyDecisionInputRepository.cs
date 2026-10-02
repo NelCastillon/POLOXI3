@@ -43,4 +43,9 @@ public interface IAttorneyDecisionInputRepository
 
     Task<CommitResult> RepositionAsync(
         Guid tenantId, Guid actorUserId, RepositionNodeCommand command, CancellationToken cancellationToken = default);
+
+    // §2/§7 resolve-or-create the decision node (and its ancestor chain) for a selected Wide branch.
+    // Idempotent on (TenantId, MatterId, SourceWideBranchId); returns the resolved/created node + L1 scope.
+    Task<ResolvedBranchNode> ResolveBranchNodeAsync(
+        Guid tenantId, Guid actorUserId, ResolveBranchNodeCommand command, CancellationToken cancellationToken = default);
 }
