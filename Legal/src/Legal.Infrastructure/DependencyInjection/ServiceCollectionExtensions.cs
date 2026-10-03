@@ -66,6 +66,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IDecisionGovernanceRepository, DecisionGovernanceRepository>();
         services.AddScoped<IDecisionSupportSignalRepository, DecisionSupportSignalRepository>();
         services.AddScoped<ILegalDocumentCorpusRepository, LegalDocumentCorpusRepository>();
+        services.AddScoped<IProviderPortalRepository, ProviderPortalRepository>();
         services.AddScoped<IAttorneyDecisionInputRepository, AttorneyDecisionInputRepository>();
         services.AddScoped<ILegalDecisionContractRepository, LegalDecisionContractRepository>();
         services.AddScoped<ILegalHierarchyExecutionRepository, LegalHierarchyExecutionRepository>();

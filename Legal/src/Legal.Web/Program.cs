@@ -1,4 +1,5 @@
 using Legal.Web.Services;
+using Legal.Web.Services.Clio;
 using System.Net.Http.Json;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authentication;
@@ -45,6 +46,24 @@ builder.Services.AddHttpClient<ApiClient>(client =>
     .AddHttpMessageHandler<ActingUserHandler>()
     // Any 401/403 from the API redirects the user to /login from every page.
     .AddHttpMessageHandler<AuthRedirectHandler>();
+
+// ── Clio Manage OAuth (authorization-code) ──────────────────────────────────
+// ClientId/ClientSecret come from User Secrets or environment variables, never
+// appsettings.json. The token is held in-memory only for the hackathon demo.
+builder.Services.Configure<ClioOptions>(builder.Configuration.GetSection(ClioOptions.SectionName));
+builder.Services.AddSingleton<ClioTokenStore>();
+builder.Services.AddSingleton<ClioMatterMap>();
+builder.Services.AddHttpClient("Clio");
+// Strictly read-only Clio Manage API v4 client (GET only) for matter discovery.
+builder.Services.AddHttpClient<IClioReadOnlyClient, ClioReadOnlyClient>(client =>
+{
+    client.BaseAddress = new Uri("https://app.clio.com/api/v4/");
+    client.Timeout = TimeSpan.FromSeconds(60);
+});
+
+// Case + Decision Command Center read-model composer (read-only; composes existing read models).
+builder.Services.AddSingleton<Legal.Web.Services.CommandCenter.CommandCenterSnapshotCache>();
+builder.Services.AddScoped<Legal.Web.Services.CommandCenter.CaseCommandCenterViewService>();
 
 var app = builder.Build();
 
@@ -114,6 +133,9 @@ app.MapPost("/auth/logout", async (HttpContext http) =>
     await http.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
     return Results.Redirect("/login");
 });
+
+// ── Clio Manage OAuth endpoints (connect / callback / disconnect) ───────────
+app.MapClioOAuth();
 
 app.MapRazorComponents<Legal.Web.App>()
     .AddInteractiveServerRenderMode();

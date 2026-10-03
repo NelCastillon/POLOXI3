@@ -174,6 +174,33 @@ public sealed class ApiClient(HttpClient httpClient)
             await EnsureSuccessWithDetailAsync(response,token);
             return await response.Content.ReadFromJsonAsync<LegalDocumentDto>(cancellationToken:token);
         }
+
+        // Server-side byte[] variant used by integrations (e.g. Clio import) that already hold the
+        // document content in memory rather than an IBrowserFile. Posts to the same intake endpoint.
+        public async Task<LegalDocumentDto?> UploadLegalMatterDocumentBytesAsync(Guid matterId,byte[] content,string fileName,string contentType,string? documentTypeCode=null,string? domainPackCode=null,string? modelCode=null,string? idempotencyKey=null,Guid? uploadBatchId=null,EvidenceSourceDescriptor? source=null,CancellationToken token=default)
+        {
+            using var form=new MultipartFormDataContent();
+            using var byteContent=new ByteArrayContent(content);
+            byteContent.Headers.ContentType=new(string.IsNullOrWhiteSpace(contentType)?"application/octet-stream":contentType);
+            form.Add(byteContent,"file",fileName);
+            if(!string.IsNullOrWhiteSpace(documentTypeCode))form.Add(new StringContent(documentTypeCode),"documentTypeCode");
+            if(!string.IsNullOrWhiteSpace(domainPackCode))form.Add(new StringContent(domainPackCode),"domainPackCode");
+            if(!string.IsNullOrWhiteSpace(modelCode))form.Add(new StringContent(modelCode),"modelCode");
+            if(!string.IsNullOrWhiteSpace(idempotencyKey))form.Add(new StringContent(idempotencyKey),"idempotencyKey");
+            if(uploadBatchId is {} batchId)form.Add(new StringContent(batchId.ToString()),"uploadBatchId");
+            if(source is not null)
+            {
+                if(!string.IsNullOrWhiteSpace(source.SourceTypeCode))form.Add(new StringContent(source.SourceTypeCode),"sourceTypeCode");
+                if(!string.IsNullOrWhiteSpace(source.Custodian))form.Add(new StringContent(source.Custodian),"custodian");
+                if(!string.IsNullOrWhiteSpace(source.ProducedBy))form.Add(new StringContent(source.ProducedBy),"producedBy");
+                if(!string.IsNullOrWhiteSpace(source.ProductionId))form.Add(new StringContent(source.ProductionId),"productionId");
+                if(!string.IsNullOrWhiteSpace(source.BatesStart))form.Add(new StringContent(source.BatesStart),"batesStart");
+                if(!string.IsNullOrWhiteSpace(source.BatesEnd))form.Add(new StringContent(source.BatesEnd),"batesEnd");
+            }
+            using var response=await _httpClient.PostAsync($"api/legal_decision/matters/{matterId}/documents",form,token);
+            await EnsureSuccessWithDetailAsync(response,token);
+            return await response.Content.ReadFromJsonAsync<LegalDocumentDto>(cancellationToken:token);
+        }
         // ── Enterprise evidence-upload provenance layer ────────────────────────────────────────────────
         public async Task<Guid> StartLegalUploadBatchAsync(Guid matterId,StartUploadBatchCommand command,CancellationToken token=default)
         {
@@ -722,6 +749,23 @@ public sealed class ApiClient(HttpClient httpClient)
     }
 
     private static async Task EnsureSuccessWithDetailAsync(HttpResponseMessage response,CancellationToken token){if(response.IsSuccessStatusCode)return;var detail=await response.Content.ReadAsStringAsync(token);throw new InvalidOperationException(string.IsNullOrWhiteSpace(detail)?$"Request failed with status {(int)response.StatusCode}.":detail);}
+
+    // ── Provider portal: sharing policy, firm→provider requests, review state ──
+    public async Task<IReadOnlyCollection<Legal.Application.Features.ProviderPortal.ProviderSharingPolicyDto>> GetProviderSharingPoliciesAsync(Guid matterId,CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<Legal.Application.Features.ProviderPortal.ProviderSharingPolicyDto>>($"api/legal_provider_portal/matters/{matterId}/sharing-policies",token)??[];
+
+    public Task<Legal.Application.Features.ProviderPortal.ProviderSharingPolicyDto?> GetProviderSharingPolicyAsync(Guid matterId,string providerKey,CancellationToken token=default)=>_httpClient.GetFromJsonAsync<Legal.Application.Features.ProviderPortal.ProviderSharingPolicyDto>($"api/legal_provider_portal/matters/{matterId}/sharing-policies/{Uri.EscapeDataString(providerKey)}",token);
+
+    public async Task<Legal.Application.Features.ProviderPortal.ProviderSharingPolicyDto?> SaveProviderSharingPolicyAsync(Legal.Application.Features.ProviderPortal.SaveProviderSharingPolicyRequest request,CancellationToken token=default){using var response=await _httpClient.PutAsJsonAsync($"api/legal_provider_portal/matters/{request.MatterId}/sharing-policies",request,token);await EnsureSuccessWithDetailAsync(response,token);return await response.Content.ReadFromJsonAsync<Legal.Application.Features.ProviderPortal.ProviderSharingPolicyDto>(cancellationToken:token);}
+
+    public async Task<IReadOnlyCollection<Legal.Application.Features.ProviderPortal.ProviderRequestDto>> GetProviderRequestsAsync(Guid matterId,string? providerKey=null,CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<Legal.Application.Features.ProviderPortal.ProviderRequestDto>>($"api/legal_provider_portal/matters/{matterId}/requests{(string.IsNullOrWhiteSpace(providerKey)?string.Empty:$"?providerKey={Uri.EscapeDataString(providerKey)}")}",token)??[];
+
+    public async Task<Legal.Application.Features.ProviderPortal.ProviderRequestDto?> CreateProviderRequestAsync(Legal.Application.Features.ProviderPortal.CreateProviderRequestRequest request,CancellationToken token=default){using var response=await _httpClient.PostAsJsonAsync($"api/legal_provider_portal/matters/{request.MatterId}/requests",request,token);await EnsureSuccessWithDetailAsync(response,token);return await response.Content.ReadFromJsonAsync<Legal.Application.Features.ProviderPortal.ProviderRequestDto>(cancellationToken:token);}
+
+    public async Task<Legal.Application.Features.ProviderPortal.ProviderRequestDto?> UpdateProviderRequestStatusAsync(Legal.Application.Features.ProviderPortal.UpdateProviderRequestStatusRequest request,CancellationToken token=default){using var response=await _httpClient.PutAsJsonAsync($"api/legal_provider_portal/requests/{request.ProviderRequestId}/status",request,token);await EnsureSuccessWithDetailAsync(response,token);return await response.Content.ReadFromJsonAsync<Legal.Application.Features.ProviderPortal.ProviderRequestDto>(cancellationToken:token);}
+
+    public Task<Legal.Application.Features.ProviderPortal.MatterReviewStateDto?> GetMatterReviewStateAsync(Guid matterId,CancellationToken token=default)=>_httpClient.GetFromJsonAsync<Legal.Application.Features.ProviderPortal.MatterReviewStateDto>($"api/legal_provider_portal/matters/{matterId}/review-state",token);
+
+    public async Task<Legal.Application.Features.ProviderPortal.MatterReviewStateDto?> RecordMatterOpenedAsync(Guid matterId,CancellationToken token=default){using var response=await _httpClient.PostAsync($"api/legal_provider_portal/matters/{matterId}/review-state/open",null,token);await EnsureSuccessWithDetailAsync(response,token);return await response.Content.ReadFromJsonAsync<Legal.Application.Features.ProviderPortal.MatterReviewStateDto>(cancellationToken:token);}
 }
 
 /// <summary>Normalised result of a Judz.ai auth endpoint call for the Blazor UI.</summary>

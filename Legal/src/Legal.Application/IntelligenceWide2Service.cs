@@ -2549,11 +2549,23 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             // R3 Domain Pack verification: resolve the actual DB-backed pack (id + code) so the run can
             // PROVE a specific pack was applied rather than inferring one from the practice-area label.
             // Fail-soft: an unavailable pack leaves the resolved identity null and the run continues.
-            if(!string.IsNullOrWhiteSpace(snapshot.DomainPackCode))
+            // Pack-code fallback (mirrors LegalDecisionService): a matter may carry a PracticeAreaCode
+            // (e.g. PERSONAL_INJURY) without an explicit DomainPackCode. Resolving off the practice area —
+            // and defaulting to the Personal Injury pack — lets the normalization gate build a valid plan so
+            // the FactorInventory / Open Questions / evidence-admission stages run instead of staying empty.
+            var packCodeToResolve=
+                !string.IsNullOrWhiteSpace(snapshot.DomainPackCode) ? snapshot.DomainPackCode
+                : !string.IsNullOrWhiteSpace(snapshot.PracticeAreaCode) ? snapshot.PracticeAreaCode
+                : DecisionDomainPackCodes.PersonalInjury;
+            if(!string.IsNullOrWhiteSpace(packCodeToResolve))
             {
                 try
                 {
-                    var pack=await legalDecisionRepository.GetDomainPackAsync(tenantId,snapshot.DomainPackCode,cancellationToken);
+                    var pack=await legalDecisionRepository.GetDomainPackAsync(tenantId,packCodeToResolve,cancellationToken);
+                    // Fallback once to the Personal Injury pack when the practice-area code does not map to a
+                    // seeded pack, so a valid plan can still be built for PI matters without an explicit code.
+                    if(pack is null&&!string.Equals(packCodeToResolve,DecisionDomainPackCodes.PersonalInjury,StringComparison.OrdinalIgnoreCase))
+                        pack=await legalDecisionRepository.GetDomainPackAsync(tenantId,DecisionDomainPackCodes.PersonalInjury,cancellationToken);
                     if(pack is not null)
                     {
                         _resolvedDomainPackId=pack.DecisionDomainPackId;

@@ -1,0 +1,742 @@
+@page "/legal/casecommandcenter"
+@using Legal.Web.Services.CommandCenter
+@using Legal.Application.Features.ProviderPortal
+@inject CaseCommandCenterViewService CommandCenter
+@inject ApiClient Api
+@inject NavigationManager Navigation
+@rendermode RenderMode.InteractiveServer
+
+<PageTitle>Case Command Center</PageTitle>
+
+<LegalWorkspace ExtraClass="intel-compact">
+    <div class="ccc-root">
+        @if (_loadError is not null)
+        {
+            <div class="alert alert-danger ccc-alert" role="alert">
+                <i class="bi bi-exclamation-triangle"></i> @_loadError
+            </div>
+        }
+
+        @if (!MatterId.HasValue)
+        {
+            <div class="ccc-empty">
+                <i class="bi bi-diagram-3"></i>
+                <h2>Case + Decision Command Center</h2>
+                <p>Open a matter to view its command center, or import one from Clio.</p>
+                <a class="um-btn um-btn-primary" href="/integrations/clio"><i class="bi bi-plug"></i> Go to Clio Import</a>
+            </div>
+        }
+        else if (_loading)
+        {
+            <div class="ccc-loading"><span class="spinner-border"></span> Assembling case intelligence…</div>
+        }
+        else if (_snapshot is { } s)
+        {
+            @* ── Health banner (graceful degradation) ── *@
+            @if (s.Health.ServedFromCache)
+            {
+                <div class="ccc-health ccc-health-stale">
+                    <i class="bi bi-clock-history"></i>
+                    @s.Health.Notice
+                    @if (s.Health.CachedAgeText is not null)
+                    {
+                        <span class="ccc-stale-age">Last synced @s.Health.CachedAgeText</span>
+                    }
+                </div>
+            }
+            else if (s.Health.Notice is not null)
+            {
+                <div class="ccc-health">@s.Health.Notice</div>
+            }
+
+            @* ── Matter toolbar: search + section nav ── *@
+            <div class="ccc-toolbar">
+                <div class="ccc-search">
+                    <i class="bi bi-search"></i>
+                    <input type="search" placeholder="Search this matter (documents, notes, communications, tasks…)"
+                           value="@_search" @oninput="OnSearchInput" />
+                    @if (!string.IsNullOrWhiteSpace(_search))
+                    {
+                        <button type="button" class="ccc-search-clear" @onclick="ClearSearch" title="Clear"><i class="bi bi-x"></i></button>
+                    }
+                </div>
+                <nav class="ccc-sectionnav">
+                    <a href="#ccc-overview" class="ccc-sectionnav-link is-active">Overview</a>
+                    <a href="#ccc-decision" class="ccc-sectionnav-link">Decision Intelligence</a>
+                    <a href="#ccc-timeline" class="ccc-sectionnav-link">Timeline</a>
+                    <a href="#ccc-treatment" class="ccc-sectionnav-link">Medical &amp; Treatment</a>
+                    <a href="#ccc-economics" class="ccc-sectionnav-link">Case Economics</a>
+                    <a href="#ccc-parties" class="ccc-sectionnav-link">Parties &amp; Providers</a>
+                </nav>
+            </div>
+
+            @* ── Matter header ── *@
+            <header class="ccc-header" id="ccc-overview">
+                <div class="ccc-header-main">
+                    <div class="ccc-header-title">
+                        <i class="bi bi-folder-fill"></i>
+                        <h1>@s.Identity.Title</h1>
+                    </div>
+                    <div class="ccc-header-tags">
+                        <span class="ccc-tag ccc-tag-pi">@s.Identity.PracticeArea</span>
+                        @if (!string.IsNullOrWhiteSpace(s.Lifecycle.StageName))
+                        {
+                            <span class="ccc-tag ccc-tag-stage">@s.Lifecycle.StageName</span>
+                        }
+                        @if (s.Identity.ClioMatterId is { } cid)
+                        {
+                            <a class="ccc-clio-link" href="https://app.clio.com/nc/#/matters/@cid" target="_blank" rel="noopener">
+                                Clio Matter @s.Identity.ClioDisplayNumber <i class="bi bi-box-arrow-up-right"></i>
+                            </a>
+                        }
+                    </div>
+                </div>
+                <div class="ccc-header-meta">
+                    <div><span class="ccc-meta-k">Client</span><span class="ccc-meta-v">@(s.Identity.ClientName ?? "—")</span></div>
+                    @if (FactValue(s, "Date of Incident") is { } incidentDate) { <div><span class="ccc-meta-k">Date of Incident</span><span class="ccc-meta-v">@incidentDate</span></div> }
+                    @if (FactValue(s, "Accident Location") is { } location) { <div><span class="ccc-meta-k">Location</span><span class="ccc-meta-v">@location</span></div> }
+                    @if (FactValue(s, "Insurance Carrier") is { } carrier) { <div><span class="ccc-meta-k">Primary Policy</span><span class="ccc-meta-v">@carrier</span></div> }
+                    @if (FactValue(s, "Policy Limits") is { } policyLimits) { <div><span class="ccc-meta-k">Policy Limits</span><span class="ccc-meta-v">@policyLimits</span></div> }
+                    @if (FactValue(s, "Claim Number") is { } claimNo) { <div><span class="ccc-meta-k">Claim Number</span><span class="ccc-meta-v">@claimNo</span></div> }
+                    <div><span class="ccc-meta-k">Documents</span><span class="ccc-meta-v">@s.Decision.DocumentCount</span></div>
+                    <div><span class="ccc-meta-k">Evidence</span><span class="ccc-meta-v">@s.Decision.EvidenceCount</span></div>
+                </div>
+                <div class="ccc-header-actions">
+                    @if (s.Identity.ClioMatterId is { } clioId)
+                    {
+                        <a class="um-btn um-btn-secondary ccc-open-clio" href="https://app.clio.com/nc/#/matters/@clioId" target="_blank" rel="noopener">
+                            <i class="bi bi-box-arrow-up-right"></i> Open in Clio
+                        </a>
+                    }
+                    <div class="ccc-viewas">
+                        <span>View as:</span>
+                        <button class="ccc-viewas-btn active" type="button">Law Firm</button>
+                        <a class="ccc-viewas-btn" href="/legal/providercaseview?matterId=@MatterId">Medical Provider</a>
+                    </div>
+                </div>
+            </header>
+
+            @* ── Matter lifecycle (Clio stage = context only) ── *@
+            <section class="ccc-card ccc-lifecycle">
+                <div class="ccc-card-head">
+                    <h2><i class="bi bi-signpost-2"></i> Matter Lifecycle</h2>
+                    <span class="ccc-readonly">@s.Lifecycle.PracticeArea practice area (from Clio) · Read only</span>
+                </div>
+                <ol class="ccc-stages">
+                    @for (var i = 0; i < MatterLifecycleContext.PersonalInjuryStages.Count; i++)
+                    {
+                        var stage = MatterLifecycleContext.PersonalInjuryStages[i];
+                        var seq = i + 1;
+                        var cur = s.Lifecycle.StageSequence;
+                        var cls = cur is null ? "future" : seq < cur ? "done" : seq == cur ? "current" : "future";
+                        <li class="ccc-stage @cls" @onclick="() => FilterTimelineByStage(stage)">
+                            <span class="ccc-stage-dot">
+                                @if (cls == "done") { <i class="bi bi-check"></i> }
+                                else if (cls == "current") { <i class="bi bi-record-circle"></i> }
+                            </span>
+                            <span class="ccc-stage-name">@seq. @stage</span>
+                        </li>
+                    }
+                </ol>
+                @if (!string.IsNullOrWhiteSpace(s.Lifecycle.StageName))
+                {
+                    <div class="ccc-stage-current">
+                        <span class="ccc-stage-current-k">Current Stage</span>
+                        <span class="ccc-stage-current-v">@s.Lifecycle.StageName</span>
+                        <small>Synced from Clio</small>
+                    </div>
+                }
+            </section>
+
+            @* ── What matters now strip (derived from real snapshot counts) ── *@
+            <section class="ccc-matters-now">
+                <span class="ccc-matters-now-label"><i class="bi bi-flag-fill"></i> @(s.Lifecycle.StageName?.ToUpperInvariant() ?? "WORKFLOW") — WHAT MATTERS NOW</span>
+                <div class="ccc-matters-now-items">
+                    <span class="ccc-mn-item"><i class="bi bi-calendar-event"></i> @UpcomingDeadlines(s) upcoming deadline@(UpcomingDeadlines(s) == 1 ? "" : "s")</span>
+                    <span class="ccc-mn-item"><i class="bi bi-clock-history"></i> @MaterialChanges(s) material change@(MaterialChanges(s) == 1 ? "" : "s") since last review</span>
+                    <span class="ccc-mn-item"><i class="bi bi-exclamation-octagon"></i> @HighUncertainties(s) high uncertaint@(HighUncertainties(s) == 1 ? "y" : "ies")</span>
+                    <span class="ccc-mn-item"><i class="bi bi-lightning-charge"></i> @HighChangeFactors(s) high-impact change factor@(HighChangeFactors(s) == 1 ? "" : "s")</span>
+                </div>
+            </section>
+
+            @* ── Decision Intelligence hero (POLOXI) ── *@
+            <section class="ccc-card ccc-hero" id="ccc-decision">
+                <div class="ccc-hero-head">
+                    <div>
+                        <h2><i class="bi bi-cpu"></i> Judz Decision Intelligence</h2>
+                        <span class="ccc-hero-sub">Powered by POLOXI · From facts to decisions.</span>
+                    </div>
+                    <div class="ccc-hero-state">
+                        @switch (s.Decision.State)
+                        {
+                            case DecisionAnalysisState.Calculated:
+                                <span class="ccc-badge ccc-badge-ok"><i class="bi bi-check-circle"></i> Analysis current</span>
+                                break;
+                            case DecisionAnalysisState.Interpretive:
+                                <span class="ccc-badge ccc-badge-warn"><i class="bi bi-lightbulb"></i> Interpretive — competition not executed</span>
+                                break;
+                            default:
+                                <span class="ccc-badge ccc-badge-muted"><i class="bi bi-hourglass"></i> Not yet analyzed</span>
+                                break;
+                        }
+                        <a class="um-btn um-btn-primary ccc-hero-open" href="/legal/personalinjury_decision2?matterId=@MatterId">
+                            Open Full Analysis <i class="bi bi-arrow-right"></i>
+                        </a>
+                    </div>
+                </div>
+
+                @if (s.DomainPack is { } dp)
+                {
+                    <div class="ccc-domainpack @(dp.Applied ? "is-applied" : "is-pending")">
+                        <i class="bi bi-diagram-3"></i>
+                        <span class="ccc-dp-label">Domain Pack</span>
+                        <span class="ccc-dp-code">@dp.PackCode</span>
+                        <span class="ccc-dp-flag">@(dp.Applied ? "APPLIED" : "NOT APPLIED")</span>
+                        @if (dp.Applied)
+                        {
+                            <span class="ccc-dp-count">@dp.DocumentsTagged doc(s) tagged</span>
+                        }
+                        @if (!string.IsNullOrWhiteSpace(dp.MatterType))
+                        {
+                            <span class="ccc-dp-type">@dp.MatterType</span>
+                        }
+                    </div>
+                }
+
+                @if (s.Decision.State == DecisionAnalysisState.NotRun)
+                {
+                    <div class="ccc-notrun">
+                        <i class="bi bi-info-circle"></i>
+                        No decision session has executed for this matter yet. Open Full Analysis to run the Decision2 / Wide2 pipeline.
+                    </div>
+                }
+                else
+                {
+                    <div class="ccc-hero-grid">
+                        @* Current position *@
+                        <div class="ccc-hero-col">
+                            <h3>Current Decision Position</h3>
+                            @if (s.Decision.Candidates.Count == 0)
+                            {
+                                <p class="ccc-muted">No leading interpretation available.</p>
+                            }
+                            else
+                            {
+                                @foreach (var c in s.Decision.Candidates)
+                                {
+                                    <div class="ccc-candidate">
+                                        <span class="ccc-candidate-code">@c.Code</span>
+                                        <div class="ccc-candidate-body">
+                                            <strong>@c.Label</strong>
+                                            @if (c.Probability is { } p)
+                                            {
+                                                <span class="ccc-candidate-pct">@((p * 100).ToString("0"))%</span>
+                                                <div class="ccc-support-bar"><div class="ccc-support-fill" style="width:@((p * 100).ToString("0"))%"></div></div>
+                                            }
+                                            else
+                                            {
+                                                <span class="ccc-candidate-interp">Leading interpretation · Competition: NOT EXECUTED</span>
+                                                <div class="ccc-support-bar ccc-support-bar--interp"><div class="ccc-support-fill ccc-support-fill--interp"></div></div>
+                                            }
+                                            @if (!string.IsNullOrWhiteSpace(c.Rationale)) { <small>@c.Rationale</small> }
+                                        </div>
+                                    </div>
+                                }
+                            }
+                        </div>
+
+                        @* Uncertainties *@
+                        <div class="ccc-hero-col">
+                            <h3>Key Uncertainties</h3>
+                            @if (s.Decision.Uncertainties.Count == 0) { <p class="ccc-muted">None calculated.</p> }
+                            @foreach (var u in s.Decision.Uncertainties)
+                            {
+                                <div class="ccc-uncert" @onclick="() => OpenSource(u.Code, u.Title, u.Detail)">
+                                    <span class="ccc-chip ccc-sev-@u.Severity.ToLower()">@u.Severity</span>
+                                    <div><strong>@u.Code</strong> @u.Title</div>
+                                </div>
+                            }
+                        </div>
+
+                        @* What could change *@
+                        <div class="ccc-hero-col">
+                            <h3>What Could Change the Decision</h3>
+                            @if (s.Decision.ChangeFactors.Count == 0) { <p class="ccc-muted">None calculated.</p> }
+                            @foreach (var f in s.Decision.ChangeFactors)
+                            {
+                                <div class="ccc-change" @onclick="() => OpenSource(f.Code, f.Title, null)">
+                                    <span class="ccc-chip ccc-sev-@f.Impact.ToLower()">@f.Impact</span>
+                                    <div><strong>@f.Code</strong> @f.Title</div>
+                                </div>
+                            }
+                        </div>
+
+                        @* Resolve next *@
+                        <div class="ccc-hero-col ccc-resolve">
+                            <h3>What To Resolve Next</h3>
+                            @if (s.Decision.ResolveNext is { } rn)
+                            {
+                                <div class="ccc-resolve-card">
+                                    <strong>@rn.PropositionId — @rn.Title</strong>
+                                    <p>@rn.ResolutionQuestion</p>
+                                    @if (!string.IsNullOrWhiteSpace(rn.MissingInformation))
+                                    {
+                                        <div class="ccc-missing"><span>Missing</span> @rn.MissingInformation</div>
+                                    }
+                                    <div class="ccc-resolve-metrics">
+                                        <div class="ccc-metric">
+                                            <span class="ccc-metric-label">IV</span>
+                                            <span class="ccc-metric-value @(rn.InformationValue is null ? "ccc-metric-na" : null)">
+                                                @(rn.InformationValue is { } iv ? iv.ToString("0.00") : "NOT CALCULATED")
+                                            </span>
+                                        </div>
+                                        <div class="ccc-metric">
+                                            <span class="ccc-metric-label">Flip</span>
+                                            <span class="ccc-metric-value @(rn.FlipPotential is null ? "ccc-metric-na" : null)">
+                                                @(rn.FlipPotential is { } fp ? fp.ToString("0.00") : "NOT CALCULATED")
+                                            </span>
+                                        </div>
+                                        <div class="ccc-metric">
+                                            <span class="ccc-metric-label">LegalADV</span>
+                                            <span class="ccc-metric-value @(rn.LegalAdv is null ? "ccc-metric-na" : null)">
+                                                @(rn.LegalAdv is { } la ? la.ToString("0.00") : "NOT CALCULATED")
+                                            </span>
+                                        </div>
+                                    </div>
+                                    <button class="um-btn um-btn-secondary ccc-evidence-btn" type="button"
+                                            @onclick="() => OpenSource(rn.PropositionId, rn.Title, rn.MissingInformation)">
+                                        <i class="bi bi-search"></i> Evidence &amp; Source Documents
+                                    </button>
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="ccc-resolve-state">
+                                    <span class="ccc-chip ccc-sev-medium">@s.Decision.ResolveNextState</span>
+                                    <p class="ccc-muted">@(s.Decision.ResolveNextReason ?? "Resolution priority is not available.")</p>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                }
+            </section>
+
+            @* ── Supporting panels row 1 ── *@
+            <div class="ccc-row">
+                <section class="ccc-card">
+                    <div class="ccc-card-head"><h2><i class="bi bi-activity"></i> Case Pulse</h2></div>
+                    @if (s.CasePulse.Count == 0) { <p class="ccc-muted">Nothing flagged — requires a decision analysis.</p> }
+                    @foreach (var p in s.CasePulse)
+                    {
+                        <div class="ccc-pulse" @onclick="() => OpenSource(p.RelatedPropositionId, p.Title, p.Detail)">
+                            <span class="ccc-pulse-rank">@p.Rank</span>
+                            <div><strong>@p.Title</strong>@if (p.Detail is not null) { <small>@p.Detail</small> }</div>
+                        </div>
+                    }
+                </section>
+
+                <section class="ccc-card">
+                    <div class="ccc-card-head"><h2><i class="bi bi-clock-history"></i> Since Your Last Review</h2></div>
+                    @if (s.SinceLastReview.Count == 0) { <p class="ccc-muted">No recorded changes.</p> }
+                    @foreach (var r in s.SinceLastReview)
+                    {
+                        <div class="ccc-since @(r.IsMaterial ? "material" : "routine")">
+                            <span class="ccc-since-kind">@r.Kind</span>
+                            <div><strong>@r.Title</strong>@if (r.Detail is not null) { <small>@r.Detail</small> }</div>
+                        </div>
+                    }
+                </section>
+
+                <section class="ccc-card">
+                    <div class="ccc-card-head"><h2><i class="bi bi-calendar-event"></i> Key Dates</h2></div>
+                    @if (s.KeyDates.Count == 0) { <p class="ccc-muted">No key dates extracted.</p> }
+                    @foreach (var d in s.KeyDates)
+                    {
+                        <div class="ccc-date">
+                            <span class="ccc-date-dot ccc-tone-@(d.Tone ?? "normal")"></span>
+                            <span class="ccc-date-label">@d.Label</span>
+                            <span class="ccc-date-value">@(d.Date?.ToString("MMM d, yyyy") ?? "—")</span>
+                            @if (d.Countdown is not null) { <span class="ccc-date-count">@d.Countdown</span> }
+                        </div>
+                    }
+                </section>
+
+                <section class="ccc-card">
+                    <div class="ccc-card-head"><h2><i class="bi bi-clipboard-data"></i> Matter Status</h2></div>
+                    <div class="ccc-status">
+                        <div><span>Practice Area</span><strong>@s.Identity.PracticeArea</strong></div>
+                        <div><span>Stage (Clio)</span><strong>@(s.Lifecycle.StageName ?? "—")</strong></div>
+                        <div><span>Current Outcome</span><strong>@(s.Decision.CurrentOutcome ?? "—")</strong></div>
+                        <div><span>Total Documents</span><strong>@s.Decision.DocumentCount</strong></div>
+                    </div>
+                </section>
+            </div>
+
+            @* ── Supporting panels row 2 ── *@
+            <div class="ccc-row">
+                <section class="ccc-card ccc-span2" id="ccc-timeline">
+                    <div class="ccc-card-head"><h2><i class="bi bi-diagram-2"></i> Case Timeline</h2></div>
+                    @if (s.Timeline.Count == 0) { <p class="ccc-muted">No timeline events extracted yet.</p> }
+                    <ul class="ccc-timeline">
+                        @foreach (var e in s.Timeline.Where(e => Matches(e.Title, e.Category, e.Detail)))
+                        {
+                            <li @onclick="() => OpenSource(e.RelatedPropositionId, e.Title, e.Detail)">
+                                <span class="ccc-timeline-dot"></span>
+                                <div>
+                                    <strong>@e.Title</strong>
+                                    <small>@(e.OccurredAt?.ToString("MMM d, yyyy") ?? "") @(e.Category is not null ? $"· {e.Category}" : "")</small>
+                                </div>
+                            </li>
+                        }
+                    </ul>
+                </section>
+
+                <section class="ccc-card" id="ccc-treatment">
+                    <div class="ccc-card-head"><h2><i class="bi bi-heart-pulse"></i> Treatment Journey</h2></div>
+                    @if (s.Treatment.Count == 0) { <p class="ccc-muted">No providers identified from Clio contacts or medical records.</p> }
+                    <ul class="ccc-treatment">
+                        @foreach (var t in s.Treatment.Where(t => Matches(t.Name, t.Provider, t.Status, t.Dates)))
+                        {
+                            <li>
+                                <i class="bi bi-plus-circle"></i>
+                                <div class="ccc-treatment-main">
+                                    <strong>@t.Name</strong>
+                                    @if (t.Dates is not null) { <small>@t.Dates</small> }
+                                    @if (!string.IsNullOrWhiteSpace(t.Status)) { <span class="ccc-treatment-status">@t.Status</span> }
+                                </div>
+                                @if (t.RecordCount is { } rc && rc > 0)
+                                {
+                                    <span class="ccc-treatment-count" title="Extracted medical evidence items from this source">@rc record@(rc == 1 ? "" : "s")</span>
+                                }
+                            </li>
+                        }
+                    </ul>
+                </section>
+
+                <section class="ccc-card" id="ccc-economics">
+                    <div class="ccc-card-head"><h2><i class="bi bi-cash-coin"></i> Case Economics</h2></div>
+                    @if (s.Economics.Count == 0) { <p class="ccc-muted">No economics fields present.</p> }
+                    @foreach (var g in s.Economics.GroupBy(e => e.Group))
+                    {
+                        <div class="ccc-econ-group">
+                            <span class="ccc-econ-group-name">@g.Key</span>
+                            @foreach (var line in g)
+                            {
+                                <div class="ccc-econ-line">
+                                    <span>@line.Label</span>
+                                    <strong>@(line.Amount is { } a ? a.ToString("C0") : (line.Note ?? "—"))</strong>
+                                </div>
+                            }
+                        </div>
+                    }
+                </section>
+            </div>
+
+            @* ── Provider sharing summary + parties ── *@
+            <div class="ccc-row">
+                <section class="ccc-card ccc-span2" id="ccc-parties">
+                    <div class="ccc-card-head">
+                        <h2><i class="bi bi-people"></i> Parties &amp; Providers</h2>
+                        <span class="ccc-readonly">From Clio contacts · roles preserved</span>
+                    </div>
+                    <table class="ccc-parties">
+                        <thead><tr><th>Name</th><th>Clio Role</th><th>Classification</th><th></th></tr></thead>
+                        <tbody>
+                            @foreach (var p in s.Parties.Where(p => Matches(p.DisplayName, p.SourceRole, p.NormalizedRole)))
+                            {
+                                <tr>
+                                    <td>@p.DisplayName</td>
+                                    <td>@(p.SourceRole ?? "—")</td>
+                                    <td>@(p.NormalizedRole ?? "Unclassified")</td>
+                                    <td>@if (p.RequiresReview) { <span class="ccc-chip ccc-sev-medium">Review</span> }</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </section>
+
+                <section class="ccc-card ccc-span2">
+                    <div class="ccc-card-head">
+                        <h2><i class="bi bi-share"></i> Provider Sharing</h2>
+                        <a class="um-btn um-btn-primary um-btn-sm" href="/legal/providercaseview?matterId=@MatterId">
+                            <i class="bi bi-eye"></i> Preview Provider View
+                        </a>
+                    </div>
+                    <p class="ccc-muted">Attorney-approved, provider-safe projection. Each provider sees only what you enable here. Strategy, candidate competition, and POLOXI reasoning are never shared.</p>
+
+                    @{ var providers = BuildSharingRows(s); }
+                    @if (providers.Count == 0)
+                    {
+                        <p class="ccc-muted">No treating providers detected for this matter yet.</p>
+                    }
+                    else
+                    {
+                        <table class="ccc-sharing">
+                            <thead>
+                                <tr>
+                                    <th>Provider</th>
+                                    <th>Portal</th>
+                                    <th>Status</th>
+                                    <th>Treatment</th>
+                                    <th>Records</th>
+                                    <th>Bills</th>
+                                    <th>Requests</th>
+                                    <th>Open</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var row in providers)
+                                {
+                                    <tr>
+                                        <td>@row.ProviderDisplayName</td>
+                                        <td><input type="checkbox" checked="@row.PortalEnabled" @onchange="e => row.PortalEnabled = ToBool(e)" /></td>
+                                        <td><input type="checkbox" checked="@row.ShareMatterStatus" @onchange="e => row.ShareMatterStatus = ToBool(e)" /></td>
+                                        <td><input type="checkbox" checked="@row.SharePatientTreatment" @onchange="e => row.SharePatientTreatment = ToBool(e)" /></td>
+                                        <td><input type="checkbox" checked="@row.ShareOwnRecords" @onchange="e => row.ShareOwnRecords = ToBool(e)" /></td>
+                                        <td><input type="checkbox" checked="@row.ShareOwnBills" @onchange="e => row.ShareOwnBills = ToBool(e)" /></td>
+                                        <td><input type="checkbox" checked="@row.ShareFirmRequests" @onchange="e => row.ShareFirmRequests = ToBool(e)" /></td>
+                                        <td>@row.OpenRequestCount</td>
+                                        <td>
+                                            <button class="um-btn um-btn-secondary um-btn-sm" type="button"
+                                                    disabled="@_savingProvider"
+                                                    @onclick="() => SaveSharingAsync(row)">Save</button>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                        @if (_sharingNotice is not null)
+                        {
+                            <p class="ccc-muted">@_sharingNotice</p>
+                        }
+                    }
+                </section>
+            </div>
+        }
+    </div>
+
+    @* ── Source / Evidence drawer ── *@
+    @if (_drawerOpen)
+    {
+        <div class="ccc-drawer-backdrop" @onclick="CloseDrawer"></div>
+        <aside class="ccc-drawer">
+            <div class="ccc-drawer-head">
+                <h3><i class="bi bi-file-earmark-text"></i> Source</h3>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="CloseDrawer"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <div class="ccc-drawer-body">
+                @if (_drawerRef is not null) { <div class="ccc-drawer-ref">@_drawerRef</div> }
+                <h4>@_drawerTitle</h4>
+                @if (_drawerDetail is not null) { <p>@_drawerDetail</p> }
+                <div class="ccc-drawer-note">
+                    <i class="bi bi-shield-check"></i>
+                    Drill-down terminates at the source passage and its Judz interpretation.
+                    Decision effects are shown only when POLOXI actually calculated one.
+                </div>
+                <a class="um-btn um-btn-secondary" href="/legal/personalinjury_decision2?matterId=@MatterId">
+                    <i class="bi bi-arrow-up-right"></i> Open Full Analysis
+                </a>
+            </div>
+        </aside>
+    }
+</LegalWorkspace>
+
+@code {
+    [Parameter, SupplyParameterFromQuery(Name = "matterId")]
+    public Guid? MatterId { get; set; }
+
+    private bool _loading;
+    private string? _loadError;
+    private MatterIntelligenceSnapshot? _snapshot;
+
+    private bool _drawerOpen;
+    private string? _drawerRef;
+    private string? _drawerTitle;
+    private string? _drawerDetail;
+
+    private string _search = string.Empty;
+
+    private void OnSearchInput(ChangeEventArgs e) => _search = e.Value?.ToString() ?? string.Empty;
+    private void ClearSearch() => _search = string.Empty;
+
+    private bool Matches(params string?[] fields)
+    {
+        if (string.IsNullOrWhiteSpace(_search)) return true;
+        foreach (var f in fields)
+            if (!string.IsNullOrEmpty(f) && f.Contains(_search, StringComparison.OrdinalIgnoreCase))
+                return true;
+        return false;
+    }
+
+    private static string? FactValue(MatterIntelligenceSnapshot s, string factName) =>
+        s.Facts.FirstOrDefault(f => string.Equals(f.Name, factName, StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(f.Value))?.Value;
+
+    private static int UpcomingDeadlines(MatterIntelligenceSnapshot s) => s.KeyDates.Count(d => d.Countdown is not null);
+    private static int MaterialChanges(MatterIntelligenceSnapshot s) => s.SinceLastReview.Count(r => r.IsMaterial);
+    private static int HighUncertainties(MatterIntelligenceSnapshot s) => s.Decision.Uncertainties.Count(u => string.Equals(u.Severity, "HIGH", StringComparison.OrdinalIgnoreCase));
+    private static int HighChangeFactors(MatterIntelligenceSnapshot s) => s.Decision.ChangeFactors.Count(f => string.Equals(f.Impact, "HIGH", StringComparison.OrdinalIgnoreCase));
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!MatterId.HasValue) { _snapshot = null; return; }
+        await LoadAsync(MatterId.Value);
+    }
+
+    private async Task LoadAsync(Guid matterId)
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            _snapshot = await CommandCenter.BuildAsync(matterId);
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to assemble the command center: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void FilterTimelineByStage(string stage)
+    {
+        // Lifecycle stage filters the timeline presentation only; it never changes Clio or POLOXI.
+        OpenSource(null, $"Stage filter: {stage}", "Clicking a stage filters the timeline view. It does not modify Clio or any decision score.");
+    }
+
+    private void OpenSource(string? reference, string title, string? detail)
+    {
+        _drawerRef = reference;
+        _drawerTitle = title;
+        _drawerDetail = detail;
+        _drawerOpen = true;
+    }
+
+    private void CloseDrawer() => _drawerOpen = false;
+
+    // ── Provider sharing editor state ────────────────────────────────────────
+    private bool _savingProvider;
+    private string? _sharingNotice;
+
+    private sealed class ProviderSharingRow
+    {
+        public string ProviderKey { get; set; } = string.Empty;
+        public string ProviderDisplayName { get; set; } = string.Empty;
+        public bool PortalEnabled { get; set; }
+        public bool ShareMatterStatus { get; set; } = true;
+        public bool ShareCurrentStage { get; set; } = true;
+        public bool SharePatientTreatment { get; set; } = true;
+        public bool ShareOwnRecords { get; set; } = true;
+        public bool ShareOwnBills { get; set; } = true;
+        public bool ShareFirmRequests { get; set; } = true;
+        public bool ShareOtherProviders { get; set; }
+        public bool ShareSettlementInfo { get; set; }
+        public int OpenRequestCount { get; set; }
+    }
+
+    private static string NormalizeProviderKey(string name) => name.Trim().ToLowerInvariant();
+
+    private List<ProviderSharingRow> BuildSharingRows(MatterIntelligenceSnapshot s)
+    {
+        // Merge saved policies with detected treating providers so every provider is editable,
+        // defaulting to the fail-closed "portal disabled" state until the attorney enables it.
+        var byKey = s.ProviderSharing.ToDictionary(p => p.ProviderKey, StringComparer.OrdinalIgnoreCase);
+        var rows = new List<ProviderSharingRow>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        var providers = s.Parties
+            .Where(p => p.IsProvider)
+            .Select(p => p.DisplayName)
+            .Concat(s.Treatment.Where(t => !string.IsNullOrWhiteSpace(t.Provider)).Select(t => t.Provider!))
+            .Where(n => !string.IsNullOrWhiteSpace(n));
+
+        foreach (var name in providers)
+        {
+            var key = NormalizeProviderKey(name);
+            if (!seen.Add(key)) continue;
+            if (byKey.TryGetValue(key, out var pol))
+            {
+                rows.Add(new ProviderSharingRow
+                {
+                    ProviderKey = pol.ProviderKey,
+                    ProviderDisplayName = pol.ProviderDisplayName,
+                    PortalEnabled = pol.PortalEnabled,
+                    ShareMatterStatus = pol.ShareMatterStatus,
+                    ShareCurrentStage = pol.ShareCurrentStage,
+                    SharePatientTreatment = pol.SharePatientTreatment,
+                    ShareOwnRecords = pol.ShareOwnRecords,
+                    ShareOwnBills = pol.ShareOwnBills,
+                    ShareFirmRequests = pol.ShareFirmRequests,
+                    ShareOtherProviders = pol.ShareOtherProviders,
+                    ShareSettlementInfo = pol.ShareSettlementInfo,
+                    OpenRequestCount = pol.OpenRequestCount
+                });
+            }
+            else
+            {
+                rows.Add(new ProviderSharingRow { ProviderKey = key, ProviderDisplayName = name });
+            }
+        }
+
+        // Include any saved policies whose provider is no longer detected (never drop saved config).
+        foreach (var pol in s.ProviderSharing)
+        {
+            if (seen.Add(pol.ProviderKey))
+                rows.Add(new ProviderSharingRow
+                {
+                    ProviderKey = pol.ProviderKey,
+                    ProviderDisplayName = pol.ProviderDisplayName,
+                    PortalEnabled = pol.PortalEnabled,
+                    ShareMatterStatus = pol.ShareMatterStatus,
+                    ShareCurrentStage = pol.ShareCurrentStage,
+                    SharePatientTreatment = pol.SharePatientTreatment,
+                    ShareOwnRecords = pol.ShareOwnRecords,
+                    ShareOwnBills = pol.ShareOwnBills,
+                    ShareFirmRequests = pol.ShareFirmRequests,
+                    ShareOtherProviders = pol.ShareOtherProviders,
+                    ShareSettlementInfo = pol.ShareSettlementInfo,
+                    OpenRequestCount = pol.OpenRequestCount
+                });
+        }
+
+        return rows.OrderBy(r => r.ProviderDisplayName).ToList();
+    }
+
+    private static bool ToBool(ChangeEventArgs e) => e.Value is bool b && b;
+
+    private async Task SaveSharingAsync(ProviderSharingRow row)
+    {
+        if (!MatterId.HasValue) return;
+        _savingProvider = true;
+        _sharingNotice = null;
+        try
+        {
+            await Api.SaveProviderSharingPolicyAsync(new SaveProviderSharingPolicyRequest(
+                MatterId.Value,
+                row.ProviderKey,
+                row.ProviderDisplayName,
+                row.PortalEnabled,
+                row.ShareMatterStatus,
+                row.ShareCurrentStage,
+                row.SharePatientTreatment,
+                row.ShareOwnRecords,
+                row.ShareOwnBills,
+                row.ShareFirmRequests,
+                row.ShareOtherProviders,
+                row.ShareSettlementInfo));
+            _sharingNotice = $"Sharing policy saved for {row.ProviderDisplayName}.";
+        }
+        catch (Exception ex)
+        {
+            _sharingNotice = $"Save failed: {ex.Message}";
+        }
+        finally
+        {
+            _savingProvider = false;
+        }
+    }
+}

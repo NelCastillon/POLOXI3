@@ -1,0 +1,160 @@
+@page "/legal/providercaseview"
+@using Legal.Web.Services.CommandCenter
+@using Legal.Web.Services
+@using Legal.Application.Features.ProviderPortal
+@inject CaseCommandCenterViewService CommandCenter
+@inject ApiClient Api
+@rendermode RenderMode.InteractiveServer
+
+<PageTitle>Provider Case Portal</PageTitle>
+
+<LegalWorkspace ExtraClass="intel-compact">
+    <div class="pcv-root">
+        <div class="pcv-banner">
+            <i class="bi bi-shield-lock"></i>
+            Provider-safe view generated from the attorney-approved sharing policy. No case strategy, candidate competition, POLOXI reasoning, or privileged material is included.
+        </div>
+
+        @if (!MatterId.HasValue)
+        {
+            <div class="pcv-empty"><i class="bi bi-eye-slash"></i><p>No matter selected.</p></div>
+        }
+        else if (_loading)
+        {
+            <div class="pcv-empty"><span class="spinner-border"></span> Loading…</div>
+        }
+        else if (_snapshot is { } s && _policy is { PortalEnabled: true } policy)
+        {
+            <header class="pcv-header">
+                <h1>@s.Identity.Title</h1>
+                <span class="pcv-sub">Provider Case Portal · @policy.ProviderDisplayName</span>
+            </header>
+
+            @if (policy.ShareMatterStatus)
+            {
+                <section class="pcv-card">
+                    <h2>Case Status</h2>
+                    @* Fail-closed: only the high-level status/stage is ever shared. *@
+                    <p class="pcv-status">
+                        Active@(policy.ShareCurrentStage ? $" — {s.Lifecycle.StageName ?? "In Progress"}" : string.Empty)
+                    </p>
+                    <p class="pcv-muted">Your patient's case remains active. No action is required from you unless shown below.</p>
+                </section>
+            }
+
+            @if (policy.ShareFirmRequests)
+            {
+                <section class="pcv-card">
+                    <h2>What the Firm Needs From You</h2>
+                    @{ var open = _requests.Where(r => string.Equals(r.StatusCode, "OPEN", StringComparison.OrdinalIgnoreCase)).ToList(); }
+                    @if (open.Count == 0)
+                    {
+                        <p class="pcv-muted">No outstanding requests. Nothing is needed from you right now.</p>
+                    }
+                    else
+                    {
+                        <ul class="pcv-list">
+                            @foreach (var r in open)
+                            {
+                                <li>
+                                    <i class="bi bi-exclamation-circle"></i>
+                                    <strong>@r.Title</strong>
+                                    @if (!string.IsNullOrWhiteSpace(r.Detail)) { <small>@r.Detail</small> }
+                                    <small>Requested @r.RequestedDateUtc.ToString("MMM d, yyyy")</small>
+                                </li>
+                            }
+                        </ul>
+                    }
+                </section>
+            }
+
+            @if (policy.SharePatientTreatment)
+            {
+                <section class="pcv-card">
+                    <h2>Your Patient's Treatment</h2>
+                    @{ var mine = TreatmentForProvider(s, policy); }
+                    @if (mine.Count == 0) { <p class="pcv-muted">No provider treatment information shared.</p> }
+                    <ul class="pcv-list">
+                        @foreach (var t in mine)
+                        {
+                            <li><i class="bi bi-heart-pulse"></i> <strong>@t.Name</strong>@if (t.Dates is not null) { <small>@t.Dates</small> }</li>
+                        }
+                    </ul>
+                </section>
+            }
+
+            <section class="pcv-card pcv-ledger">
+                <h2>Shared With You</h2>
+                <ul class="pcv-list">
+                    @if (policy.ShareMatterStatus) { <li><i class="bi bi-check-circle"></i> Relevant case-status updates</li> }
+                    @if (policy.SharePatientTreatment) { <li><i class="bi bi-check-circle"></i> Your patient's treatment information</li> }
+                    @if (policy.ShareOwnRecords) { <li><i class="bi bi-check-circle"></i> Records associated with your organization</li> }
+                    @if (policy.ShareOwnBills) { <li><i class="bi bi-check-circle"></i> Bills associated with your organization</li> }
+                </ul>
+                <p class="pcv-muted">
+                    <i class="bi bi-lock"></i> Not shared: Attorney strategy · Decision Intelligence · POLOXI analysis · Privileged communications@(policy.ShareOtherProviders ? string.Empty : " · Other provider information")
+                </p>
+            </section>
+        }
+        else
+        {
+            @* Fail closed: no enabled sharing policy for this provider — expose nothing. *@
+            <div class="pcv-empty"><i class="bi bi-shield-exclamation"></i><p>This provider portal is not enabled. No information is shown.</p></div>
+        }
+    </div>
+</LegalWorkspace>
+
+@code {
+    [Parameter, SupplyParameterFromQuery(Name = "matterId")]
+    public Guid? MatterId { get; set; }
+
+    [Parameter, SupplyParameterFromQuery(Name = "providerKey")]
+    public string? ProviderKey { get; set; }
+
+    private bool _loading;
+    private MatterIntelligenceSnapshot? _snapshot;
+    private ProviderSharingPolicyDto? _policy;
+    private IReadOnlyCollection<ProviderRequestDto> _requests = [];
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!MatterId.HasValue) { _snapshot = null; _policy = null; return; }
+        _loading = true;
+        try
+        {
+            _snapshot = await CommandCenter.BuildAsync(MatterId.Value);
+
+            // Resolve the provider: explicit query key wins; otherwise fall back to the
+            // first provider the attorney has enabled a portal for (fail-closed if none).
+            var policies = await Api.GetProviderSharingPoliciesAsync(MatterId.Value);
+            _policy = !string.IsNullOrWhiteSpace(ProviderKey)
+                ? policies.FirstOrDefault(p => string.Equals(p.ProviderKey, ProviderKey, StringComparison.OrdinalIgnoreCase))
+                : policies.FirstOrDefault(p => p.PortalEnabled);
+
+            _requests = _policy is { PortalEnabled: true }
+                ? await Api.GetProviderRequestsAsync(MatterId.Value, _policy.ProviderKey)
+                : [];
+        }
+        catch
+        {
+            // Fail closed — on any error, expose nothing.
+            _snapshot = null;
+            _policy = null;
+            _requests = [];
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private static List<TreatmentStage> TreatmentForProvider(MatterIntelligenceSnapshot s, ProviderSharingPolicyDto policy)
+    {
+        // Only this provider's own treatment rows are shared unless other providers are explicitly allowed.
+        if (policy.ShareOtherProviders) return s.Treatment.ToList();
+        return s.Treatment
+            .Where(t => !string.IsNullOrWhiteSpace(t.Provider)
+                && string.Equals(t.Provider!.Trim().ToLowerInvariant(), policy.ProviderKey, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+    }
+}
