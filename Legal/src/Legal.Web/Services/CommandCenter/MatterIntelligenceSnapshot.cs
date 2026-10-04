@@ -34,24 +34,7 @@ public sealed record MatterLifecycleContext(
     string? PracticeArea,
     string? StageName,
     int? StageSequence,
-    DateTimeOffset ImportedAt)
-{
-    /// <summary>The canonical Personal Injury stage order supplied by the challenge.</summary>
-    public static readonly IReadOnlyList<string> PersonalInjuryStages =
-    [
-        "Intake", "Treatment", "Demand", "Negotiation",
-        "Litigation", "Trial", "Disbursement", "Closed"
-    ];
-
-    public static int? SequenceFor(string? stageName)
-    {
-        if (string.IsNullOrWhiteSpace(stageName)) return null;
-        for (var i = 0; i < PersonalInjuryStages.Count; i++)
-            if (string.Equals(PersonalInjuryStages[i], stageName, StringComparison.OrdinalIgnoreCase))
-                return i + 1;
-        return null;
-    }
-}
+    DateTimeOffset ImportedAt);
 
 public sealed record MatterIdentity(
     Guid MatterId,

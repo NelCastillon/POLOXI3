@@ -149,6 +149,28 @@ public sealed partial class IntelligenceWide2Service
     private static IReadOnlyList<string> CitationVerificationTokens(string citation)=>
         System.Text.RegularExpressions.Regex.Matches(citation,@"\d+").Select(match=>match.Value).Where(value=>value.Length>=2).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
 
+    // Scope pre-filter for EXTRACTED/PROPOSED authorities (applied before retrieval, not after). The model
+    // routinely free-associates an out-of-state statute for the matter's practice area (e.g. it cites
+    // "California Code of Civil Procedure § 377.60" on a NEW YORK wrongful-death matter). If such a citation
+    // is extracted it makes authorities.Count>0, which SUPPRESSES the in-state concept-map fallback; the
+    // out-of-state source is then retrieved and correctly dropped by the post-retrieval jurisdiction gate,
+    // leaving the branch with ZERO evidence. Dropping authorities whose own citation text names a DIFFERENT
+    // US-state sovereign than the matter lets the in-jurisdiction concept fallback fire instead. Authorities
+    // with no identifiable state sovereign (federal U.S.C./C.F.R., case names, bare doctrine) are KEPT so
+    // legitimate federal and cross-jurisdiction leads are never discarded. No-op when the matter targets no
+    // specific state (targetSovereign null/empty), so the matter-less pipeline is unchanged.
+    private static IReadOnlyList<LegalAuthorityReference> FilterAuthoritiesToSovereign(IReadOnlyList<LegalAuthorityReference> authorities,string? targetSovereign)
+    {
+        var target=LegalJurisdictionScope.ExtractSovereign(targetSovereign);
+        if(string.IsNullOrWhiteSpace(target)||authorities.Count==0)return authorities;
+        return authorities.Where(authority=>
+        {
+            var authoritySovereign=LegalJurisdictionScope.ExtractSovereign(authority.Query);
+            return string.IsNullOrWhiteSpace(authoritySovereign)
+                ||string.Equals(authoritySovereign,target,StringComparison.OrdinalIgnoreCase);
+        }).ToArray();
+    }
+
     // Verification gate: an authority proposed by the LLM is only evidence once a retrieved source
     // actually refers to it. The single-snippet identity check below is the mandatory gate applied
     // during retrieval before proposition-support scoring.

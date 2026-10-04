@@ -67,9 +67,14 @@ public sealed class LegalMatterCorpusActivationService(
                             tenantId, version.DomainPackCode, conceptsByPack, cancellationToken);
                         conceptBound = domainConcepts.Count > 0;
                         var resolvedPack = await domainPackResolver.ResolveAsync(tenantId, version.DomainPackCode, cancellationToken);
+                        // Semantic extraction is its own feature (LEGAL_DOCUMENT_SEMANTIC_EXTRACTION) with its own
+                        // policy whose primary deployment is the configured reasoning model (Astra). Do NOT forward
+                        // the user's decision/answer model selection here: any override steers the route repository
+                        // onto the override branch and ignores the extraction policy's primary, silently downgrading
+                        // extraction to the generic Auto model (gpt-4.1-mini) and producing no admissible evidence.
                         var proposal = await semanticInterpreter.InterpretAsync(
                             tenantId, matterId, version.LegalDocumentId, version.LegalDocumentVersionId,
-                            version.DomainPackCode, domainConcepts, passages, correlationId, modelCode, resolvedPack, cancellationToken);
+                            version.DomainPackCode, domainConcepts, passages, correlationId, modelCodeOverride: null, resolvedPack, cancellationToken);
                         evidenceExtracted = proposal.EvidenceItems.Count;
                         await corpusRepository.SaveSemanticProposalAsync(
                             tenantId, userId, matterId, version.LegalDocumentId,
@@ -124,14 +129,42 @@ public sealed class LegalMatterCorpusActivationService(
                     version.LegalDocumentId, version.LegalDocumentVersionId, version.FileName,
                     "ENRICHED", "Extracting evidence", passagesRead, evidenceExtracted,
                     conceptBound, version.DomainPackCode, Succeeded: true));
+
+                // Persist a terminal activation outcome so this version is never re-read on later passes,
+                // even when it legitimately produced no evidence. ENRICHED when evidence was derived,
+                // NO_EVIDENCE when the document carried no admissible facts (still "done", just empty).
+                var terminalStatus = evidenceExtracted > 0 ? "ENRICHED" : "NO_EVIDENCE";
+                await corpusRepository.SetVersionSemanticActivationStatusAsync(
+                    tenantId, userId, version.LegalDocumentVersionId, terminalStatus, cancellationToken);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 logger.LogWarning(ex, "Corpus activation failed for document version {VersionId}; will retry on next activation pass.", version.LegalDocumentVersionId);
+                // Surface the real exception message to the UI instead of a generic "no CHAT route" guess.
+                // Include the innermost exception detail so route/deployment/parse failures are distinguishable.
+                var rootCause = ex;
+                while (rootCause.InnerException is { } inner)
+                    rootCause = inner;
+                var failureReason = $"{ex.GetType().Name}: {ex.Message}";
+                if (!ReferenceEquals(rootCause, ex))
+                    failureReason += $" ({rootCause.GetType().Name}: {rootCause.Message})";
                 batchDetails.Add(new LegalCorpusActivationDocumentDetail(
                     version.LegalDocumentId, version.LegalDocumentVersionId, version.FileName,
                     "FAILED", "Activation failed", passagesRead, evidenceExtracted,
-                    conceptBound, version.DomainPackCode, Succeeded: false));
+                    conceptBound, version.DomainPackCode, Succeeded: false, FailureReason: failureReason));
+
+                // Record a non-terminal FAILED outcome so the version stays eligible for retry on the next
+                // pass (unlike ENRICHED/NO_EVIDENCE which are terminal). Best-effort: a marker write failure
+                // must not mask the original activation error.
+                try
+                {
+                    await corpusRepository.SetVersionSemanticActivationStatusAsync(
+                        tenantId, userId, version.LegalDocumentVersionId, "FAILED", cancellationToken);
+                }
+                catch (Exception markerEx) when (markerEx is not OperationCanceledException)
+                {
+                    logger.LogWarning(markerEx, "Failed to record FAILED activation marker for version {VersionId}.", version.LegalDocumentVersionId);
+                }
             }
         }
 

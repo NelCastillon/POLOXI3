@@ -514,7 +514,12 @@ public sealed class LegalDocumentCorpusRepository(ISqlConnectionFactory connecti
             (
                 SELECT
                     version.LegalDocumentVersionId,
-                    CASE WHEN EXISTS
+                    -- A version is "done" (not re-read) once semantic activation has been attempted with a
+                    -- terminal outcome that persists: ENRICHED (produced evidence) or NO_EVIDENCE (activated
+                    -- but produced none). FAILED/NULL remain eligible for (re)activation. The evidence-row
+                    -- fallback keeps versions activated before this marker existed counted as enriched.
+                    CASE WHEN version.SemanticActivationStatusCode IN (N'ENRICHED', N'NO_EVIDENCE')
+                           OR EXISTS
                         (SELECT 1 FROM POLOXI.Legal_MatterEvidenceItem evidence
                          WHERE evidence.LegalDocumentVersionId=version.LegalDocumentVersionId AND evidence.IsDeleted=0)
                         THEN 1 ELSE 0 END AS IsEnriched
@@ -549,11 +554,31 @@ public sealed class LegalDocumentCorpusRepository(ISqlConnectionFactory connecti
               AND version.MalwareStatusCode IN (N'CLEAN',N'NOT_DETECTED',N'PASSED')
               AND EXISTS (SELECT 1 FROM POLOXI.Legal_DocumentPassage passage
                           WHERE passage.LegalDocumentVersionId=version.LegalDocumentVersionId AND passage.IsDeleted=0)
+              -- Idempotency: skip versions that have already reached a terminal semantic-activation outcome
+              -- (ENRICHED or NO_EVIDENCE). FAILED/NULL stay eligible so transient failures can retry. The
+              -- evidence-row fallback covers versions activated before the marker column existed.
+              AND ISNULL(version.SemanticActivationStatusCode, N'') NOT IN (N'ENRICHED', N'NO_EVIDENCE')
               AND NOT EXISTS (SELECT 1 FROM POLOXI.Legal_MatterEvidenceItem evidence
                               WHERE evidence.LegalDocumentVersionId=version.LegalDocumentVersionId AND evidence.IsDeleted=0)
             ORDER BY version.CreatedDateUtc;
             """, new { TenantId = tenantId, MatterId = matterId, MaximumVersions = Math.Clamp(maximumVersions, 1, 100) }, cancellationToken: cancellationToken));
         return rows.ToArray();
+    }
+
+    public async Task SetVersionSemanticActivationStatusAsync(Guid tenantId, Guid userId, Guid documentVersionId, string statusCode, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE POLOXI.Legal_MatterDocumentVersion
+            SET SemanticActivationStatusCode=@StatusCode,
+                SemanticActivatedDateUtc=SYSUTCDATETIME(),
+                ModifiedDateUtc=SYSUTCDATETIME(),
+                ModifiedByUserId=@UserId
+            WHERE LegalDocumentVersionId=@VersionId AND TenantId=@TenantId AND IsDeleted=0;
+            """,
+            new { StatusCode = statusCode, UserId = userId, VersionId = documentVersionId, TenantId = tenantId },
+            cancellationToken: cancellationToken));
     }
 
 

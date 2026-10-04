@@ -1,0 +1,352 @@
+@page "/legal/config/matterlifecycle"
+@using System.ComponentModel.DataAnnotations
+@using Legal.Application.Features.MatterLifecycle
+@inject ApiClient Api
+@inject IJSRuntime Js
+
+<LegalWorkspace>
+<div class="intel-page">
+<header class="intel-header">
+    <div>
+        <span>Control plane</span>
+        <h1>Judz Matter Lifecycle Configuration</h1>
+        <p>Author lifecycle definitions, versioned stages, and the directed transition graph. All values are database-backed — nothing is hardcoded.</p>
+    </div>
+    <div class="intel-header-actions">
+        <button class="um-btn um-btn-primary" @onclick="NewDefinition"><i class="bi bi-plus-lg"></i> New definition</button>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+    </div>
+</header>
+
+@if(_loading){<div class="intel-state">Loading lifecycle configuration…</div>}
+else
+{
+    @if(_error is not null){<div class="intel-error">@_error</div>}
+
+    <section class="intel-kpis">
+        <article class="intel-kpi-link"><span>Definitions</span><strong>@_definitions.Count</strong></article>
+        <article class="intel-kpi-link"><span>Active</span><strong>@_definitions.Count(d=>d.IsActive)</strong></article>
+        <article class="intel-kpi-link"><span>Published versions</span><strong>@_definitions.Sum(d=>d.PublishedVersionCount)</strong></article>
+    </section>
+
+    <div class="intel-split">
+        <section class="intel-panel">
+            <div class="intel-toolbar"><h2>Lifecycle definitions</h2></div>
+            @if(_definitions.Count==0){<div class="intel-state">No lifecycle definitions are configured. Create one to begin.</div>}
+            @foreach(var def in _definitions.OrderBy(d=>d.SortOrder).ThenBy(d=>d.Name))
+            {
+                <div class="intel-row intel-row-click @(_selectedId==def.MatterLifecycleDefinitionId?"intel-row-active":null)" role="button" tabindex="0" @onclick="()=>SelectDefinitionAsync(def.MatterLifecycleDefinitionId)">
+                    <div>
+                        <strong>@def.Name</strong>
+                        <small>@def.Code @(def.MatterTypeCode is null?null:$"· {def.MatterTypeCode}")</small>
+                        <span>@def.VersionCount version(s) · @def.PublishedVersionCount published</span>
+                    </div>
+                    <div>
+                        @if(def.IsDefault){<AppStatusBadge Status="DEFAULT" />}
+                        <AppStatusBadge Status="@(def.IsActive?"ACTIVE":"INACTIVE")" />
+                        <button class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="()=>EditDefinition(def)">Edit</button>
+                    </div>
+                </div>
+            }
+        </section>
+
+        <section class="intel-panel">
+            @if(_detail is null){<div class="intel-state">Select a lifecycle definition to view its versions, stages, and transitions.</div>}
+            else
+            {
+                <div class="intel-toolbar">
+                    <h2>@_detail.Definition.Name</h2>
+                    <span>@_detail.Definition.Code</span>
+                </div>
+
+                <div class="intel-subtoolbar">
+                    <h3>Versions</h3>
+                </div>
+                @if(_detail.Versions.Count==0){<div class="intel-state">No versions exist for this definition.</div>}
+                @foreach(var v in _detail.Versions.OrderBy(v=>v.VersionNumber))
+                {
+                    <div class="intel-row intel-row-click @(_selectedVersionId==v.MatterLifecycleVersionId?"intel-row-active":null)" role="button" tabindex="0" @onclick="()=>SelectVersion(v.MatterLifecycleVersionId)">
+                        <div>
+                            <strong>v@(v.VersionNumber) @(v.VersionLabel)</strong>
+                            <span>@v.StageCount stage(s) · @v.TransitionCount transition(s)</span>
+                        </div>
+                        <div><AppStatusBadge Status="@v.StatusCode" /></div>
+                    </div>
+                }
+
+                @if(_selectedVersionId is not null)
+                {
+                    <div class="intel-subtoolbar">
+                        <h3>Stages</h3>
+                        <button class="um-btn um-btn-primary um-btn-sm" @onclick="NewStage">Add stage</button>
+                    </div>
+                    @if(VersionStages.Count==0){<div class="intel-state">No stages are defined in this version.</div>}
+                    @foreach(var s in VersionStages.OrderBy(s=>s.DisplayOrder))
+                    {
+                        <div class="intel-row">
+                            <div>
+                                <strong>@s.Name</strong>
+                                <small>@s.Code @(s.StageCategory is null?null:$"· {s.StageCategory}")</small>
+                                <span>Order @s.DisplayOrder @(s.IsInitial?"· initial":null)@(s.IsTerminal?" · terminal":null)@(s.AllowReentry?" · re-entry":null)@(s.DefaultSlaDays is int d?$" · SLA {d}d":null)</span>
+                            </div>
+                            <div><button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>EditStage(s)">Edit</button></div>
+                        </div>
+                    }
+
+                    <div class="intel-subtoolbar">
+                        <h3>Transitions</h3>
+                        <button class="um-btn um-btn-primary um-btn-sm" @onclick="NewTransition" disabled="@(VersionStages.Count<2)">Add transition</button>
+                    </div>
+                    @if(_detail.Transitions.Count==0){<div class="intel-state">No transition edges are defined in this version.</div>}
+                    @foreach(var t in _detail.Transitions.OrderBy(t=>t.Priority))
+                    {
+                        <div class="intel-row">
+                            <div>
+                                <strong>@StageName(t.FromStageDefinitionId) → @t.ToStageName</strong>
+                                <small>@t.Code @(t.TransitionType is null?null:$"· {t.TransitionType}")</small>
+                                <span>Priority @t.Priority @(t.RequiresApproval?"· requires approval":null)</span>
+                            </div>
+                            <div><button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>EditTransition(t)">Edit</button></div>
+                        </div>
+                    }
+                }
+            }
+        </section>
+    </div>
+}
+</div>
+
+@if(_editingDefinition)
+{
+    <div class="um-modal-backdrop" @onclick="()=>_editingDefinition=false"></div>
+    <div class="um-modal">
+        <EditForm Model="_definitionForm" OnValidSubmit="SaveDefinitionAsync">
+            <DataAnnotationsValidator />
+            <div class="um-modal-header"><i class="bi bi-diagram-3"></i><span>@(_definitionForm.MatterLifecycleDefinitionId is null?"New lifecycle definition":"Edit lifecycle definition")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="()=>_editingDefinition=false"><i class="bi bi-x-lg"></i></button></div>
+            <div class="um-modal-body"><div class="um-form-grid">
+                <label>Code<input class="um-input" @bind="_definitionForm.Code" disabled="@(_definitionForm.MatterLifecycleDefinitionId is not null)" /><ValidationMessage For="()=>_definitionForm.Code" class="text-danger" /></label>
+                <label>Name<input class="um-input" @bind="_definitionForm.Name" /><ValidationMessage For="()=>_definitionForm.Name" class="text-danger" /></label>
+                <label class="um-form-wide">Description<textarea class="um-input" @bind="_definitionForm.Description"></textarea><ValidationMessage For="()=>_definitionForm.Description" class="text-danger" /></label>
+                <label>Matter type code<input class="um-input" @bind="_definitionForm.MatterTypeCode" /><ValidationMessage For="()=>_definitionForm.MatterTypeCode" class="text-danger" /></label>
+                <label>Jurisdiction code<input class="um-input" @bind="_definitionForm.JurisdictionCode" /><ValidationMessage For="()=>_definitionForm.JurisdictionCode" class="text-danger" /></label>
+                <label>Domain pack code<input class="um-input" @bind="_definitionForm.DomainPackCode" /><ValidationMessage For="()=>_definitionForm.DomainPackCode" class="text-danger" /></label>
+                <label>Sort order<input type="number" class="um-input" @bind="_definitionForm.SortOrder" /><ValidationMessage For="()=>_definitionForm.SortOrder" class="text-danger" /></label>
+                <label class="um-check"><input type="checkbox" @bind="_definitionForm.IsDefault" /> Default for matter type</label>
+                <label class="um-check"><input type="checkbox" @bind="_definitionForm.IsActive" /> Active</label>
+            </div></div>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="()=>_editingDefinition=false">Cancel</button>
+                <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">Save</button>
+            </div>
+        </EditForm>
+    </div>
+}
+
+@if(_editingStage)
+{
+    <div class="um-modal-backdrop" @onclick="()=>_editingStage=false"></div>
+    <div class="um-modal">
+        <EditForm Model="_stageForm" OnValidSubmit="SaveStageAsync">
+            <DataAnnotationsValidator />
+            <div class="um-modal-header"><i class="bi bi-signpost-split"></i><span>@(_stageForm.MatterStageDefinitionId is null?"New stage":"Edit stage")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="()=>_editingStage=false"><i class="bi bi-x-lg"></i></button></div>
+            <div class="um-modal-body"><div class="um-form-grid">
+                <label>Code<input class="um-input" @bind="_stageForm.Code" /><ValidationMessage For="()=>_stageForm.Code" class="text-danger" /></label>
+                <label>Name<input class="um-input" @bind="_stageForm.Name" /><ValidationMessage For="()=>_stageForm.Name" class="text-danger" /></label>
+                <label class="um-form-wide">Description<textarea class="um-input" @bind="_stageForm.Description"></textarea><ValidationMessage For="()=>_stageForm.Description" class="text-danger" /></label>
+                <label>Category<input class="um-input" @bind="_stageForm.StageCategory" /><ValidationMessage For="()=>_stageForm.StageCategory" class="text-danger" /></label>
+                <label>Display order<input type="number" class="um-input" @bind="_stageForm.DisplayOrder" /><ValidationMessage For="()=>_stageForm.DisplayOrder" class="text-danger" /></label>
+                <label>Default SLA days<input type="number" class="um-input" @bind="_stageForm.DefaultSlaDays" /><ValidationMessage For="()=>_stageForm.DefaultSlaDays" class="text-danger" /></label>
+                <label class="um-check"><input type="checkbox" @bind="_stageForm.IsInitial" /> Initial stage</label>
+                <label class="um-check"><input type="checkbox" @bind="_stageForm.IsTerminal" /> Terminal stage</label>
+                <label class="um-check"><input type="checkbox" @bind="_stageForm.AllowReentry" /> Allow re-entry</label>
+                <label class="um-check"><input type="checkbox" @bind="_stageForm.IsActive" /> Active</label>
+            </div></div>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="()=>_editingStage=false">Cancel</button>
+                <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">Save</button>
+            </div>
+        </EditForm>
+    </div>
+}
+
+@if(_editingTransition)
+{
+    <div class="um-modal-backdrop" @onclick="()=>_editingTransition=false"></div>
+    <div class="um-modal">
+        <EditForm Model="_transitionForm" OnValidSubmit="SaveTransitionAsync">
+            <DataAnnotationsValidator />
+            <div class="um-modal-header"><i class="bi bi-arrow-left-right"></i><span>@(_transitionForm.MatterStageTransitionDefinitionId is null?"New transition":"Edit transition")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="()=>_editingTransition=false"><i class="bi bi-x-lg"></i></button></div>
+            <div class="um-modal-body"><div class="um-form-grid">
+                <label>From stage
+                    <select class="um-input" @bind="_transitionForm.FromStageDefinitionId">
+                        <option value="@Guid.Empty">— select —</option>
+                        @foreach(var s in VersionStages.OrderBy(s=>s.DisplayOrder)){<option value="@s.StageDefinitionId">@s.Name</option>}
+                    </select>
+                    <ValidationMessage For="()=>_transitionForm.FromStageDefinitionId" class="text-danger" />
+                </label>
+                <label>To stage
+                    <select class="um-input" @bind="_transitionForm.ToStageDefinitionId">
+                        <option value="@Guid.Empty">— select —</option>
+                        @foreach(var s in VersionStages.OrderBy(s=>s.DisplayOrder)){<option value="@s.StageDefinitionId">@s.Name</option>}
+                    </select>
+                    <ValidationMessage For="()=>_transitionForm.ToStageDefinitionId" class="text-danger" />
+                </label>
+                <label>Code<input class="um-input" @bind="_transitionForm.Code" /><ValidationMessage For="()=>_transitionForm.Code" class="text-danger" /></label>
+                <label>Name<input class="um-input" @bind="_transitionForm.Name" /><ValidationMessage For="()=>_transitionForm.Name" class="text-danger" /></label>
+                <label>Transition type<input class="um-input" @bind="_transitionForm.TransitionType" /><ValidationMessage For="()=>_transitionForm.TransitionType" class="text-danger" /></label>
+                <label>Priority<input type="number" class="um-input" @bind="_transitionForm.Priority" /><ValidationMessage For="()=>_transitionForm.Priority" class="text-danger" /></label>
+                <label class="um-check"><input type="checkbox" @bind="_transitionForm.RequiresApproval" /> Requires approval</label>
+                <label class="um-check"><input type="checkbox" @bind="_transitionForm.IsActive" /> Active</label>
+            </div></div>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="()=>_editingTransition=false">Cancel</button>
+                <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">Save</button>
+            </div>
+        </EditForm>
+    </div>
+}
+</LegalWorkspace>
+
+@code {
+    private bool _loading=true;
+    private bool _saving;
+    private string? _error;
+    private IReadOnlyList<MatterLifecycleDefinitionDto> _definitions=[];
+    private Guid? _selectedId;
+    private MatterLifecycleDefinitionDetailDto? _detail;
+    private Guid? _selectedVersionId;
+
+    private bool _editingDefinition;
+    private bool _editingStage;
+    private bool _editingTransition;
+    private DefinitionForm _definitionForm=new();
+    private StageForm _stageForm=new();
+    private TransitionForm _transitionForm=new();
+
+    private IReadOnlyList<MatterLifecycleStageDto> VersionStages =>
+        _detail is null?[]:_detail.Stages;
+
+    protected override Task OnInitializedAsync()=>LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading=true;_error=null;
+        try
+        {
+            _definitions=(await Api.GetMatterLifecycleDefinitionsAsync()).ToList();
+            if(_selectedId is Guid id && _definitions.Any(d=>d.MatterLifecycleDefinitionId==id))
+                await SelectDefinitionAsync(id);
+            else { _detail=null; _selectedId=null; _selectedVersionId=null; }
+        }
+        catch(Exception ex){_error=$"Load failed: {ex.Message}";}
+        finally{_loading=false;}
+    }
+
+    private async Task SelectDefinitionAsync(Guid id)
+    {
+        _error=null;
+        _selectedId=id;
+        try
+        {
+            _detail=await Api.GetMatterLifecycleDefinitionDetailAsync(id);
+            _selectedVersionId=_detail?.Versions.OrderByDescending(v=>v.VersionNumber).FirstOrDefault()?.MatterLifecycleVersionId;
+        }
+        catch(Exception ex){_error=$"Load failed: {ex.Message}";}
+    }
+
+    private void SelectVersion(Guid versionId)=>_selectedVersionId=versionId;
+
+    private string StageName(Guid stageId)=>VersionStages.FirstOrDefault(s=>s.StageDefinitionId==stageId)?.Name ?? "—";
+
+    private void NewDefinition(){_error=null;_definitionForm=new();_editingDefinition=true;}
+    private void EditDefinition(MatterLifecycleDefinitionDto d){_error=null;_definitionForm=DefinitionForm.From(d);_editingDefinition=true;}
+    private async Task SaveDefinitionAsync()
+    {
+        _saving=true;_error=null;
+        try
+        {
+            var request=new SaveMatterLifecycleDefinitionRequest(_definitionForm.MatterLifecycleDefinitionId,_definitionForm.Code,_definitionForm.Name,_definitionForm.Description,_definitionForm.MatterTypeCode,_definitionForm.JurisdictionCode,_definitionForm.IsDefault,_definitionForm.IsActive,_definitionForm.SortOrder,string.IsNullOrWhiteSpace(_definitionForm.DomainPackCode)?null:_definitionForm.DomainPackCode);
+            var id=await Api.SaveMatterLifecycleDefinitionAsync(request);
+            _editingDefinition=false;_selectedId=id;await LoadAsync();
+        }
+        catch(Exception ex){_error=$"Save failed: {ex.Message}";}
+        finally{_saving=false;}
+    }
+
+    private void NewStage(){_error=null;_stageForm=new(){MatterLifecycleVersionId=_selectedVersionId??Guid.Empty};_editingStage=true;}
+    private void EditStage(MatterLifecycleStageDto s){_error=null;_stageForm=StageForm.From(s,_selectedVersionId??Guid.Empty);_editingStage=true;}
+    private async Task SaveStageAsync()
+    {
+        _saving=true;_error=null;
+        try
+        {
+            var request=new SaveMatterLifecycleStageRequest(_stageForm.MatterStageDefinitionId,_stageForm.MatterLifecycleVersionId,_stageForm.Code,_stageForm.Name,_stageForm.Description,_stageForm.StageCategory,_stageForm.DisplayOrder,_stageForm.IsInitial,_stageForm.IsTerminal,_stageForm.AllowReentry,_stageForm.DefaultSlaDays,_stageForm.IsActive);
+            await Api.SaveMatterLifecycleStageAsync(request);
+            _editingStage=false;if(_selectedId is Guid id)await SelectDefinitionAsync(id);
+        }
+        catch(Exception ex){_error=$"Save failed: {ex.Message}";}
+        finally{_saving=false;}
+    }
+
+    private void NewTransition(){_error=null;_transitionForm=new(){MatterLifecycleVersionId=_selectedVersionId??Guid.Empty};_editingTransition=true;}
+    private void EditTransition(MatterLifecycleTransitionDto t){_error=null;_transitionForm=TransitionForm.From(t,_selectedVersionId??Guid.Empty);_editingTransition=true;}
+    private async Task SaveTransitionAsync()
+    {
+        _saving=true;_error=null;
+        try
+        {
+            var request=new SaveMatterLifecycleTransitionRequest(_transitionForm.MatterStageTransitionDefinitionId,_transitionForm.MatterLifecycleVersionId,_transitionForm.FromStageDefinitionId,_transitionForm.ToStageDefinitionId,_transitionForm.Code,_transitionForm.Name,string.IsNullOrWhiteSpace(_transitionForm.TransitionType)?null:_transitionForm.TransitionType,_transitionForm.RequiresApproval,_transitionForm.Priority,_transitionForm.IsActive);
+            await Api.SaveMatterLifecycleTransitionAsync(request);
+            _editingTransition=false;if(_selectedId is Guid id)await SelectDefinitionAsync(id);
+        }
+        catch(Exception ex){_error=$"Save failed: {ex.Message}";}
+        finally{_saving=false;}
+    }
+
+    private sealed class DefinitionForm
+    {
+        public Guid? MatterLifecycleDefinitionId{get;set;}
+        [Required,StringLength(100)]public string Code{get;set;}="";
+        [Required,StringLength(200)]public string Name{get;set;}="";
+        [StringLength(1000)]public string? Description{get;set;}
+        [StringLength(100)]public string? MatterTypeCode{get;set;}
+        [StringLength(100)]public string? JurisdictionCode{get;set;}
+        [StringLength(100)]public string? DomainPackCode{get;set;}
+        [Range(0,100000)]public int SortOrder{get;set;}
+        public bool IsDefault{get;set;}
+        public bool IsActive{get;set;}=true;
+        public static DefinitionForm From(MatterLifecycleDefinitionDto d)=>new(){MatterLifecycleDefinitionId=d.MatterLifecycleDefinitionId,Code=d.Code,Name=d.Name,Description=d.Description,MatterTypeCode=d.MatterTypeCode,JurisdictionCode=d.JurisdictionCode,SortOrder=d.SortOrder,IsDefault=d.IsDefault,IsActive=d.IsActive};
+    }
+
+    private sealed class StageForm
+    {
+        public Guid? MatterStageDefinitionId{get;set;}
+        public Guid MatterLifecycleVersionId{get;set;}
+        [Required,StringLength(100)]public string Code{get;set;}="";
+        [Required,StringLength(200)]public string Name{get;set;}="";
+        [StringLength(1000)]public string? Description{get;set;}
+        [StringLength(100)]public string? StageCategory{get;set;}
+        [Range(0,100000)]public int DisplayOrder{get;set;}
+        [Range(0,100000)]public int? DefaultSlaDays{get;set;}
+        public bool IsInitial{get;set;}
+        public bool IsTerminal{get;set;}
+        public bool AllowReentry{get;set;}
+        public bool IsActive{get;set;}=true;
+        public static StageForm From(MatterLifecycleStageDto s,Guid versionId)=>new(){MatterStageDefinitionId=s.StageDefinitionId,MatterLifecycleVersionId=versionId,Code=s.Code,Name=s.Name,StageCategory=s.StageCategory,DisplayOrder=s.DisplayOrder,DefaultSlaDays=s.DefaultSlaDays,IsInitial=s.IsInitial,IsTerminal=s.IsTerminal,AllowReentry=s.AllowReentry,IsActive=true};
+    }
+
+    private sealed class TransitionForm
+    {
+        public Guid? MatterStageTransitionDefinitionId{get;set;}
+        public Guid MatterLifecycleVersionId{get;set;}
+        [Required]public Guid FromStageDefinitionId{get;set;}
+        [Required]public Guid ToStageDefinitionId{get;set;}
+        [Required,StringLength(100)]public string Code{get;set;}="";
+        [Required,StringLength(200)]public string Name{get;set;}="";
+        [StringLength(50)]public string? TransitionType{get;set;}
+        [Range(0,100000)]public int Priority{get;set;}=10;
+        public bool RequiresApproval{get;set;}
+        public bool IsActive{get;set;}=true;
+        public static TransitionForm From(MatterLifecycleTransitionDto t,Guid versionId)=>new(){MatterStageTransitionDefinitionId=t.TransitionDefinitionId,MatterLifecycleVersionId=versionId,FromStageDefinitionId=t.FromStageDefinitionId,ToStageDefinitionId=t.ToStageDefinitionId,Code=t.Code,Name=t.Name,TransitionType=t.TransitionType,Priority=t.Priority,RequiresApproval=t.RequiresApproval,IsActive=true};
+    }
+}

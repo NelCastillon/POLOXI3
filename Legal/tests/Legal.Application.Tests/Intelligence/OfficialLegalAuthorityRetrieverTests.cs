@@ -199,10 +199,10 @@ public sealed class OfficialLegalAuthorityRetrieverTests
     }
 
     private static OfficialLegalAuthorityRetriever Create(LegalAuthoritySourceDescriptor descriptor,StubHandler handler) =>
-        new(new HttpClient(handler),new StubRegistry([descriptor]),new StubBootstrapper(),new StubDetector(),new StubTenantAccessor(),Legal.Application.Abstractions.Services.NullErrorLogService.Instance,NullLogger<OfficialLegalAuthorityRetriever>.Instance);
+        new(new HttpClient(handler),new StubRegistry([descriptor]),new StubBootstrapper(),new StubDetector(),new StubTenantAccessor(),Legal.Application.Abstractions.Services.NullErrorLogService.Instance,new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build(),NullLogger<OfficialLegalAuthorityRetriever>.Instance);
 
     private static OfficialLegalAuthorityRetriever Create(StubHandler handler,params LegalAuthoritySourceDescriptor[] descriptors) =>
-        new(new HttpClient(handler),new StubRegistry(descriptors),new StubBootstrapper(),new StubDetector(),new StubTenantAccessor(),Legal.Application.Abstractions.Services.NullErrorLogService.Instance,NullLogger<OfficialLegalAuthorityRetriever>.Instance);
+        new(new HttpClient(handler),new StubRegistry(descriptors),new StubBootstrapper(),new StubDetector(),new StubTenantAccessor(),Legal.Application.Abstractions.Services.NullErrorLogService.Instance,new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build(),NullLogger<OfficialLegalAuthorityRetriever>.Instance);
 
     private static LegalAuthoritySourceDescriptor Descriptor(string provider,string pattern,string baseUrl,string template) =>
         new(Guid.NewGuid(),provider,"TEST", "STATUTE",pattern,baseUrl,template,"{section}","HTML_ID_SECTION",10);

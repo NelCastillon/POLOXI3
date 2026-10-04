@@ -62,7 +62,7 @@ static async Task VerifyRuntimeAsync()
     var service=new IntelligenceWideService(null!,null!,null!,null!,null!,new EchoCatalog(),null!,null!,NullLogger<IntelligenceWideService>.Instance);
     var promptMethod=typeof(IntelligenceWideService).GetMethod("GetWideSystemPromptAsync",BindingFlags.Instance|BindingFlags.NonPublic)!;
     var featureMethod=typeof(IntelligenceWideService).GetMethod("AnswerFeatureCode",BindingFlags.Static|BindingFlags.NonPublic)!;
-    var models=new string?[]{null,"Auto","gpt-4.1-mini","gpt-5.6-sol","gpt-6-astra"," GPT-6-ASTRA "};
+    var models=new string?[]{null,"Auto","gpt-4.1-mini","gpt-5.6-sol","gpt-6-astra","gpt-6-luna"," GPT-6-ASTRA "};
     foreach(var (code,contract) in IntelligenceWideService.AstraPromptContracts)
     {
         using var schema=JsonDocument.Parse(contract.OutputSchemaJson);

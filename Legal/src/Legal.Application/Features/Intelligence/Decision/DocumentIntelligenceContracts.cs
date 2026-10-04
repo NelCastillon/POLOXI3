@@ -434,7 +434,11 @@ public sealed record LegalCorpusActivationDocumentDetail(
     int EvidenceExtracted,
     bool ConceptBound,
     string? DomainPackCode,
-    bool Succeeded);
+    bool Succeeded,
+    // Populated only when Succeeded is false: the actual exception message from the failed activation
+    // pass (e.g. the real AI-router/route/deployment error), so the UI can show the true cause instead
+    // of a generic "no CHAT route" guess. Null on success.
+    string? FailureReason = null);
 
 // A prepared-but-not-activated document version: extracted text exists, but Stage 1 semantic
 // enrichment (atomic propositions) has not yet produced any evidence rows for it.

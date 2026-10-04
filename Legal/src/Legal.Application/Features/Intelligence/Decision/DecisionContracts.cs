@@ -683,6 +683,13 @@ public sealed record DecisionDomainPackDto(
 {
     public IReadOnlyCollection<DecisionDomainConceptDto> Concepts { get; init; } = [];
     public IReadOnlyCollection<DecisionDomainConceptRelationDto> ConceptRelations { get; init; } = [];
+
+    // Canonical Decision Outcome candidates (migration 0396). These are the first-class competing
+    // final resolutions/statuses for the practice area (e.g. PI C1–C5). They are injected into the
+    // candidate universe so the Decision Outcome cards are never starved. The determining FACTORS
+    // (liability, causation, comparative fault, damages, …) remain shared evaluation-hierarchy nodes
+    // and are NOT part of this set.
+    public IReadOnlyCollection<DecisionDomainPackOutcomeCandidateDto> OutcomeCandidates { get; init; } = [];
 }
 
 public sealed record DecisionDomainPackDimensionDto(string DimensionCode, string Name, string? Description);
@@ -692,6 +699,18 @@ public sealed record DecisionDomainPackEvidenceTypeDto(string EvidenceTypeCode, 
 public sealed record DecisionDomainPackVerificationProfileDto(string ProfileCode, string Name, string? EvidenceTypeCode, string? Description);
 
 public sealed record DecisionDomainPackMatterTypeDto(string MatterTypeCode, string Name, string? Description);
+
+// Canonical Decision Outcome candidate (migration 0396). RoleCode is PATHWAY (prospective resolution)
+// or ASSERTED_HISTORICAL (a possibly-completed historical status that must be verified first and must
+// never be auto-promoted to an established resolution). RequiresVerification signals the verify-first gate.
+public sealed record DecisionDomainPackOutcomeCandidateDto(
+    string OutcomeCode,
+    string Name,
+    string? Description,
+    string RoleCode,
+    bool RequiresVerification,
+    string? MatterTypeCode,
+    int SortOrder);
 
 public sealed record DecisionDomainConceptDto(
     Guid DecisionDomainConceptId,

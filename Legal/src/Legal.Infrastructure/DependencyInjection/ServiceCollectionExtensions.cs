@@ -175,7 +175,29 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ILegalAuthoritySourceRegistry, LegalAuthoritySourceRegistry>();
         services.AddScoped<ILegalAuthorityDiscoveryConfiguration, LegalAuthorityDiscoveryConfiguration>();
         services.AddHttpClient<ILegalAuthoritySourceBootstrapper, LegalAuthoritySourceBootstrapper>();
-        services.AddHttpClient<IOfficialLegalAuthoritySource, OfficialLegalAuthorityRetriever>();
+        // Official statutory-authority hosts (Justia/FindLaw/etc.) sit behind bot-mitigation WAFs that
+        // reject bare server requests with HTTP 403. Egress hardening (Option 1): (a) enable automatic
+        // gzip/deflate/brotli decompression so the Accept-Encoding header the retriever advertises is
+        // honest, and (b) route through an OPTIONAL forward proxy when one is configured
+        // (Legal:OfficialAuthority:Proxy), so the app can egress from an allowlisted/non-blocked network
+        // without any code change. When no proxy is configured the default egress is used unchanged.
+        services.AddHttpClient<IOfficialLegalAuthoritySource, OfficialLegalAuthorityRetriever>()
+            .ConfigurePrimaryHttpMessageHandler(() =>
+            {
+                var handler = new System.Net.Http.HttpClientHandler
+                {
+                    AutomaticDecompression = System.Net.DecompressionMethods.GZip
+                        | System.Net.DecompressionMethods.Deflate
+                        | System.Net.DecompressionMethods.Brotli,
+                };
+                var proxyUrl = configuration["Legal:OfficialAuthority:Proxy"];
+                if (!string.IsNullOrWhiteSpace(proxyUrl))
+                {
+                    handler.Proxy = new System.Net.WebProxy(proxyUrl);
+                    handler.UseProxy = true;
+                }
+                return handler;
+            });
         services.AddScoped<ILegalRetriever, LegalRetriever>();
         services.AddSingleton<ILegalResearchPlanner, LegalResearchPlanner>();
         services.AddScoped<ILegalAuthorityRetrievalService, LegalAuthorityRetrievalService>();
@@ -225,6 +247,10 @@ public static class ServiceCollectionExtensions
 
         // POLOXI Legal Decision Intelligence (/legal/decision) — self-contained module.
         services.AddScoped<ILegalDecisionRepository, LegalDecisionRepository>();
+
+        // Judz Matter Lifecycle — reusable operational stage engine (separate from POLOXI Core).
+        services.AddScoped<Legal.Application.Abstractions.Persistence.IMatterLifecycleRepository, MatterLifecycleRepository>();
+        services.AddScoped<Legal.Application.Abstractions.Services.IMatterLifecycleService, Legal.Application.MatterLifecycleService>();
         services.AddScoped<ILegalDecisionAiProvider, LegalDecisionAiProvider>();
         services.AddScoped<ILegalDecisionRetriever, LegalDecisionRetriever>();
         services.AddScoped<IDocumentExtractionProvider, AzureDocumentIntelligenceProvider>();

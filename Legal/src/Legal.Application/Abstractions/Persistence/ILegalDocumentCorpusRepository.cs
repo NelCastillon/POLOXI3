@@ -100,6 +100,16 @@ public interface ILegalDocumentCorpusRepository
         int maximumVersions,
         CancellationToken cancellationToken = default);
 
+    // Records the terminal semantic-activation outcome for a version so it is not re-read on every
+    // activation pass. statusCode is one of N'ENRICHED', N'NO_EVIDENCE', N'FAILED'. ENRICHED/NO_EVIDENCE
+    // are terminal (version is skipped thereafter); FAILED leaves the version eligible for retry.
+    Task SetVersionSemanticActivationStatusAsync(
+        Guid tenantId,
+        Guid userId,
+        Guid documentVersionId,
+        string statusCode,
+        CancellationToken cancellationToken = default);
+
     // evidence items → fact propositions → support edges) for a matter so the Document
     // Intelligence workspace renders real DB-backed content. Idempotent: no-op if documents exist.
     Task<int> GenerateRandomTestCorpusAsync(

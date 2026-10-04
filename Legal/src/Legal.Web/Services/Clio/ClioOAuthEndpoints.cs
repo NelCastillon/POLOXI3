@@ -22,6 +22,8 @@ public static class ClioOAuthEndpoints
         app.MapGet("/integrations/clio/connect", (HttpContext http, IOptions<ClioOptions> options) =>
         {
             var clio = options.Value;
+            if (!clio.Enabled)
+                return Results.NotFound("The Clio integration is disabled.");
             if (!clio.IsConfigured)
                 return Results.BadRequest(
                     "Clio is not configured. Set Clio:ClientId and Clio:ClientSecret via User Secrets or environment variables.");
@@ -58,6 +60,8 @@ public static class ClioOAuthEndpoints
         {
             var logger = loggerFactory.CreateLogger("ClioOAuth");
             var clio = options.Value;
+            if (!clio.Enabled)
+                return Results.NotFound("The Clio integration is disabled.");
 
             var error = http.Request.Query["error"].ToString();
             if (!string.IsNullOrEmpty(error))

@@ -1,5 +1,7 @@
 @page "/integrations/clio"
 @using Legal.Web.Services.Clio
+@using Microsoft.Extensions.Options
+@inject IOptions<ClioOptions> ClioConfig
 @inject ClioTokenStore ClioTokens
 @inject IClioReadOnlyClient ClioClient
 @inject ClioMatterMap ClioMatters
@@ -16,6 +18,16 @@
             <p class="pc-subtitle">Connect Judz to your Clio Manage account using read-only OAuth access.</p>
         </div>
     </div>
+
+    @if (!ClioConfig.Value.Enabled)
+    {
+        <div class="alert alert-secondary" role="alert">
+            <i class="bi bi-plug"></i> The Clio integration is currently disabled.
+            Set <code>Clio:Enabled</code> to <code>true</code> in configuration to turn it on.
+        </div>
+    }
+    else
+    {
 
     @if (_connectedJustNow)
     {
@@ -201,6 +213,7 @@
             }
         </div>
     }
+    }
 </div>
 
 @code {
@@ -225,8 +238,22 @@
     private static readonly string[] AdverseRoleTokens =
         ["defendant", "adverse", "opposing", "respondent", "third party", "tortfeasor"];
 
-    // Clio custom-field names that map cleanly onto a structured Judz field.
-    private const string AccidentLocationField = "Accident Location";
+    // Clio custom-field names that carry a real court/venue, in priority order.
+    // The ACCIDENT LOCATION is deliberately NOT one of these: it is the incident
+    // site, not a legal venue, and must never populate the matter Jurisdiction.
+    // (The accident location is still captured in full in the intake summary that
+    // BuildClioIntakeSummary writes into the matter Description.)
+    private static readonly string[] VenueFieldNames =
+        ["Jurisdiction", "Venue", "Court", "Court/Venue", "Filing Court"];
+    private static readonly string[] StateFieldNames = ["State", "Filing State"];
+    private static readonly string[] CountyFieldNames = ["County", "Venue County", "Filing County"];
+
+    // Clio custom-field names that carry the INCIDENT (fact) location. This is the
+    // home for "Accident Location" — it populates the structured PI profile incident
+    // fields, NEVER the matter Jurisdiction.
+    private static readonly string[] IncidentLocationFieldNames =
+        ["Accident Location", "Incident Location", "Loss Location"];
+    private static readonly string[] IncidentCityFieldNames = ["Incident City", "Accident City", "City"];
 
     private static (string? MovingParty, string? RespondingParty) MapParties(ClioSapiniDiscovery d)
     {
@@ -247,11 +274,68 @@
         return (Trim(movingParty, 200), Trim(adverseContact?.Name, 200));
     }
 
+    // Maps a real court/venue onto the Judz matter Jurisdiction. The accident
+    // location is intentionally never used here — it is the incident site, not a
+    // legal venue, and previously leaked into Jurisdiction, breaking New York /
+    // state jurisdiction detection. If Clio has no explicit venue field we derive
+    // a "State - County" hint from the state/county custom fields; otherwise we
+    // return null and let the user pick the jurisdiction in the matter editor.
     private static string? MapJurisdiction(ClioSapiniDiscovery d)
     {
-        var loc = d.CustomFields
-            .FirstOrDefault(f => string.Equals(f.Name, AccidentLocationField, StringComparison.OrdinalIgnoreCase));
-        return Trim(loc?.Value, 120);
+        var venue = FirstFieldValue(d, VenueFieldNames);
+        if (!string.IsNullOrWhiteSpace(venue))
+            return Trim(venue, 120);
+
+        var state = FirstFieldValue(d, StateFieldNames);
+        var county = FirstFieldValue(d, CountyFieldNames);
+        if (!string.IsNullOrWhiteSpace(state) && !string.IsNullOrWhiteSpace(county))
+            return Trim($"{state} - {county}", 120);
+        if (!string.IsNullOrWhiteSpace(state))
+            return Trim(state, 120);
+
+        return null;
+    }
+
+    // Returns the first non-empty value among the named custom fields (case-insensitive).
+    private static string? FirstFieldValue(ClioSapiniDiscovery d, string[] names)
+    {
+        foreach (var name in names)
+        {
+            var field = d.CustomFields.FirstOrDefault(f =>
+                string.Equals(f.Name, name, StringComparison.OrdinalIgnoreCase));
+            if (field is not null && !string.IsNullOrWhiteSpace(field.Value))
+                return field.Value;
+        }
+        return null;
+    }
+
+    // Builds a PI profile save request that routes the Clio ACCIDENT LOCATION into
+    // the structured incident fields (IncidentLocation/City/County/State) where it
+    // belongs — keeping it out of the matter Jurisdiction. Returns null when Clio
+    // exposes no incident/geography data worth persisting.
+    private static Legal.Application.Features.Intelligence.Decision.PersonalInjuryProfileSaveRequest?
+        MapIncidentProfile(ClioSapiniDiscovery d)
+    {
+        var incidentLocation = FirstFieldValue(d, IncidentLocationFieldNames);
+        var incidentCity = FirstFieldValue(d, IncidentCityFieldNames);
+        var state = FirstFieldValue(d, StateFieldNames);
+        var county = FirstFieldValue(d, CountyFieldNames);
+
+        if (string.IsNullOrWhiteSpace(incidentLocation)
+            && string.IsNullOrWhiteSpace(incidentCity)
+            && string.IsNullOrWhiteSpace(state)
+            && string.IsNullOrWhiteSpace(county))
+        {
+            return null;
+        }
+
+        return new Legal.Application.Features.Intelligence.Decision.PersonalInjuryProfileSaveRequest
+        {
+            IncidentLocation = Trim(incidentLocation, 400),
+            IncidentCity = Trim(incidentCity, 120),
+            IncidentCounty = Trim(county, 120),
+            IncidentState = Trim(state, 60)
+        };
     }
 
     // Composes every Clio custom field and all contacts (with their Clio roles) into a
@@ -385,6 +469,22 @@
                     throw new InvalidOperationException("The Judz matter could not be created.");
 
                 ClioMatters.Set(m.Id, matterId);
+
+                // Route the incident (accident) location into the structured PI profile
+                // fields so it is preserved as fact data — and never as Jurisdiction.
+                // Best-effort: a profile failure must not abort document ingestion.
+                var incidentProfile = MapIncidentProfile(_discovery);
+                if (incidentProfile is not null)
+                {
+                    try
+                    {
+                        await Api.SaveLegalDecisionPersonalInjuryProfileAsync(matterId, incidentProfile);
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.LogWarning(ex, "Clio incident profile save failed for matter {MatterId}; continuing with document ingest.", matterId);
+                    }
+                }
             }
 
             foreach (var doc in _discovery.Documents)

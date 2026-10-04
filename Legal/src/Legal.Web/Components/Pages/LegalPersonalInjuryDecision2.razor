@@ -2,6 +2,7 @@
 @using Legal.Application.Features.Intelligence
 @using Legal.Application.Features.Intelligence.Decision
 @using Microsoft.AspNetCore.SignalR.Client
+@using Legal.Web.Services.CommandCenter
 @implements IAsyncDisposable
 @inject ApiClient Api
 @inject BreadcrumbService Breadcrumbs
@@ -10,9 +11,18 @@
 @inject IConfiguration Configuration
 @inject IWebHostEnvironment HostEnvironment
 @inject IJSRuntime JS
-
+@inject ActiveMatterContext ActiveMatter
 <LegalWorkspace ExtraClass="intel-compact">
     <div class="poloxi-page">
+@if (_initializing)
+{
+    <section class="poloxi-init-overlay" role="status" aria-live="polite">
+        <div class="poloxi-init-overlay-inner">
+            <i class="bi bi-water poloxi-spinner"></i>
+            <div>Loading decision intelligence… waiting for the data service.</div>
+        </div>
+    </section>
+}
         <header class="poloxi-hero">
             <div class="poloxi-hero-icon"><i class="bi bi-diagram-3"></i></div>
             <div class="poloxi-hero-content">
@@ -82,7 +92,7 @@
                             <span class="dfi-kpi-val">@DfiEvidenceCoveragePct.ToString("P0")</span>
                             <span class="dfi-kpi-lbl">Evidence coverage</span>
                         </div>
-                        <div class="dfi-kpi dfi-kpi--click @(_ovKpiFilter == "leader" ? "dfi-kpi--active" : "")" @onclick='() => SetOvKpiFilter("leader")' title="Filter to the current leader">
+                        <div class="dfi-kpi dfi-kpi--click @(_ovKpiFilter == "leader" ? "dfi-kpi--active" : "")" @onclick='() => SetOvKpiFilter("leader")' title="@(OvCompetitionValid ? "Filter to the current leader" : "Filter to the top proposed outcome (competition not executed)")">
                             <span class="dfi-kpi-val">@DfiTopKStabilityPct.ToString("P0")</span>
                             <span class="dfi-kpi-lbl">Top-3 stability</span>
                         </div>
@@ -112,15 +122,12 @@
                                     @onclick="() => SelectDfiTab(tab)">@tab</button>
                         }
                         <a class="dfi-tab dfi-tab--link"
-                           href="@($"/legal/casecommandcenter{(MatterId is { } ccId ? $"?matterId={ccId}" : string.Empty)}")">
+                           href="@($"/legal/casecommandcenter{(EffectiveMatterId is { } ccId ? $"?matterId={ccId}" : string.Empty)}")">
                             <i class="bi bi-grid-1x2" aria-hidden="true"></i> Case Command Center
                         </a>
                         <a class="dfi-tab dfi-tab--link"
-                           href="@($"/legal/providercaseview{(MatterId is { } pvId ? $"?matterId={pvId}" : string.Empty)}")">
+                           href="@($"/legal/providercaseview{(EffectiveMatterId is { } pvId ? $"?matterId={pvId}" : string.Empty)}")">
                             <i class="bi bi-shield-lock" aria-hidden="true"></i> Provider Case Portal
-                        </a>
-                        <a class="dfi-tab dfi-tab--link" href="/integrations/clio">
-                            <i class="bi bi-plug" aria-hidden="true"></i> Clio Integration
                         </a>
                     </div>
                     }
@@ -273,7 +280,14 @@
                                         <div class="ov-status">
                                             <div class="ov-status-lead">
                                                 <span class="ov-status-state ov-status-state--@OvDecisionStateTone">@OvDecisionStateLabel.ToUpperInvariant()</span>
-                                                <span class="ov-status-headline">C@(ovLeader.Index) @ovLeader.Title leads at @ovLeader.SupportPct% support</span>
+                                                @if (OvCompetitionValid)
+                                                {
+                                                    <span class="ov-status-headline">C@(ovLeader.Index) @ovLeader.Title leads at @ovLeader.SupportPct% support</span>
+                                                }
+                                                else
+                                                {
+                                                    <span class="ov-status-headline">@OvOutcomes.Count proposed outcome(s) &mdash; competition not executed, no leader established</span>
+                                                }
                                             </div>
                                             <div class="ov-status-chips">
                                                 @foreach (var chip in OvDecisionStatusChips)
@@ -309,19 +323,27 @@
                                             <div class="ov-cards">
                                                 @foreach (var o in OvFilteredOutcomes)
                                                 {
-                                                    <div class="ov-card ov-card--@(o.IsLeader ? "leader" : "compete") ov-card--c@(o.Index)">
+                                                    var showLeader = o.IsLeader && OvCompetitionValid;
+                                                    <div class="ov-card ov-card--@(showLeader ? "leader" : "compete") ov-card--c@(o.Index)">
                                                         <div class="ov-card-top">
                                                             <span class="ov-card-code">C@(o.Index)</span>
-                                                            <span class="ov-card-flag ov-card-flag--@(o.IsLeader ? "leader" : "compete")">
-                                                                @if (o.IsLeader)
+                                                            <span class="ov-card-flag ov-card-flag--@(showLeader ? "leader" : "compete")">
+                                                                @if (showLeader)
                                                                 {
                                                                     <i class="bi bi-trophy" aria-hidden="true"></i>
                                                                 }
-                                                                @(o.IsLeader ? "Current Leader" : "Competing Outcome")
+                                                                @(showLeader ? "Current Leader" : (OvCompetitionValid ? "Competing Outcome" : "Proposed Outcome"))
                                                             </span>
-                                                            <span class="ov-card-support">@o.SupportPct% support</span>
+                                                            @if (OvCompetitionValid)
+                                                            {
+                                                                <span class="ov-card-support">@o.SupportPct% support</span>
+                                                            }
+                                                            else
+                                                            {
+                                                                <span class="ov-card-support ov-card-support--advisory" title="Advisory LLM score only — not a POLOXI competition result.">Not scored</span>
+                                                            }
                                                         </div>
-                                                        <div class="ov-card-track"><div class="ov-card-fill" style="width:@(o.SupportPct)%"></div></div>
+                                                        <div class="ov-card-track"><div class="ov-card-fill" style="width:@(OvCompetitionValid ? o.SupportPct : 0)%"></div></div>
                                                         <h5 class="ov-card-title">@o.Title</h5>
                                                         <p class="ov-card-detail">@o.CardText</p>
                                                         @if (o.FullNarrative.Count > 0)
@@ -348,7 +370,7 @@
                                                             <li class="ov-metric-click @(_ovKpiFilter == "missing" ? "ov-metric-click--active" : "")" @onclick='() => SetOvKpiFilter("missing")' title="Filter outcomes with missing or unverified evidence"><span class="ov-metric-ic ov-metric-ic--warn"><i class="bi bi-exclamation-circle"></i></span><span class="ov-metric-lbl">Missing or unverified evidence</span><span class="ov-metric-val">@o.MissingEvidence</span></li>
                                                             <li class="ov-metric-click @(_ovKpiFilter == "vulnerabilities" ? "ov-metric-click--active" : "")" @onclick='() => SetOvKpiFilter("vulnerabilities")' title="Filter outcomes with main vulnerabilities"><span class="ov-metric-ic ov-metric-ic--danger"><i class="bi bi-shield-exclamation"></i></span><span class="ov-metric-lbl">Main vulnerabilities</span><span class="ov-metric-val">@o.MainVulnerabilities</span></li>
                                                         </ul>
-                                                        <button type="button" class="ov-card-cta ov-card-cta--@(o.IsLeader ? "leader" : "compete")" @onclick="() => OpenCandidateAnalysis(o.Index)">View full analysis →</button>
+                                                        <button type="button" class="ov-card-cta ov-card-cta--@((o.IsLeader && OvCompetitionValid) ? "leader" : "compete")" @onclick="() => OpenCandidateAnalysis(o.Index)">View full analysis →</button>
                                                     </div>
                                                 }
                                             </div>
@@ -362,21 +384,28 @@
                                                             <th>Metric</th>
                                                             @foreach (var o in OvOutcomes)
                                                             {
-                                                                <th>C@(o.Index) · @o.Title</th>
-                                                            }
-                                                        </tr>
-                                                    </thead>
-                                                    <tbody>
-                                                        <tr>
-                                                            <td>Overall support</td>
-                                                            @foreach (var o in OvOutcomes)
-                                                            {
-                                                                <td>
-                                                                    <div class="ov-table-bar"><div class="ov-table-bar-fill ov-card--c@(o.Index)" style="width:@(o.SupportPct)%"></div></div>
-                                                                    <span class="ov-table-bar-val">@o.SupportPct%</span>
-                                                                </td>
-                                                            }
-                                                        </tr>
+                                                                        <th>C@(o.Index) · @o.Title</th>
+                                                                        }
+                                                                    </tr>
+                                                                </thead>
+                                                                <tbody>
+                                                                    <tr>
+                                                                        <td>Overall support</td>
+                                                                        @foreach (var o in OvOutcomes)
+                                                                        {
+                                                                            <td>
+                                                                                @if (OvCompetitionValid)
+                                                                                {
+                                                                                    <div class="ov-table-bar"><div class="ov-table-bar-fill ov-card--c@(o.Index)" style="width:@(o.SupportPct)%"></div></div>
+                                                                                    <span class="ov-table-bar-val">@o.SupportPct%</span>
+                                                                                }
+                                                                                else
+                                                                                {
+                                                                                    <span class="ov-table-bar-val ov-card-support--advisory" title="Advisory LLM score only — not a POLOXI competition result.">Not scored</span>
+                                                                                }
+                                                                            </td>
+                                                                        }
+                                                                    </tr>
                                                         <tr>
                                                             <td>Legal viability</td>
                                                             @foreach (var o in OvOutcomes)
@@ -484,8 +513,15 @@
                                                                 @foreach (var o in OvOutcomes)
                                                                 {
                                                                     <td>
-                                                                        <div class="ov-table-bar"><div class="ov-table-bar-fill ov-card--c@(o.Index)" style="width:@(o.SupportPct)%"></div></div>
-                                                                        <span class="ov-table-bar-val">@o.SupportPct%</span>
+                                                                        @if (OvCompetitionValid)
+                                                                        {
+                                                                            <div class="ov-table-bar"><div class="ov-table-bar-fill ov-card--c@(o.Index)" style="width:@(o.SupportPct)%"></div></div>
+                                                                            <span class="ov-table-bar-val">@o.SupportPct%</span>
+                                                                        }
+                                                                        else
+                                                                        {
+                                                                            <span class="ov-table-bar-val ov-card-support--advisory" title="Advisory LLM score only — not a POLOXI competition result.">Not scored</span>
+                                                                        }
                                                                     </td>
                                                                 }
                                                             </tr>
@@ -601,7 +637,14 @@
                                                 <div class="ov-intel-grid ov-intel-grid--three ov-decision-row">
                                                     <div class="ov-panel ov-panel--why">
                                                         <div class="ov-panel-head">
-                                                            <h5 class="ov-panel-title"><i class="bi bi-trophy" aria-hidden="true"></i> Why C@(ovLeader.Index) Leads</h5>
+                                                            @if (OvCompetitionValid)
+                                                            {
+                                                                <h5 class="ov-panel-title"><i class="bi bi-trophy" aria-hidden="true"></i> Why C@(ovLeader.Index) Leads</h5>
+                                                            }
+                                                            else
+                                                            {
+                                                                <h5 class="ov-panel-title"><i class="bi bi-list-check" aria-hidden="true"></i> C@(ovLeader.Index) &mdash; Proposed supporting factors</h5>
+                                                            }
                                                             <button type="button" class="ov-insights-link" @onclick='() => _dfiTab = "Competition"'>Evidence →</button>
                                                         </div>
                                                         @if (OvWhyItLeads.Count > 0)
@@ -800,7 +843,14 @@
                                                                     <li>
                                                                         <span class="ov-legend-dot" style="background:@OvOutcomeColor(o.Index - 1)"></span>
                                                                         <span class="ov-legend-name">C@(o.Index) @o.Title</span>
-                                                                        <span class="ov-legend-pct">@o.SupportPct%</span>
+                                                                        @if (OvCompetitionValid)
+                                                                        {
+                                                                            <span class="ov-legend-pct">@o.SupportPct%</span>
+                                                                        }
+                                                                        else
+                                                                        {
+                                                                            <span class="ov-legend-pct ov-card-support--advisory" title="Advisory LLM score only — not a POLOXI competition result.">—</span>
+                                                                        }
                                                                     </li>
                                                                 }
                                                             </ul>
@@ -3934,6 +3984,11 @@
 
     private DecisionMatterDto? _matter;
     private IReadOnlyCollection<LegalDocumentDto> _documents = [];
+
+    // The matter id to carry into cross-page links (Command Center, Provider Portal).
+    // Prefer the resolved matter so navigation works even when the page was opened
+    // without a ?matterId= query parameter (e.g. matter resolved from a search/selection).
+    private Guid? EffectiveMatterId => _matter?.DecisionMatterId ?? MatterId;
 
     // Opens the Candidate Full Analysis as an in-page popup for the given 1-based candidate rank index.
     // The compact OvOutcome powers the header instantly; the rich, DB-backed CandidateFullAnalysisDto
@@ -7472,6 +7527,7 @@
     private string _selectedContextCode = "Legal";
     private IReadOnlyCollection<WideSearchContextDto> _contexts = [];
     private bool _loading, _usePoloxiEngine = true;
+    private bool _initializing = true;
     private bool _showPipeline;
     // Factor inventory: default to hiding broad parent (L1/L2) groupings so only atomic L3 factors show.
     private bool _atomicFactorsOnly = true;
@@ -8281,8 +8337,18 @@
     // hierarchy produced (never a fabricated count). Coverage/stability mirror the authoritative
     // decision metrics; the command center never invents values the pipeline did not emit.
     private int DfiScoredCandidateCount => FinalRankedCandidates.Count > 0 ? FinalRankedCandidates.Count : DfiCompetingOutcomes;
-    private decimal DfiEvidenceCoveragePct => _response?.DecisionEvidenceCoverage ?? 0m;
-    private decimal DfiTopKStabilityPct => _response?.TopKStability ?? 0m;
+    // Evidence coverage tile: the authoritative decision-dimension coverage, but when the Candidate x Branch
+    // competition produced no evidence-backed deciding branch (DecisionEvidenceCoverage == 0) we fall back to
+    // the whole-frontier EvidenceCoverage (share of surviving branches supported by admitted evidence) so the
+    // tile reflects the evidence that WAS admitted instead of a misleading 0%. Both are authoritative pipeline
+    // metrics; nothing is fabricated.
+    private decimal DfiEvidenceCoveragePct => _response is null
+        ? 0m
+        : (_response.DecisionEvidenceCoverage > 0m ? _response.DecisionEvidenceCoverage : _response.EvidenceCoverage);
+    // Top-3 stability tile: TopKStability is null when the decision had fewer than two ranking snapshots
+    // (a single provisional competition round). Per the WideSearchResponse contract this undefined case is
+    // neutral (1.0), never penalizing  so a provisional single-round decision must not read 0%.
+    private decimal DfiTopKStabilityPct => _response?.TopKStability ?? 1m;
 
     // Execution health = the four command-center rows, projected from the authoritative integrity
     // indicators so the card can never disagree with the Readiness tab.
@@ -8466,33 +8532,23 @@
         return sections;
     }
 
-    // Returns every persisted branch descending from the given root branch (its full subtree,
-    // excluding the root). Used to derive honest supporting/dependency/missing/vulnerability counts
-    // for the L1-branch Overview fallback from real persisted data instead of hardcoded zeros.
-    private static List<WideBranchDto> OvDescendantBranches(WideBranchDto root, IReadOnlyCollection<WideBranchDto> all)
-    {
-        var result = new List<WideBranchDto>();
-        var frontier = new Queue<Guid>();
-        frontier.Enqueue(root.WideBranchId);
-        var guard = 0;
-        while (frontier.Count > 0 && guard++ < 1000)
-        {
-            var parentId = frontier.Dequeue();
-            foreach (var child in all.Where(x => x.ParentWideBranchId == parentId))
-            {
-                if (result.Any(r => r.WideBranchId == child.WideBranchId)) continue;
-                result.Add(child);
-                frontier.Enqueue(child.WideBranchId);
-            }
-        }
-        return result;
-    }
-
     private IReadOnlyList<OvOutcome> OvOutcomes
     {
         get
         {
-            var ranked = FinalRankedCandidates;
+            // Always surface the full competing field, not just the surviving leader. FinalRankedCandidates
+            // drops IsConstraintViolation candidates, so a matter whose only survivor is the leader would
+            // render a single card even though the narrative references excluded competitors (e.g. the
+            // "Liability Accepted Outcome" that was excluded for lack of credible support). Build the pool
+            // from every candidate, ordering survivors first (by rank) and excluded competitors after (by
+            // composite score). Excluded competitors are disclosed by the viability/excluded tags below.
+            var ranked = _response is null ? FinalRankedCandidates
+                : _response.Candidates
+                    .OrderBy(c => c.IsConstraintViolation)
+                    .ThenBy(c => c.RankNumber)
+                    .ThenByDescending(c => c.CompositeScore)
+                    .Take(10)
+                    .ToArray();
             // Fallback: when no candidate cleared the evidence-admission gate (e.g. "Evidence unverified"
             // matters), still render the Decision Outcomes comparison from the provisional/ranked pool so
             // the Overview shows the decision landscape instead of only the command center. These are
@@ -8505,68 +8561,70 @@
                     .Take(10)
                     .ToArray();
             }
-            // Second fallback: some runs never execute formal candidate competition and produce no
-            // candidate rows at all — only the competing top-level (L1) outcome branches the hierarchy
-            // proposed (this is exactly what the "Scored candidates" KPI reflects via DfiCompetingOutcomes).
-            // Build the Decision Outcomes comparison directly from those L1 branches so the Overview shows
-            // the decision landscape instead of falling back to the old command-center block. Nothing is
-            // fabricated: labels, confidence, and interpretation all come from the persisted branches.
+            // Decision Outcome cards are populated ONLY from persisted decision candidates — never from
+            // L1 hierarchy branches. The shared L1→Ln forest supplies each candidate's supporting analysis;
+            // it must never REPLACE candidate names (e.g. a card must stay "Confidential negotiated
+            // settlement", never collapse to an analytical dimension like "Liability and comparative fault").
+            // When no candidate rows exist the comparison is simply empty; the command-center / readiness
+            // panels explain why. Being displayed does not imply competition eligibility — scores and a
+            // leader are rendered only from a valid competition result (the scored branch below).
+            //
+            // Proposed-candidate fallback: when no competition candidate rows exist (e.g. an evidence/
+            // readiness-BLOCKED run where registration succeeded but scoring never ran), the matter still
+            // has genuinely distinct PROPOSED outcomes in the Decision Inspector's normalized candidate
+            // pool. Render those as Proposed Outcome cards so the Overview is never blank — preserving each
+            // candidate's own identity (OriginalTitle). This is NOT the prohibited L1 hierarchy fallback:
+            // the source is the persisted/normalized DECISION CANDIDATE pool, never L1–Ln factor branches.
+            // Nothing is scored or ranked here; OvCompetitionValid stays false, so every leader/support
+            // display remains suppressed and the cards show "Proposed Outcome / Not scored".
             if (ranked.Count == 0)
             {
-                var l1 = SurvivingBranches
-                    .Where(b => b.LevelNumber == 1)
-                    .OrderByDescending(b => b.Confidence)
-                    .Take(3)
-                    .ToList();
-                if (l1.Count == 0) return [];
-                var allBranches = _response?.Branches ?? [];
-                var confSum = l1.Sum(b => b.Confidence);
-                var branchOutcomes = new List<OvOutcome>();
-                for (var i = 0; i < l1.Count; i++)
+                var normalized = _response?.DecisionInspector?.NormalizedCandidates;
+                if (normalized is null || normalized.Count == 0) return [];
+                var proposedSummaries = DfiCandidateDependencySummaries
+                    .ToDictionary(s => s.CandidateTitle, s => s, StringComparer.OrdinalIgnoreCase);
+                var proposed = new List<OvOutcome>();
+                var seenTitles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var idx = 0;
+                foreach (var nc in normalized)
                 {
-                    var b = l1[i];
-                    var supportPct = confSum > 0 ? (int)Math.Round((double)(b.Confidence / confSum) * 100) : 0;
-                    var evidenceBacked = b.EvidenceCount > 0;
-
-                    // Derive honest counts from the persisted branch subtree rooted at this L1 branch
-                    // instead of hardcoding zeros. Supporting factors = grounded child branches;
-                    // dependencies = all child branches; missing = children lacking evidence;
-                    // vulnerabilities = eliminated children. Nothing fabricated.
-                    var subtree = OvDescendantBranches(b, allBranches);
-                    var keySupporting = subtree.Count(x => x.EvidenceCount > 0 && !x.IsEliminated);
-                    var dependencies = subtree.Count;
-                    var missingEvidence = subtree.Count(x => x.EvidenceCount == 0 && !x.IsEliminated);
-                    var vulnerabilities = subtree.Count(x => x.IsEliminated);
-
-                    var tags = new List<(string, string)>
+                    var title = string.IsNullOrWhiteSpace(nc.OriginalTitle) ? nc.NormalizedCandidateId : nc.OriginalTitle;
+                    if (string.IsNullOrWhiteSpace(title) || !seenTitles.Add(title)) continue;
+                    idx++;
+                    proposedSummaries.TryGetValue(title, out var psum);
+                    var pTotal = psum?.Total ?? 0;
+                    var pEstablished = psum?.Established ?? 0;
+                    var pMissing = pTotal - pEstablished;
+                    var pVulns = psum?.Required.Count(d => string.Equals(d.Tone, "danger", StringComparison.OrdinalIgnoreCase)) ?? 0;
+                    var proposedTags = new List<(string, string)>
                     {
-                        (i == 0 ? "Higher likelihood" : "In contention", i == 0 ? "ok" : "warn"),
-                        ("Provisional \u2014 not competed", "warn"),
-                        (evidenceBacked ? "Evidence backed" : "Evidence dependent", evidenceBacked ? "ok" : "warn"),
+                        ("Proposed outcome", "info"),
+                        (nc.CompetitionEligible ? "Competition eligible" : "Not scored",
+                            nc.CompetitionEligible ? "warn" : "muted"),
                     };
-                    branchOutcomes.Add(new OvOutcome(
-                        i + 1,
-                        b.DisplayName,
-                        b.Interpretation,
-                        b.Confidence,
-                        supportPct,
-                        i == 0,
-                        "Moderate viability",
-                        "warn",
-                        tags,
-                        keySupporting,
-                        dependencies,
-                        missingEvidence,
-                        vulnerabilities,
+                    proposed.Add(new OvOutcome(
+                        idx,
+                        title,
+                        nc.MaterialDistinction,
+                        0m,
+                        0,
+                        false,
+                        "Proposed — not scored",
+                        "muted",
+                        proposedTags,
+                        0,
+                        pTotal,
+                        pMissing,
+                        pVulns,
                         null,
                         null,
-                        [new WideCandidateBranchScoreDto(b.DisplayName, b.Confidence)])
-                        { Narrative = OvNarrativeFor(b.DisplayName), FullNarrative = OvFullNarrativeFor(b.DisplayName) });
+                        [])
+                        { Narrative = OvNarrativeFor(title), FullNarrative = OvFullNarrativeFor(title) });
+                    if (proposed.Count >= 10) break;
                 }
-                return branchOutcomes;
+                return proposed;
             }
-            if (ranked.Count == 0) return [];
-            var top = ranked.Take(3).ToList();
+            var top = ranked.ToList();
             var scoreSum = ranked.Sum(c => c.CompositeScore);
             var summaries = DfiCandidateDependencySummaries
                 .ToDictionary(s => s.CandidateTitle, s => s, StringComparer.OrdinalIgnoreCase);
@@ -8604,6 +8662,10 @@
                     (c.EvidenceCoverage >= 0.6m ? "Evidence backed" : "Evidence dependent",
                         c.EvidenceCoverage >= 0.6m ? "ok" : "warn"),
                 };
+                if (c.IsConstraintViolation)
+                {
+                    tags.Insert(0, ("Excluded competitor", "danger"));
+                }
 
                 outcomes.Add(new OvOutcome(
                     i + 1,
@@ -8920,6 +8982,21 @@
     private sealed record OvStatusChip(string Label, string Value, string Tone, string Tooltip);
     private string OvDecisionStateLabel => DfiReadinessLabel;
     private string OvDecisionStateTone => DfiReadinessTone;
+    // True only when a real POLOXI Candidate x Branch competition executed. The LLM ADVISORY score is
+    // NOT a competition score: when competition is blocked we must not crown a "Current Leader" or claim
+    // one outcome "leads at X% support". Mirrors the authoritative backend signals used by the
+    // Technical Verification strip (CandidateCompetitionStatus = "RAN ..." /
+    // DecisionReadinessStatus = "CANDIDATES_REGISTERED_AND_COMPETED").
+    private bool OvCompetitionValid
+    {
+        get
+        {
+            var competitionStatus = _response?.MatterContext?.CandidateCompetitionStatus;
+            var readinessStatus = _response?.MatterContext?.DecisionReadinessStatus;
+            return (competitionStatus?.StartsWith("RAN", StringComparison.OrdinalIgnoreCase) ?? false)
+                || (readinessStatus?.StartsWith("CANDIDATES_REGISTERED_AND_COMPETED", StringComparison.OrdinalIgnoreCase) ?? false);
+        }
+    }
     private IReadOnlyList<OvStatusChip> OvDecisionStatusChips
     {
         get
@@ -9691,6 +9768,30 @@
     protected override async Task OnInitializedAsync()
     {
         Breadcrumbs.SetCrumbs(new("Home", "/"), new("Intelligence", "/intelligence"), new("Personal Injury Decision 2", "/legal/personalinjury_decision2"));
+
+        // Keep the full-page loading overlay up until the API host is reachable. When the backend is
+        // still starting (connection refused / socket error), wait for it instead of flashing an empty
+        // page, mirroring the loading behavior on the matters list pages.
+        try
+        {
+            await WaitForApiReadyAsync();
+            await LoadInitialDataAsync();
+        }
+        finally
+        {
+            _initializing = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task LoadInitialDataAsync()
+    {
+        // These three loads are independent of the matter and of each other, so start them up front and
+        // let them run concurrently with the matter-scoped loads below instead of awaiting each in series.
+        var modelsTask = SafeAsync(() => Api.GetIntelligenceWide2ModelsAsync(), (IReadOnlyCollection<WideModelOptionDto>)[]);
+        var showPipelineTask = SafeAsync(() => Api.GetSearch2ShowPipelineAsync(), false);
+        var contextsTask = SafeAsync(() => Api.GetIntelligenceSearch2ContextsAsync(), (IReadOnlyCollection<WideSearchContextDto>)[]);
+
         if (MatterId is { } matterId && matterId != Guid.Empty)
         {
             // Restore the last Overview result for this matter so returning from the
@@ -9699,12 +9800,19 @@
             _response = OverviewState.TryGet(matterId);
             try
             {
-                _matter = await Api.GetLegalDecisionMatterAsync(matterId);
-                try { _documents = await Api.GetLegalMatterDocumentsAsync(matterId); } catch { _documents = []; }
-                // Do NOT pre-render the intake pipeline on first load. It should only appear during an
-                // actual upload or answer-time activation, not as a static banner over a matter that
-                // already owns a corpus. Leaving _uploadStages null keeps the strip hidden on load.
-                await LoadCalibrationDataAsync(matterId);
+                // Matter, documents and calibration are all keyed only on matterId (not on each other),
+                // so fetch them concurrently; total wait becomes the slowest call, not their sum.
+                var matterTask = Api.GetLegalDecisionMatterAsync(matterId);
+                var documentsTask = SafeAsync(() => Api.GetLegalMatterDocumentsAsync(matterId), (IReadOnlyCollection<LegalDocumentDto>)[]);
+                var calibrationTask = LoadCalibrationDataAsync(matterId);
+
+                _matter = await matterTask;
+                _documents = await documentsTask;
+                await calibrationTask;
+
+                // Remember the matter in view so the static top-nav Case Command Center / Provider Portal
+                // links can restore it instead of dropping to the empty "Open a Matter" state.
+                ActiveMatter.Set(_matter?.DecisionMatterId ?? matterId);
                 if (_matter is not null && string.IsNullOrWhiteSpace(_query))
                 {
                     // Seed only a readable default question from the matter title. The full structured
@@ -9717,28 +9825,131 @@
             }
             catch { _matter = null; }
         }
-        try { _models = await Api.GetIntelligenceWide2ModelsAsync(); } catch { _models = []; }
+
+        _models = await modelsTask;
         // Auto (empty) is always valid. Only reset an explicit selection that is no longer a DB-backed model.
         if (!string.IsNullOrWhiteSpace(_selectedModelCode) && !_models.Any(m => string.Equals(m.ModelCode, _selectedModelCode, StringComparison.OrdinalIgnoreCase)))
         {
             _selectedModelCode = "";
         }
-        try { _showPipeline = await Api.GetSearch2ShowPipelineAsync(); } catch { _showPipeline = false; }
-        try
+        _showPipeline = await showPipelineTask;
+        _contexts = await contextsTask;
+        if (_contexts.Count > 0)
         {
-            _contexts = await Api.GetIntelligenceSearch2ContextsAsync();
             // Prefer the Legal context; otherwise fall back to the flagged default/first context.
             var preferred = _contexts.FirstOrDefault(c => string.Equals(c.ContextCode, "Legal", StringComparison.OrdinalIgnoreCase));
             var defaultContext = preferred ?? _contexts.FirstOrDefault(c => c.IsDefault) ?? _contexts.FirstOrDefault();
             if (defaultContext is not null) _selectedContextCode = defaultContext.ContextCode;
         }
-        catch { _contexts = []; }
         // If a cached Overview result was restored above, reload the DB-backed intelligence
         // layers it depends on so the restored view shows real Document Intelligence,
         // Decision Structure, and readiness values instead of empty panels.
         if (_response is not null)
         {
             try { await RefreshPostAnswerIntelligenceAsync(); } catch { /* fail-soft: keep the restored answer visible */ }
+        }
+    }
+
+    // Awaits a fail-soft API call, returning a fallback value if it throws. Mirrors the per-call
+    // try/catch fallbacks used throughout initial load so independent calls can run concurrently.
+    private static async Task<T> SafeAsync<T>(Func<Task<T>> call, T fallback)
+    {
+        try { return await call(); }
+        catch { return fallback; }
+    }
+
+    // Blocks (with the loading overlay visible) until the API host accepts connections. A connection
+    // refused / socket error means the backend isn't ready yet, so we retry quietly instead of
+    // rendering an empty page while the service is still starting up.
+    private async Task WaitForApiReadyAsync()
+    {
+        const int maxAttempts = 30;
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            try
+            {
+                await Api.GetSearch2ShowPipelineAsync();
+                return;
+            }
+            catch (Exception ex) when (IsApiNotReady(ex) && attempt < maxAttempts)
+            {
+                await Task.Delay(1000);
+            }
+            catch
+            {
+                // A non-connectivity error (e.g. auth) means the host IS up; stop waiting and
+                // let the normal fail-soft loads below handle it.
+                return;
+            }
+        }
+    }
+
+    // True when the failure indicates the API host is not accepting connections yet
+    // (still starting up) rather than a genuine application error.
+    private static bool IsApiNotReady(Exception ex)
+    {
+        for (var e = ex; e is not null; e = e.InnerException!)
+        {
+            if (e is System.Net.Sockets.SocketException) return true;
+            if (e is HttpRequestException hre && hre.StatusCode is null) return true;
+            if (e.InnerException is null) break;
+        }
+        return false;
+    }
+
+    // Browser sessionStorage key for the persisted Overview answer, scoped per matter so a full
+    // page reload (which recreates the circuit and empties the in-memory cache) can still restore it.
+    private static string OverviewStorageKey(Guid matterId) => $"poloxi.overview.{matterId:N}";
+
+    // Set once the circuit cache has been checked against sessionStorage, so we only restore once.
+    private bool _overviewRestoreAttempted;
+
+    private async Task PersistOverviewAsync(Guid matterId, WideSearchResponse response)
+    {
+        try
+        {
+            var json = System.Text.Json.JsonSerializer.Serialize(response);
+            await JS.InvokeVoidAsync("sessionStorage.setItem", OverviewStorageKey(matterId), json);
+        }
+        catch { /* best-effort persistence; never block the UI on storage failures */ }
+    }
+
+    // Restores a persisted Overview answer from the browser after a full reload, when neither the
+    // in-memory circuit cache nor a fresh pipeline run produced a response. Runs after first render
+    // (JS interop is unavailable during prerender/OnInitialized on Blazor Server).
+    private async Task TryRestorePersistedOverviewAsync()
+    {
+        if (_overviewRestoreAttempted) return;
+        _overviewRestoreAttempted = true;
+
+        if (_response is not null) return; // already have a result (circuit cache or fresh run)
+        if (MatterId is not { } matterId || matterId == Guid.Empty) return;
+
+        try
+        {
+            var json = await JS.InvokeAsync<string?>("sessionStorage.getItem", OverviewStorageKey(matterId));
+            if (string.IsNullOrWhiteSpace(json)) return;
+
+            var restored = System.Text.Json.JsonSerializer.Deserialize<WideSearchResponse>(json);
+            if (restored is null) return;
+
+            _response = restored;
+            OverviewState.Save(matterId, restored); // rehydrate the circuit cache too
+            // Reload the DB-backed intelligence layers the restored answer depends on.
+            try { await RefreshPostAnswerIntelligenceAsync(); } catch { /* fail-soft: keep the restored answer visible */ }
+            StateHasChanged();
+        }
+        catch { /* corrupt/absent payload — fall back to the empty state */ }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // Restore a persisted answer once the init overlay has cleared. We can't rely on firstRender
+        // alone because initialization (WaitForApiReady) finishes on a later render, so attempt the
+        // one-shot restore on any post-init render until it has run.
+        if (!_initializing && !_overviewRestoreAttempted)
+        {
+            await TryRestorePersistedOverviewAsync();
         }
     }
 
@@ -9788,7 +9999,12 @@
             {
                 // Cache the result so navigating into Full Analysis and back restores this view.
                 if (MatterId is { } matterId && matterId != Guid.Empty)
+                {
                     OverviewState.Save(matterId, _response);
+                    // Also persist to the browser so a full page reload restores the answer
+                    // instead of forcing the user to re-run the pipeline.
+                    await PersistOverviewAsync(matterId, _response);
+                }
                 await RefreshPostAnswerIntelligenceAsync();
             }
         }
@@ -9899,11 +10115,30 @@
                 SetUploadStage("propositions", UploadStageState.Skipped);
                 SetUploadStage("cdc", UploadStageState.Skipped);
                 _activationFailed = true;
-                _activationNotice =
-                    $"{final.PendingVersions} document version(s) could not be activated into the reasoning engine, " +
-                    "so no propositions or evidence were derived for them. This usually means the tenant has no active " +
-                    "CHAT model route configured for LEGAL_DOCUMENT_SEMANTIC_EXTRACTION. The answer was still produced " +
-                    "from available sources, but the Evidence Graph may remain empty until routing is fixed.";
+                // Prefer the ACTUAL backend failure reason captured during the activation pass over the
+                // generic "no CHAT route" guess. The server now records the real exception per document
+                // version, so we surface the distinct reasons (route/deployment/parse/timeout) verbatim.
+                var failureReasons = _documentActivationLog
+                    .Where(d => !d.Succeeded && !string.IsNullOrWhiteSpace(d.FailureReason))
+                    .Select(d => $"'{d.FileName}': {d.FailureReason}")
+                    .Distinct()
+                    .ToList();
+                if (failureReasons.Count > 0)
+                {
+                    _activationNotice =
+                        $"{final.PendingVersions} document version(s) could not be activated into the reasoning engine, " +
+                        "so no propositions or evidence were derived for them. The answer was still produced from " +
+                        "available sources, but the Evidence Graph may remain empty until this is resolved. " +
+                        $"Actual cause: {string.Join(" | ", failureReasons)}";
+                }
+                else
+                {
+                    _activationNotice =
+                        $"{final.PendingVersions} document version(s) could not be activated into the reasoning engine, " +
+                        "so no propositions or evidence were derived for them. This usually means the tenant has no active " +
+                        "CHAT model route configured for LEGAL_DOCUMENT_SEMANTIC_EXTRACTION. The answer was still produced " +
+                        "from available sources, but the Evidence Graph may remain empty until routing is fixed.";
+                }
             }
         }
         catch (OperationCanceledException)
@@ -9970,7 +10205,11 @@
             {
                 // Cache the refined result so navigating into Full Analysis and back restores this view.
                 if (MatterId is { } matterId && matterId != Guid.Empty)
+                {
                     OverviewState.Save(matterId, _response);
+                    // Also persist to the browser so a full page reload restores the answer.
+                    await PersistOverviewAsync(matterId, _response);
+                }
                 await RefreshPostAnswerIntelligenceAsync();
             }
         }

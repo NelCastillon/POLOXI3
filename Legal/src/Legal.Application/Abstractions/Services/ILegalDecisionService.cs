@@ -43,6 +43,7 @@ public interface ILegalDecisionService
     Task<bool> UpdateMatterAsync(Guid tenantId, Guid userId, Guid decisionMatterId, DecisionMatterUpdateRequest request, CancellationToken cancellationToken = default);
     Task<bool> UpdateMatterStatusAsync(Guid tenantId, Guid userId, Guid decisionMatterId, string statusCode, CancellationToken cancellationToken = default);
     Task<bool> DeleteMatterAsync(Guid tenantId, Guid userId, Guid decisionMatterId, CancellationToken cancellationToken = default);
+    Task<bool> DeleteMatterAsync(Guid tenantId, Guid userId, Guid decisionMatterId, bool includeAllTenants, CancellationToken cancellationToken = default);
     Task<DecisionMatterFacetsDto> GetMatterFacetsAsync(Guid tenantId, CancellationToken cancellationToken = default);
 
     // Domain Pack (practice-area domain semantics) retrieval.

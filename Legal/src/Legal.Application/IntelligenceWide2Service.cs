@@ -59,6 +59,11 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     // a specific pack was resolved rather than inferring it from PracticeArea. Null when unresolved.
     private Guid? _resolvedDomainPackId;
     private string? _resolvedDomainPackCode;
+    // Canonical Decision Outcome candidates (migration 0396) for the resolved pack. These are the DB-backed
+    // first-class competing resolutions/statuses (e.g. PI C1-C5). They are injected into the candidate
+    // universe at the start of the EVALUATE run so the Decision Outcome cards are never starved by the
+    // emergent harvest/enumeration sources. Shared evaluation FACTORS are NOT in this set. Per-run (scoped).
+    private IReadOnlyList<DecisionDomainPackOutcomeCandidateDto> _canonicalOutcomeCandidates=[];
     // R3 competition accountability: typed status for whether candidate competition ran on this run.
     private string? _candidateCompetitionStatus;
     // R4 Normalization Gate observability: the outcome of routing this run through the shared gate, or
@@ -848,8 +853,13 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 llmCalls++;
                 var parentsByCode=survivors.ToDictionary(branch=>branch.BranchCode,StringComparer.OrdinalIgnoreCase);
                 var nextLevel=MaterializeBranches(proposal.Branches,executionId,request.TenantId,depth+1,parentsByCode,configuration);
-                // Degenerate-progress guard: stop when the LLM merely rephrases the current level.
-                var currentCodes=currentLevel.Select(branch=>branch.BranchCode).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                // Degenerate-progress guard AND global BranchCode-uniqueness guard. Excluding only the
+                // immediately-preceding level's codes is not enough: the model can re-emit a code that
+                // already exists at a NON-adjacent earlier level (e.g. "WAGE_LOSS_CLAIMED" generated at L1
+                // reappearing at L3). Because survivors accumulate across ALL levels, such a cross-level
+                // duplicate later collides in the information-value round's eligible.ToDictionary(BranchCode).
+                // Guard against EVERY code already materialized in the hierarchy so codes stay globally unique.
+                var currentCodes=allBranches.Select(branch=>branch.BranchCode).ToHashSet(StringComparer.OrdinalIgnoreCase);
                 nextLevel=nextLevel.Where(branch=>!currentCodes.Contains(branch.BranchCode)).ToArray();
                 // Intra-level BranchCode dedup: now that every surviving parent is decomposed in a single
                 // hierarchy-step call, the model can emit the SAME child branchCode under two different
@@ -1075,7 +1085,15 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             // No LLM call — this gives the information rounds a real candidate universe up front so
             // Information Gain targets "which candidate wins" from round 1, not after competition.
             candidateUniverse.UnionWith(HarvestCandidateNames(externalKnowledgeAll));
-            // V3.5 Candidate Enumeration Seeding: one cheap LLM call lists concrete candidates for the
+            // Canonical Decision Outcome injection (migration 0396): on a legal EVALUATE run, seed the
+            // candidate universe with the DB-backed first-class outcome candidates for the resolved pack
+            // (e.g. PI C1-C5) BEFORE enumeration seeding. Emergent harvest/enumeration alone never guaranteed
+            // these outcomes, so the Decision Outcome cards were starved and competition stalled below two
+            // delivered candidates. These are the competing RESOLUTIONS/STATUSES only; the determining FACTORS
+            // (liability, causation, comparative fault, damages, statutory applicability) remain shared
+            // evaluation-hierarchy nodes and are never injected here. Fail-soft: empty set changes nothing.
+            if(IsLegalDecisionEvaluationRun&&_canonicalOutcomeCandidates is{Count:>0})
+                candidateUniverse.UnionWith(_canonicalOutcomeCandidates.Select(outcome=>outcome.Name));
             // query so the universe is never limited to the handful of names the initial snippets
             // happened to mention (nationwide search spaces were reaching competition with 3 names).
             // Seeds are UNTRUSTED (mini-tier model): each passes the deterministic validity filters
@@ -1136,7 +1154,14 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                         var proposal=await EstimateInformationValueAsync(request,configuration,eligible,entropyBefore,queryContract,contestedPair,cancellationToken);
                         llmCalls++;
                         if(proposal is null||proposal.Targets.Count==0)break;
-                        var branchesByCode=eligible.ToDictionary(branch=>branch.BranchCode,StringComparer.OrdinalIgnoreCase);
+                        // Index eligible branches by code for target lookup. Branch codes are expected to be
+                        // unique per run, but a degenerate run can surface two eligible branches sharing one
+                        // code (e.g. duplicate "WAGE_LOSS_CLAIMED" factor branches); a plain ToDictionary would
+                        // throw. Collapse duplicates deterministically to the highest-confidence branch so the
+                        // round proceeds instead of faulting the whole background operation.
+                        var branchesByCode=eligible
+                            .GroupBy(branch=>branch.BranchCode,StringComparer.OrdinalIgnoreCase)
+                            .ToDictionary(group=>group.Key,group=>group.OrderByDescending(branch=>branch.PoloxiConfidence).First(),StringComparer.OrdinalIgnoreCase);
                         var maxConfidence=Math.Max(eligible.Max(branch=>branch.PoloxiConfidence),.0001m);
                         // Candidate discrimination need is high when eligible branch scores are tightly packed.
                         var orderedConfidences=eligible.Select(branch=>branch.PoloxiConfidence).OrderByDescending(value=>value).ToArray();
@@ -2570,6 +2595,13 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                     {
                         _resolvedDomainPackId=pack.DecisionDomainPackId;
                         _resolvedDomainPackCode=pack.PackCode;
+                        // Capture the canonical Decision Outcome candidates for injection into the candidate
+                        // universe. Outcome rows apply to the whole pack unless they declare a narrower matter
+                        // type. Fail-soft: an empty set leaves the emergent harvest/enumeration behavior unchanged.
+                        if(pack.OutcomeCandidates.Count>0)
+                            _canonicalOutcomeCandidates=pack.OutcomeCandidates
+                                .OrderBy(o=>o.SortOrder)
+                                .ToArray();
                     }
                 }
                 catch(Exception)when(!cancellationToken.IsCancellationRequested){/* pack is advisory; run continues unresolved */}
@@ -2634,6 +2666,27 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     private string? FindMatterFieldValue(string label)
         =>_matterContext?.Decision.FirstOrDefault(f=>string.Equals(f.Label,label,StringComparison.OrdinalIgnoreCase)&&f.HasValue)?.Value;
 
+    // Resolves the matter's governing-law US-state sovereign for the deterministic evidence-scope gate.
+    // The saved matter legal-scope is AUTHORITATIVE: a matter's jurisdiction (e.g. New York) is stored on
+    // the matter, not necessarily restated in the user's free-text question. Order mirrors
+    // LegalDecisionService.ResolveMatterAuthorityContext (Governing Law → saved Jurisdiction → State), with
+    // court-caption normalization so "New York - Supreme Court, Westchester County" resolves to "New York".
+    // Falls back to the question text only when the matter carries no identifiable state sovereign, so the
+    // matter-less pipeline is unchanged. Returns null when neither source names a US state.
+    private string? ResolveMatterTargetSovereign(string? query)
+    {
+        var fromMatter=LegalScopeFieldValue("Governing Law")
+            ??LegalScopeFieldValue("Jurisdiction (saved reference)")
+            ??LegalScopeFieldValue("State");
+        var sovereign=Legal.Application.Features.Intelligence.Decision.LegalJurisdictionScope.ResolveGoverningLaw(fromMatter);
+        var resolved=Legal.Application.Features.Intelligence.Decision.LegalJurisdictionScope.ExtractSovereign(sovereign);
+        return resolved
+            ??Legal.Application.Features.Intelligence.Decision.LegalJurisdictionScope.ExtractSovereign(query);
+    }
+
+    private string? LegalScopeFieldValue(string label)
+        =>_matterContext?.LegalScope.FirstOrDefault(f=>string.Equals(f.Label,label,StringComparison.OrdinalIgnoreCase)&&f.HasValue)?.Value;
+
     // R3 legal-outcome candidate admission: dispositions the tribunal could reach ("grant in part",
     // "deny", "remand", "dismiss", "settle") are sentence-case verb phrases — they are NOT proper-noun
     // named entities and NOT the infrastructure action verbs IsActionCandidate recognizes, so the standard
@@ -2646,6 +2699,13 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         if(_matterContext is null||_decisionIntent.CurrentOutcomeIsHardConstraint)return false;
         if(string.IsNullOrWhiteSpace(name))return false;
         var trimmed=name.Trim();
+        // Canonical recognition (migration 0396): the DB-backed outcome candidates for the resolved pack
+        // (e.g. PI C1-C5) are noun-form resolution/status labels ("Confidential negotiated settlement") that
+        // the verb-based DispositionVerbs gate below does not match. Recognize them here so they are admitted
+        // and treated as first-class outcome candidates (never echo-rejected or demoted to scoring branches).
+        if(_canonicalOutcomeCandidates is{Count:>0}
+            &&_canonicalOutcomeCandidates.Any(outcome=>string.Equals(outcome.Name,trimmed,StringComparison.OrdinalIgnoreCase)))
+            return true;
         if(trimmed.Length<3||trimmed.Length>120)return false;
         var words=trimmed.Split([' ','\t','-','—',',','/','(',')'],StringSplitOptions.RemoveEmptyEntries);
         if(words.Length==0||words.Length>9)return false;
@@ -2826,12 +2886,16 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         try
         {
             var isLegalContext=string.Equals(request.ContextCode?.Trim(),WideSearchContexts.Legal,StringComparison.OrdinalIgnoreCase);
-            // Matter governing-law sovereign for the deterministic evidence-scope gate. Derived once from
-            // the question text (the matter context is seeded into request.Query). When the matter targets a
-            // specific US-state sovereign, a retrieved source that positively identifies a DIFFERENT state
-            // sovereign is out of scope and is denied promotion in ClassifyLegalSnippet — this blocks an
-            // eCFR/regulatory passage from another state being admitted as support for this matter.
-            var targetSovereign=Legal.Application.Features.Intelligence.Decision.LegalJurisdictionScope.ExtractSovereign(request.Query);
+            // Matter governing-law sovereign for the deterministic evidence-scope gate. The AUTHORITATIVE
+            // source is the saved matter legal-scope (Governing Law → Jurisdiction → State); the free-text
+            // question is only a fallback. A matter can target New York (e.g. the Sapini MVA matter, whose
+            // venue is "New York - Supreme Court, Westchester County") even though the user's question never
+            // literally says "New York". If the sovereign were read from request.Query alone it would be
+            // null for such matters, the scope gate below would silently become a no-op, and out-of-state
+            // authorities (e.g. California Code of Civil Procedure) would be admitted as support. When the
+            // matter targets a specific US-state sovereign, a retrieved source that positively identifies a
+            // DIFFERENT state sovereign is out of scope and is denied promotion in ClassifyLegalSnippet.
+            var targetSovereign=ResolveMatterTargetSovereign(request.Query);
             // Resolve the active grounding source for the request's context. LEGAL routes through the
             // legal sources (CourtListener case law + GovInfo/eCFR + DB-backed concept resolution);
             // every other context prefers the general web knowledge provider. Both paths share caching,
@@ -2982,6 +3046,14 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                     var authorities=useLegalGrounding
                         ?ExtractLegalAuthorities($"{branch.DisplayName}. {branch.Interpretation}. {branch.SearchText}")
                         :[];
+                    // LEGAL scope pre-filter: drop any EXTRACTED authority whose own citation text names a
+                    // DIFFERENT US-state sovereign than the matter (e.g. the model free-associates a California
+                    // statute on a New York matter). Without this, such a citation makes authorities.Count>0 and
+                    // SUPPRESSES the in-state concept-map fallback below; the out-of-state source is then fetched
+                    // and correctly dropped by the post-retrieval scope gate, leaving the branch with ZERO
+                    // evidence. Removing it lets the in-jurisdiction concept fallback produce the right citations.
+                    if(useLegalGrounding&&authorities.Count>0)
+                        authorities=FilterAuthoritiesToSovereign(authorities,targetSovereign);
                     // LEGAL concept fallback: when no explicit citation was named, resolve the branch's
                     // decisive doctrine to concrete UCC/U.S. Code citations via the DB-backed concept map,
                     // so concept-only questions still produce verifiable authorities instead of a diluted
@@ -5272,7 +5344,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             // A snippet naming a DIFFERENT US-state sovereign than the matter is out of scope and must not
             // be admitted, mirroring the branch-grounding gate so no legal admission path bypasses it.
             var targetSovereign=isLegalContext
-                ?Legal.Application.Features.Intelligence.Decision.LegalJurisdictionScope.ExtractSovereign(request.Query)
+                ?ResolveMatterTargetSovereign(request.Query)
                 :null;
             var topic=BuildCandidateSeekingQuery(request.Query,string.Empty);
             var batches=seeds.Chunk(4).Take(5).ToArray();

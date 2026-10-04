@@ -47,6 +47,7 @@ public sealed class OfficialLegalAuthorityRetriever(
     ILegalJurisdictionDetector jurisdictionDetector,
     IEpistemicTenantAccessor tenantAccessor,
     IErrorLogService errorLog,
+    Microsoft.Extensions.Configuration.IConfiguration configuration,
     ILogger<OfficialLegalAuthorityRetriever> logger):IOfficialLegalAuthoritySource
 {
     private static readonly Regex TemplateToken=new(@"\{(?<name>[A-Za-z][A-Za-z0-9_]*)(?::(?<operation>prefix|pad|replace):(?<argument>[^}]+))?\}",RegexOptions.Compiled);
@@ -180,44 +181,87 @@ public sealed class OfficialLegalAuthorityRetriever(
         var relativeUrl=ExpandTemplate(descriptor.DocumentUrlTemplate,citation);
         if(relativeUrl is null)return (null,"EXTRACTION_EMPTY",null,null,null);
         var url=$"{descriptor.BaseUrl.TrimEnd('/')}/{relativeUrl.TrimStart('/')}";
+        var isJsonApi=descriptor.ExtractionStrategyCode.Equals("JSON_NYSENATE",StringComparison.OrdinalIgnoreCase);
+        if(isJsonApi)
+        {
+            // The NY Senate Open Legislation API is the only government-host source that returns live New
+            // York statute text from blocked networks (nysenate.gov HTML and Justia both 403). It requires a
+            // free API key, appended as a query-string parameter from configuration so the key is never
+            // stored in the descriptor row. Missing key => explicit, actionable failure (not a silent 401).
+            var apiKey=configuration["Legal:OfficialAuthority:NySenateApiKey"];
+            if(string.IsNullOrWhiteSpace(apiKey))
+            {
+                logger.LogWarning("LEGAL-TRACE stage=4-official-authority provider={Provider} outcome=PROVIDER_FAILURE detail=MISSING_API_KEY",descriptor.ProviderCode);
+                return (null,"PROVIDER_FAILURE","Legal:OfficialAuthority:NySenateApiKey is not configured; NY Senate API requires a key.",url,null);
+            }
+            url=$"{url}{(url.Contains('?')?"&":"?")}key={Uri.EscapeDataString(apiKey)}";
+        }
         try
         {
             using var request=new HttpRequestMessage(HttpMethod.Get,url);
-            request.Headers.TryAddWithoutValidation("Accept","text/html");
-            request.Headers.TryAddWithoutValidation("User-Agent","Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36");
+            if(isJsonApi)
+            {
+                // The NY Senate Open Legislation endpoint is a JSON API, not an HTML document host. Request
+                // JSON explicitly and skip the browser-navigation fingerprint used to defeat HTML WAFs.
+                request.Headers.TryAddWithoutValidation("Accept","application/json");
+                request.Headers.TryAddWithoutValidation("Accept-Encoding","gzip, deflate, br");
+                request.Headers.TryAddWithoutValidation("User-Agent","Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
+            }
+            else
+            {
+            // Egress hardening (Option 1): present a complete, consistent browser fingerprint. A bare
+            // User-Agent + Accept pair is a classic bot signature that Justia/FindLaw-class WAFs answer with
+            // HTTP 403. Sending the same Accept-Language / Accept-Encoding / Sec-Fetch / client-hint headers a
+            // real Chrome navigation emits (and matching the UA's Chrome major version) lets a legitimate
+            // document GET through. Decompression is enabled on the primary handler so Accept-Encoding is honest.
+            request.Headers.TryAddWithoutValidation("Accept","text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8");
+            request.Headers.TryAddWithoutValidation("Accept-Language","en-US,en;q=0.9");
+            request.Headers.TryAddWithoutValidation("Accept-Encoding","gzip, deflate, br");
+            request.Headers.TryAddWithoutValidation("User-Agent","Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
+            request.Headers.TryAddWithoutValidation("sec-ch-ua","\"Chromium\";v=\"124\", \"Google Chrome\";v=\"124\", \"Not-A.Brand\";v=\"99\"");
+            request.Headers.TryAddWithoutValidation("sec-ch-ua-mobile","?0");
+            request.Headers.TryAddWithoutValidation("sec-ch-ua-platform","\"Windows\"");
+            request.Headers.TryAddWithoutValidation("Sec-Fetch-Site","none");
+            request.Headers.TryAddWithoutValidation("Sec-Fetch-Mode","navigate");
+            request.Headers.TryAddWithoutValidation("Sec-Fetch-User","?1");
+            request.Headers.TryAddWithoutValidation("Sec-Fetch-Dest","document");
+            request.Headers.TryAddWithoutValidation("Upgrade-Insecure-Requests","1");
+            }
             using var response=await httpClient.SendAsync(request,timeoutToken);
             var status=(int)response.StatusCode;
+            // Never surface the API key in logs, failure details, or the persisted snippet URL.
+            var safeUrl=isJsonApi?Regex.Replace(url,@"([?&])key=[^&]*","$1key=***"):url;
             if(response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.Unauthorized)
             {
-                logger.LogWarning("LEGAL-TRACE stage=4-official-authority provider={Provider} outcome=ACCESS_DENIED url={Url}",descriptor.ProviderCode,url);
-                return (null,"ACCESS_DENIED",$"{descriptor.ProviderCode} returned HTTP {status} for {url}.",url,status);
+                logger.LogWarning("LEGAL-TRACE stage=4-official-authority provider={Provider} outcome=ACCESS_DENIED url={Url}",descriptor.ProviderCode,safeUrl);
+                return (null,"ACCESS_DENIED",$"{descriptor.ProviderCode} returned HTTP {status} for {safeUrl}.",safeUrl,status);
             }
             if(!response.IsSuccessStatusCode)
-                return (null,"PROVIDER_FAILURE",$"{descriptor.ProviderCode} returned HTTP {status} for {url}.",url,status);
+                return (null,"PROVIDER_FAILURE",$"{descriptor.ProviderCode} returned HTTP {status} for {safeUrl}.",safeUrl,status);
             var finalUri=response.RequestMessage?.RequestUri;
             if(finalUri is null||!Uri.TryCreate(descriptor.BaseUrl,UriKind.Absolute,out var baseUri)||
                !finalUri.Host.Equals(baseUri.Host,StringComparison.OrdinalIgnoreCase))
             {
-                logger.LogWarning("LEGAL-TRACE stage=4-official-authority provider={Provider} outcome=UNTRUSTED_REDIRECT url={Url}",descriptor.ProviderCode,url);
-                return (null,"UNTRUSTED_REDIRECT_FAILURE",$"{descriptor.ProviderCode} redirected off the authoritative host for {url}.",url,status);
+                logger.LogWarning("LEGAL-TRACE stage=4-official-authority provider={Provider} outcome=UNTRUSTED_REDIRECT url={Url}",descriptor.ProviderCode,safeUrl);
+                return (null,"UNTRUSTED_REDIRECT_FAILURE",$"{descriptor.ProviderCode} redirected off the authoritative host for {safeUrl}.",safeUrl,status);
             }
             var html=await response.Content.ReadAsStringAsync(timeoutToken);
             var text=Extract(html,descriptor,citation);
-            if(string.IsNullOrWhiteSpace(text))return (null,"EXTRACTION_EMPTY",null,url,status);
+            if(string.IsNullOrWhiteSpace(text))return (null,"EXTRACTION_EMPTY",null,safeUrl,status);
             // Compose ONE canonical authority identity from the descriptor the citation actually resolved
             // to, NOT the raw matched citation text. A "Cal. Civ. Code § 377.60" miscitation routed to the
             // CCP descriptor must be reported as the Code of Civil Procedure authority it really is, so the
             // display title, jurisdiction, and source version all agree on a single authority identity and
             // no obsolete Civil-Code wording survives from stale retrieval text.
             var canonicalTitle=BuildCanonicalAuthorityTitle(descriptor,citation);
-            return (new(query,canonicalTitle,url,text,0m,DateTime.UtcNow)
+            return (new(query,canonicalTitle,safeUrl,text,0m,DateTime.UtcNow)
             {
                 AuthorityKind=descriptor.AuthorityKindCode,
                 SourceProvider="OFFICIAL_AUTHORITY",
                 SourceVersion=$"{descriptor.ProviderCode}:{descriptor.ExtractionStrategyCode}",
                 Jurisdiction=NormalizeJurisdictionLabel(descriptor.JurisdictionCode),
                 ProviderIdentityVerified=true,
-            },null,null,url,status);
+            },null,null,safeUrl,status);
         }
         catch(Exception exception)when(exception is not OperationCanceledException||!cancellationToken.IsCancellationRequested)
         {
@@ -288,6 +332,8 @@ public sealed class OfficialLegalAuthorityRetriever(
 
     private static string? Extract(string html,LegalAuthoritySourceDescriptor descriptor,Match citation)
     {
+        if(descriptor.ExtractionStrategyCode.Equals("JSON_NYSENATE",StringComparison.OrdinalIgnoreCase))
+            return ExtractNySenateJson(html);
         if(descriptor.ExtractionStrategyCode.Equals("FULL_PAGE_TEXT",StringComparison.OrdinalIgnoreCase))
             return ExtractFullPageText(html);
         if(!descriptor.ExtractionStrategyCode.Equals("HTML_ID_SECTION",StringComparison.OrdinalIgnoreCase))return null;
@@ -313,6 +359,36 @@ public sealed class OfficialLegalAuthorityRetriever(
         var sentinelIndex=decoded.LastIndexOf(LeginfoBodySentinel,StringComparison.OrdinalIgnoreCase);
         var body=sentinelIndex>=0?decoded[(sentinelIndex+LeginfoBodySentinel.Length)..].Trim():decoded;
         return body.Length>=MinimumStatutoryBodyLength?body:null;
+    }
+
+    // Parses the NY Senate Open Legislation API JSON envelope:
+    //   { "success": true, "result": { "docType":"SECTION", "title":"...", "text":"..." } }
+    // The operative statute lives in result.text; title prefixes it for readability. Unsuccessful
+    // envelopes (success=false, or a non-SECTION/empty-text result for a nonexistent section) yield null
+    // so the caller reports EXTRACTION_EMPTY and never admits a shell as evidence.
+    private static string? ExtractNySenateJson(string json)
+    {
+        try
+        {
+            using var document=System.Text.Json.JsonDocument.Parse(json);
+            var root=document.RootElement;
+            if(!root.TryGetProperty("success",out var success)||success.ValueKind!=System.Text.Json.JsonValueKind.True)
+                return null;
+            if(!root.TryGetProperty("result",out var result)||result.ValueKind!=System.Text.Json.JsonValueKind.Object)
+                return null;
+            var text=result.TryGetProperty("text",out var textElement)&&textElement.ValueKind==System.Text.Json.JsonValueKind.String
+                ?textElement.GetString():null;
+            if(string.IsNullOrWhiteSpace(text))return null;
+            var title=result.TryGetProperty("title",out var titleElement)&&titleElement.ValueKind==System.Text.Json.JsonValueKind.String
+                ?titleElement.GetString():null;
+            var body=WhiteSpace.Replace(text," ").Trim();
+            var composed=string.IsNullOrWhiteSpace(title)?body:$"{title.Trim()}\n\n{body}";
+            return composed.Length>=MinimumStatutoryBodyLength?composed:null;
+        }
+        catch(System.Text.Json.JsonException)
+        {
+            return null;
+        }
     }
 
     private static string? ExpandTemplate(string template,Match citation)

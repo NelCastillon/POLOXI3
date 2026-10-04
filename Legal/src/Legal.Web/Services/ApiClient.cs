@@ -120,6 +120,37 @@ public sealed class ApiClient(HttpClient httpClient)
         public Task<Legal.Application.Features.Intelligence.Decision.DecisionDomainPackDto?> GetLegalDecisionDomainPackAsync(string packCode,CancellationToken token=default)=>_httpClient.GetFromJsonAsync<Legal.Application.Features.Intelligence.Decision.DecisionDomainPackDto>($"api/legal_decision/domainpacks/{packCode}",token);
         public async Task<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.DecisionDomainPackDto>> GetLegalDecisionDomainPacksAsync(CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.DecisionDomainPackDto>>("api/legal_decision/domainpacks",token)??[];
         public Task<Legal.Application.Features.Intelligence.Decision.DecisionMatterDto?> GetLegalDecisionMatterAsync(Guid matterId,CancellationToken token=default)=>GetFromJsonWithTransientThrottleRetryAsync<Legal.Application.Features.Intelligence.Decision.DecisionMatterDto>($"api/legal_decision/matters/{matterId}",token);
+
+        // ── Judz Matter Lifecycle (operational stage context) ──────────────────
+        public Task<Legal.Application.Features.MatterLifecycle.MatterLifecycleSnapshotDto?> GetMatterLifecycleAsync(Guid matterId,CancellationToken token=default)=>GetFromJsonWithTransientThrottleRetryAsync<Legal.Application.Features.MatterLifecycle.MatterLifecycleSnapshotDto>($"api/legal_matter_lifecycle/{matterId}",token);
+        public async Task<Legal.Application.Features.MatterLifecycle.MatterLifecycleSnapshotDto?> PerformMatterLifecycleTransitionAsync(Guid matterId,Legal.Application.Features.MatterLifecycle.PerformMatterLifecycleTransitionRequest request,CancellationToken token=default)
+        {
+            using var response=await _httpClient.PostAsJsonAsync($"api/legal_matter_lifecycle/{matterId}/transitions",request,token);
+            response.EnsureSuccessStatusCode();
+            return await response.Content.ReadFromJsonAsync<Legal.Application.Features.MatterLifecycle.MatterLifecycleSnapshotDto>(cancellationToken:token);
+        }
+
+        // Judz Matter Lifecycle configuration (DB-backed authoring).
+        public async Task<IReadOnlyCollection<Legal.Application.Features.MatterLifecycle.MatterLifecycleDefinitionDto>> GetMatterLifecycleDefinitionsAsync(CancellationToken token=default)=>await GetFromJsonWithTransientThrottleRetryAsync<IReadOnlyCollection<Legal.Application.Features.MatterLifecycle.MatterLifecycleDefinitionDto>>("api/legal_matter_lifecycle/config/definitions",token)??[];
+        public Task<Legal.Application.Features.MatterLifecycle.MatterLifecycleDefinitionDetailDto?> GetMatterLifecycleDefinitionDetailAsync(Guid definitionId,CancellationToken token=default)=>GetFromJsonWithTransientThrottleRetryAsync<Legal.Application.Features.MatterLifecycle.MatterLifecycleDefinitionDetailDto>($"api/legal_matter_lifecycle/config/definitions/{definitionId}",token);
+        public async Task<Guid> SaveMatterLifecycleDefinitionAsync(Legal.Application.Features.MatterLifecycle.SaveMatterLifecycleDefinitionRequest request,CancellationToken token=default)
+        {
+            using var response=await _httpClient.PostAsJsonAsync("api/legal_matter_lifecycle/config/definitions",request,token);
+            response.EnsureSuccessStatusCode();
+            return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken:token);
+        }
+        public async Task<Guid> SaveMatterLifecycleStageAsync(Legal.Application.Features.MatterLifecycle.SaveMatterLifecycleStageRequest request,CancellationToken token=default)
+        {
+            using var response=await _httpClient.PostAsJsonAsync("api/legal_matter_lifecycle/config/stages",request,token);
+            response.EnsureSuccessStatusCode();
+            return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken:token);
+        }
+        public async Task<Guid> SaveMatterLifecycleTransitionAsync(Legal.Application.Features.MatterLifecycle.SaveMatterLifecycleTransitionRequest request,CancellationToken token=default)
+        {
+            using var response=await _httpClient.PostAsJsonAsync("api/legal_matter_lifecycle/config/transitions",request,token);
+            response.EnsureSuccessStatusCode();
+            return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken:token);
+        }
         public async Task<Guid> CreateLegalDecisionMatterAsync(Legal.Application.Features.Intelligence.Decision.DecisionMatterCreateRequest request,CancellationToken token=default)
         {
             using var response=await _httpClient.PostAsJsonAsync("api/legal_decision/matters",request,token);

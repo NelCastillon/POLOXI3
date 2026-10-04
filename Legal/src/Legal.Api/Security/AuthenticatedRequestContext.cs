@@ -40,14 +40,14 @@ public static class AuthenticatedRequestContext
             .Where(value => !string.IsNullOrWhiteSpace(value))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        if (user.Identity?.AuthenticationType == "Development" || user.IsInRole("SYSTEM_ADMIN") || user.IsInRole("TENANT_ADMIN"))
+        if (DevAuthBypass.IsAllAccessDevelopment(user) || user.IsInRole("SYSTEM_ADMIN") || user.IsInRole("TENANT_ADMIN"))
             permissions.Add("NAV_ALL");
 
         return permissions;
     }
 
     public static bool IsSystemAdmin(ClaimsPrincipal user)
-        => user.Identity?.AuthenticationType == "Development"
+        => DevAuthBypass.IsAllAccessDevelopment(user)
             || user.IsInRole("SYSTEM_ADMIN")
             || user.IsInRole("SUPERADMIN")
             || GetGrantedPermissions(user).Contains("platform.users.manage", StringComparer.OrdinalIgnoreCase);
@@ -83,7 +83,7 @@ public static class AuthenticatedRequestContext
     }
 
     private static bool HasAnyPermission(ClaimsPrincipal user, params string[] permissions)
-        => user.Identity?.AuthenticationType == "Development"
+        => DevAuthBypass.IsAllAccessDevelopment(user)
             || user.HasClaim("permission", "NAV_ALL")
             || user.IsInRole("SYSTEM_ADMIN")
             || user.IsInRole("TENANT_ADMIN")

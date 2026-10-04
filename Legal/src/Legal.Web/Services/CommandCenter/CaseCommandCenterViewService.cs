@@ -253,7 +253,7 @@ public sealed class CaseCommandCenterViewService(
             SourceMatterId: clio?.Matter.Id.ToString(),
             PracticeArea: matter?.PracticeAreaCode ?? clio?.Matter.PracticeArea ?? "Personal Injury",
             StageName: stage,
-            StageSequence: MatterLifecycleContext.SequenceFor(stage),
+            StageSequence: null,
             ImportedAt: DateTimeOffset.UtcNow);
     }
 

@@ -26,6 +26,9 @@ builder.Services.AddHealthChecks()
 var authScheme = builder.Environment.IsDevelopment()
     ? DevelopmentAuthenticationHandler.SchemeName
     : ForwardedIdentityAuthenticationHandler.SchemeName;
+// Honor the DevAuth:GrantSystemAdmin switch: when false, no-login Development sessions respect real
+// tenant scope and permission claims instead of being treated as an all-access System Admin.
+DevAuthBypass.Configure(builder.Configuration);
 var authentication = builder.Services.AddAuthentication(authScheme);
 if (builder.Environment.IsDevelopment())
     authentication.AddScheme<AuthenticationSchemeOptions, DevelopmentAuthenticationHandler>(DevelopmentAuthenticationHandler.SchemeName, _ => { });

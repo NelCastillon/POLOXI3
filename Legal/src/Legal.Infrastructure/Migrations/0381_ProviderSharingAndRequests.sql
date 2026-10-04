@@ -38,7 +38,7 @@ BEGIN
 		MatterId                UNIQUEIDENTIFIER NOT NULL,
 		ProviderKey             NVARCHAR(256)    NOT NULL,   -- normalized provider name
 		ProviderDisplayName     NVARCHAR(256)    NULL,
-		PortalEnabled           BIT              NOT NULL CONSTRAINT DF_Legal_ProviderSharingPolicy_Portal DEFAULT 0,
+		PortalEnabled           BIT              NOT NULL CONSTRAINT DF_Legal_ProviderSharingPolicy_Portal DEFAULT 1,
 		ShareMatterStatus       BIT              NOT NULL CONSTRAINT DF_Legal_ProviderSharingPolicy_Status DEFAULT 1,
 		ShareCurrentStage       BIT              NOT NULL CONSTRAINT DF_Legal_ProviderSharingPolicy_Stage DEFAULT 1,
 		SharePatientTreatment   BIT              NOT NULL CONSTRAINT DF_Legal_ProviderSharingPolicy_Treat DEFAULT 1,

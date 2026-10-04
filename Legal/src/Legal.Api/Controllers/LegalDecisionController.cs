@@ -106,8 +106,16 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
     [Authorize(Policy = IntelligencePolicies.Search)]
     public async Task<IActionResult> CreateMatter([FromBody] DecisionMatterCreateRequest request, CancellationToken cancellationToken)
     {
-        var id = await service.CreateMatterAsync(TenantId, ActorUserId, request, cancellationToken);
-        return Ok(new { DecisionMatterId = id });
+        try
+        {
+            var id = await service.CreateMatterAsync(TenantId, ActorUserId, request, cancellationToken);
+            return Ok(new { DecisionMatterId = id });
+        }
+        catch (DuplicateMatterException ex)
+        {
+            // Blocked duplicate: surface a clean 409 so the UI shows a friendly message.
+            return Conflict(ex.Message);
+        }
     }
 
     // Full decision-session history for a matter (dashboard/detail history list).
@@ -358,10 +366,12 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
     // Advisory proposition-level Information Value: scores each atomic matter fact-proposition on POLOXI's
     // shared VIV scale (reusing ClaimVerificationPrioritizer) so the cockpit can surface which propositions
     // are most worth investigating next. Display-only — it never blocks or alters the authoritative decision.
+    // persist:false — this is a read-only GET the Overview page calls on every load/return; persisting claim
+    // upserts here would silently re-process (re-write) the matter every time the user navigates back.
     [HttpGet("matters/{matterId:guid}/sessions/{sessionId:guid}/proposition-information-value")]
     [Authorize(Policy = IntelligencePolicies.Search)]
     public async Task<IActionResult> MatterPropositionInformationValue(Guid matterId, Guid sessionId, CancellationToken cancellationToken)
-        => Ok(await propositionInformationValueService.ScoreAsync(TenantId, matterId, sessionId, ActorUserId, persist: true, cancellationToken));
+        => Ok(await propositionInformationValueService.ScoreAsync(TenantId, matterId, sessionId, ActorUserId, persist: false, cancellationToken));
 
     // Next Best Action: advisory, decision-directed actions that resolve the highest-value unresolved
     // propositions. POLOXI selects what matters, HRR supplies where/why, the Domain Pack supplies domain
@@ -723,7 +733,7 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
     [Authorize(Policy = IntelligencePolicies.Search)]
     public async Task<IActionResult> DeleteMatter(Guid matterId, CancellationToken cancellationToken)
     {
-        var deleted = await service.DeleteMatterAsync(TenantId, ActorUserId, matterId, cancellationToken);
+        var deleted = await service.DeleteMatterAsync(TenantId, ActorUserId, matterId, AuthenticatedRequestContext.IsSystemAdmin(User), cancellationToken);
         return deleted ? NoContent() : NotFound();
     }
 

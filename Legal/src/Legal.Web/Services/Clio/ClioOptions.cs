@@ -9,6 +9,13 @@ public sealed class ClioOptions
 {
     public const string SectionName = "Clio";
 
+    /// <summary>
+    /// Master feature flag for the Clio integration. When false (the default),
+    /// the Clio page and OAuth endpoints are turned off and no Clio entry points
+    /// are surfaced in the UI. Set "Clio:Enabled" to true to re-enable.
+    /// </summary>
+    public bool Enabled { get; set; }
+
     /// <summary>Clio Manage OAuth application client id.</summary>
     public string? ClientId { get; set; }
 

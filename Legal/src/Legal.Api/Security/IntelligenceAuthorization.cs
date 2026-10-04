@@ -29,6 +29,6 @@ public sealed class IntelligencePermissionAuthorizationHandler:AuthorizationHand
 {
     protected override Task HandleRequirementAsync(AuthorizationHandlerContext context,IntelligencePermissionRequirement requirement)
     {
-        if(context.User.Identity?.AuthenticationType==DevelopmentAuthenticationHandler.SchemeName||context.User.HasClaim("permission",requirement.Permission)||context.User.HasClaim("permission","NAV_ALL")||context.User.IsInRole("SYSTEM_ADMIN")||context.User.IsInRole("TENANT_ADMIN"))context.Succeed(requirement);return Task.CompletedTask;
+        if(DevAuthBypass.IsAllAccessDevelopment(context.User)||context.User.HasClaim("permission",requirement.Permission)||context.User.HasClaim("permission","NAV_ALL")||context.User.IsInRole("SYSTEM_ADMIN")||context.User.IsInRole("TENANT_ADMIN"))context.Succeed(requirement);return Task.CompletedTask;
     }
 }

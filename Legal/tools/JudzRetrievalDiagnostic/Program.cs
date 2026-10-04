@@ -26,6 +26,7 @@ var configuration=new ConfigurationBuilder()
     .Build();
 
 var services=new ServiceCollection();
+services.AddSingleton<IConfiguration>(configuration);
 services.AddLogging(builder=>builder.AddSimpleConsole(options=>options.SingleLine=true).SetMinimumLevel(LogLevel.Information));
 var tenantAccessor=new DatabaseTenantAccessor();
 services.AddSingleton(tenantAccessor);

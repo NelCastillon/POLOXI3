@@ -64,6 +64,9 @@ builder.Services.AddHttpClient<IClioReadOnlyClient, ClioReadOnlyClient>(client =
 // Case + Decision Command Center read-model composer (read-only; composes existing read models).
 builder.Services.AddSingleton<Legal.Web.Services.CommandCenter.CommandCenterSnapshotCache>();
 builder.Services.AddScoped<Legal.Web.Services.CommandCenter.CaseCommandCenterViewService>();
+// Circuit-scoped memory of the matter the user is currently working with, so the static top-nav
+// Case Command Center link can restore it instead of dropping to the empty "Open a Matter" state.
+builder.Services.AddScoped<Legal.Web.Services.CommandCenter.ActiveMatterContext>();
 
 var app = builder.Build();
 

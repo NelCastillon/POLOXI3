@@ -500,6 +500,9 @@ public sealed partial class LegalDecisionService(
     public Task<bool> DeleteMatterAsync(Guid tenantId, Guid userId, Guid decisionMatterId, CancellationToken cancellationToken = default)
         => repository.DeleteMatterAsync(tenantId, userId, decisionMatterId, cancellationToken);
 
+    public Task<bool> DeleteMatterAsync(Guid tenantId, Guid userId, Guid decisionMatterId, bool includeAllTenants, CancellationToken cancellationToken = default)
+        => repository.DeleteMatterAsync(tenantId, userId, decisionMatterId, includeAllTenants, cancellationToken);
+
     public Task<DecisionMatterFacetsDto> GetMatterFacetsAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => repository.GetMatterFacetsAsync(tenantId, cancellationToken);
 

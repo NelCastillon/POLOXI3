@@ -4,6 +4,8 @@
 @inject CaseCommandCenterViewService CommandCenter
 @inject ApiClient Api
 @inject NavigationManager Navigation
+@inject ActiveMatterContext ActiveMatter
+@inject IJSRuntime JS
 @rendermode RenderMode.InteractiveServer
 
 <PageTitle>Case Command Center</PageTitle>
@@ -22,8 +24,8 @@
             <div class="ccc-empty">
                 <i class="bi bi-diagram-3"></i>
                 <h2>Case + Decision Command Center</h2>
-                <p>Open a matter to view its command center, or import one from Clio.</p>
-                <a class="um-btn um-btn-primary" href="/integrations/clio"><i class="bi bi-plug"></i> Go to Clio Import</a>
+                <p>Open a matter to view its command center.</p>
+                <a class="um-btn um-btn-primary" href="/legal/matters"><i class="bi bi-folder2-open"></i> Open a Matter</a>
             </div>
         }
         else if (_loading)
@@ -61,12 +63,12 @@
                     }
                 </div>
                 <nav class="ccc-sectionnav">
-                    <a href="#ccc-overview" class="ccc-sectionnav-link is-active">Overview</a>
-                    <a href="#ccc-decision" class="ccc-sectionnav-link">Decision Intelligence</a>
-                    <a href="#ccc-timeline" class="ccc-sectionnav-link">Timeline</a>
-                    <a href="#ccc-treatment" class="ccc-sectionnav-link">Medical &amp; Treatment</a>
-                    <a href="#ccc-economics" class="ccc-sectionnav-link">Case Economics</a>
-                    <a href="#ccc-parties" class="ccc-sectionnav-link">Parties &amp; Providers</a>
+                    <button type="button" class="ccc-sectionnav-link @(_activeSection == "ccc-overview" ? "is-active" : "")" @onclick='() => ScrollToSection("ccc-overview")'>Overview</button>
+                    <button type="button" class="ccc-sectionnav-link @(_activeSection == "ccc-decision" ? "is-active" : "")" @onclick='() => ScrollToSection("ccc-decision")'>Decision Intelligence</button>
+                    <button type="button" class="ccc-sectionnav-link @(_activeSection == "ccc-timeline" ? "is-active" : "")" @onclick='() => ScrollToSection("ccc-timeline")'>Timeline</button>
+                    <button type="button" class="ccc-sectionnav-link @(_activeSection == "ccc-treatment" ? "is-active" : "")" @onclick='() => ScrollToSection("ccc-treatment")'>Medical &amp; Treatment</button>
+                    <button type="button" class="ccc-sectionnav-link @(_activeSection == "ccc-economics" ? "is-active" : "")" @onclick='() => ScrollToSection("ccc-economics")'>Case Economics</button>
+                    <button type="button" class="ccc-sectionnav-link @(_activeSection == "ccc-parties" ? "is-active" : "")" @onclick='() => ScrollToSection("ccc-parties")'>Parties &amp; Providers</button>
                 </nav>
             </div>
 
@@ -116,37 +118,75 @@
                 </div>
             </header>
 
-            @* ── Matter lifecycle (Clio stage = context only) ── *@
-            <section class="ccc-card ccc-lifecycle">
-                <div class="ccc-card-head">
-                    <h2><i class="bi bi-signpost-2"></i> Matter Lifecycle</h2>
-                    <span class="ccc-readonly">@s.Lifecycle.PracticeArea practice area (from Clio) · Read only</span>
-                </div>
-                <ol class="ccc-stages">
-                    @for (var i = 0; i < MatterLifecycleContext.PersonalInjuryStages.Count; i++)
+            @* ── Judz Matter Lifecycle engine (DB-backed stage graph · operational context only) ── *@
+            @if (_lifecycle is { } lc)
+            {
+                <section class="ccc-card ccc-lifecycle-engine">
+                    <div class="ccc-card-head">
+                        <h2><i class="bi bi-diagram-3"></i> Judz Matter Lifecycle</h2>
+                        <span class="ccc-readonly">@lc.LifecycleDefinitionName · v@lc.VersionNumber · @lc.AuthorityMode</span>
+                    </div>
+                    @if (_lifecycleNotice is not null)
                     {
-                        var stage = MatterLifecycleContext.PersonalInjuryStages[i];
-                        var seq = i + 1;
-                        var cur = s.Lifecycle.StageSequence;
-                        var cls = cur is null ? "future" : seq < cur ? "done" : seq == cur ? "current" : "future";
-                        <li class="ccc-stage @cls" @onclick="() => FilterTimelineByStage(stage)">
-                            <span class="ccc-stage-dot">
-                                @if (cls == "done") { <i class="bi bi-check"></i> }
-                                else if (cls == "current") { <i class="bi bi-record-circle"></i> }
-                            </span>
-                            <span class="ccc-stage-name">@seq. @stage</span>
-                        </li>
+                        <div class="alert alert-danger ccc-alert" role="alert">
+                            <i class="bi bi-exclamation-triangle"></i> @_lifecycleNotice
+                        </div>
                     }
-                </ol>
-                @if (!string.IsNullOrWhiteSpace(s.Lifecycle.StageName))
-                {
+                    <ol class="ccc-stages">
+                        @foreach (var stage in lc.Stages)
+                        {
+                            var cls = stage.StageDefinitionId == lc.CurrentStageDefinitionId ? "current"
+                                : lc.History.Any(h => h.StageDefinitionId == stage.StageDefinitionId && h.ExitedUtc is not null) ? "done"
+                                : "future";
+                            <li class="ccc-stage @cls">
+                                <span class="ccc-stage-dot">
+                                    @if (cls == "done") { <i class="bi bi-check"></i> }
+                                    else if (cls == "current") { <i class="bi bi-record-circle"></i> }
+                                </span>
+                                <span class="ccc-stage-name">@stage.DisplayOrder. @stage.Name</span>
+                            </li>
+                        }
+                    </ol>
                     <div class="ccc-stage-current">
                         <span class="ccc-stage-current-k">Current Stage</span>
-                        <span class="ccc-stage-current-v">@s.Lifecycle.StageName</span>
-                        <small>Synced from Clio</small>
+                        <span class="ccc-stage-current-v">@lc.CurrentStageName</span>
+                        <small>Entered @lc.CurrentStageEnteredUtc.ToString("yyyy-MM-dd")</small>
                     </div>
-                }
-            </section>
+
+                    @if (lc.CurrentStageRequirements.Count > 0)
+                    {
+                        <div class="ccc-lifecycle-reqs">
+                            <h3>Stage requirements</h3>
+                            <ul>
+                                @foreach (var req in lc.CurrentStageRequirements)
+                                {
+                                    <li class="@(req.IsSatisfied ? "is-satisfied" : req.IsBlocking ? "is-blocking" : "")">
+                                        <i class="bi @(req.IsSatisfied ? "bi-check-circle-fill" : "bi-circle")"></i>
+                                        <span>@req.Name</span>
+                                        <span class="ccc-req-level">@req.RequirementLevel</span>
+                                    </li>
+                                }
+                            </ul>
+                        </div>
+                    }
+
+                    @if (lc.AvailableTransitions.Count > 0)
+                    {
+                        <div class="ccc-lifecycle-actions">
+                            <h3>Advance stage</h3>
+                            @foreach (var t in lc.AvailableTransitions)
+                            {
+                                <button type="button" class="um-btn um-btn-secondary um-btn-sm"
+                                        disabled="@_transitioning"
+                                        @onclick="() => PerformTransitionAsync(t.TransitionDefinitionId)">
+                                    <i class="bi bi-arrow-right-circle"></i> @t.Name
+                                    <span class="ccc-trans-target">→ @t.ToStageName</span>
+                                </button>
+                            }
+                        </div>
+                    }
+                </section>
+            }
 
             @* ── What matters now strip (derived from real snapshot counts) ── *@
             <section class="ccc-matters-now">
@@ -550,12 +590,36 @@
     private string? _loadError;
     private MatterIntelligenceSnapshot? _snapshot;
 
+    // Judz Matter Lifecycle engine (DB-backed; operational stage context only).
+    private Legal.Application.Features.MatterLifecycle.MatterLifecycleSnapshotDto? _lifecycle;
+    private bool _transitioning;
+    private string? _lifecycleNotice;
+
     private bool _drawerOpen;
     private string? _drawerRef;
     private string? _drawerTitle;
     private string? _drawerDetail;
 
     private string _search = string.Empty;
+
+    // Active section-nav tab. The tabs are in-page jump controls: clicking one smooth-scrolls to the matching
+    // section via JS interop and marks it active. Hash-anchor <a href="#..."> links do not work here because
+    // Blazor Interactive Server intercepts navigation and the sections render after the async matter load, so
+    // no native anchor scroll ever fires. Button + JS interop is deterministic and render-mode safe.
+    private string _activeSection = "ccc-overview";
+
+    private async Task ScrollToSection(string sectionId)
+    {
+        _activeSection = sectionId;
+        try
+        {
+            await JS.InvokeVoidAsync("amsScrollToElement", sectionId);
+        }
+        catch (JSException)
+        {
+            // Scroll is a progressive enhancement; the active-tab highlight still updates if interop is unavailable.
+        }
+    }
 
     private void OnSearchInput(ChangeEventArgs e) => _search = e.Value?.ToString() ?? string.Empty;
     private void ClearSearch() => _search = string.Empty;
@@ -580,7 +644,20 @@
 
     protected override async Task OnParametersSetAsync()
     {
-        if (!MatterId.HasValue) { _snapshot = null; return; }
+        if (!MatterId.HasValue)
+        {
+            // The static top-nav link carries no matterId. If the user already opened a matter in this
+            // session, restore it instead of dropping to the empty "Open a Matter" state.
+            if (ActiveMatter.MatterId is { } remembered)
+            {
+                Navigation.NavigateTo($"/legal/casecommandcenter?matterId={remembered}", forceLoad: false);
+                return;
+            }
+            _snapshot = null;
+            return;
+        }
+        // Remember the matter in view so other static entry points can restore it.
+        ActiveMatter.Set(MatterId.Value);
         await LoadAsync(MatterId.Value);
     }
 
@@ -591,6 +668,7 @@
         try
         {
             _snapshot = await CommandCenter.BuildAsync(matterId);
+            await LoadLifecycleAsync(matterId);
         }
         catch (Exception ex)
         {
@@ -602,10 +680,39 @@
         }
     }
 
-    private void FilterTimelineByStage(string stage)
+    private async Task LoadLifecycleAsync(Guid matterId)
     {
-        // Lifecycle stage filters the timeline presentation only; it never changes Clio or POLOXI.
-        OpenSource(null, $"Stage filter: {stage}", "Clicking a stage filters the timeline view. It does not modify Clio or any decision score.");
+        _lifecycleNotice = null;
+        try
+        {
+            _lifecycle = await Api.GetMatterLifecycleAsync(matterId);
+        }
+        catch (Exception ex)
+        {
+            _lifecycle = null;
+            _lifecycleNotice = $"Lifecycle unavailable: {ex.Message}";
+        }
+    }
+
+    private async Task PerformTransitionAsync(Guid transitionDefinitionId)
+    {
+        if (!MatterId.HasValue) return;
+        _transitioning = true;
+        _lifecycleNotice = null;
+        try
+        {
+            _lifecycle = await Api.PerformMatterLifecycleTransitionAsync(
+                MatterId.Value,
+                new Legal.Application.Features.MatterLifecycle.PerformMatterLifecycleTransitionRequest(MatterId.Value, transitionDefinitionId));
+        }
+        catch (Exception ex)
+        {
+            _lifecycleNotice = $"Transition failed: {ex.Message}";
+        }
+        finally
+        {
+            _transitioning = false;
+        }
     }
 
     private void OpenSource(string? reference, string title, string? detail)

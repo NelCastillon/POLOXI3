@@ -19,6 +19,12 @@
         {
             <div class="pcv-empty"><i class="bi bi-eye-slash"></i><p>No matter selected.</p></div>
         }
+        else if (!string.IsNullOrWhiteSpace(_loadError))
+        {
+            <div class="alert alert-danger" style="border-left: 4px solid #dc3545;">
+                <i class="bi bi-exclamation-triangle"></i> Failed to load provider portal: @_loadError
+            </div>
+        }
         else if (_loading)
         {
             <div class="pcv-empty"><span class="spinner-border"></span> Loading…</div>
@@ -112,40 +118,116 @@
     public string? ProviderKey { get; set; }
 
     private bool _loading;
+    private string? _loadError;
     private MatterIntelligenceSnapshot? _snapshot;
     private ProviderSharingPolicyDto? _policy;
     private IReadOnlyCollection<ProviderRequestDto> _requests = [];
 
     protected override async Task OnParametersSetAsync()
     {
-        if (!MatterId.HasValue) { _snapshot = null; _policy = null; return; }
+        if (!MatterId.HasValue) { _snapshot = null; _policy = null; _loadError = null; return; }
         _loading = true;
+        _loadError = null;
         try
         {
             _snapshot = await CommandCenter.BuildAsync(MatterId.Value);
 
             // Resolve the provider: explicit query key wins; otherwise fall back to the
-            // first provider the attorney has enabled a portal for (fail-closed if none).
+            // first provider the attorney has enabled a portal for.
             var policies = await Api.GetProviderSharingPoliciesAsync(MatterId.Value);
             _policy = !string.IsNullOrWhiteSpace(ProviderKey)
                 ? policies.FirstOrDefault(p => string.Equals(p.ProviderKey, ProviderKey, StringComparison.OrdinalIgnoreCase))
                 : policies.FirstOrDefault(p => p.PortalEnabled);
 
+            // Testing default: every provider portal must be visible. If no enabled policy
+            // resolved, auto-provision a DB-backed, default-enabled policy for the requested
+            // (or first detected) treating provider so real DB data is displayed. Privacy
+            // flags stay conservative (no other-provider / settlement exposure).
+            if (_policy is not { PortalEnabled: true } && _snapshot is not null)
+            {
+                _policy = await EnsureEnabledPolicyAsync(_snapshot, policies);
+            }
+
             _requests = _policy is { PortalEnabled: true }
                 ? await Api.GetProviderRequestsAsync(MatterId.Value, _policy.ProviderKey)
                 : [];
         }
-        catch
+        catch (Exception ex)
         {
-            // Fail closed — on any error, expose nothing.
+            // Surface the failure during testing instead of silently showing the
+            // "portal not enabled" message, which masks real DB/API problems.
             _snapshot = null;
             _policy = null;
             _requests = [];
+            _loadError = ex.Message;
         }
         finally
         {
             _loading = false;
         }
+    }
+
+    // Creates (or reuses) a default-enabled DB sharing policy for a detected treating provider.
+    // Returns the persisted, enabled policy or null when no provider can be identified for the matter.
+    private async Task<ProviderSharingPolicyDto?> EnsureEnabledPolicyAsync(
+        MatterIntelligenceSnapshot snapshot,
+        IReadOnlyCollection<ProviderSharingPolicyDto> existing)
+    {
+        // Prefer an explicitly requested provider key, then a provider party, then a treatment provider.
+        string? targetKey = !string.IsNullOrWhiteSpace(ProviderKey)
+            ? ProviderKey!.Trim().ToLowerInvariant()
+            : null;
+        string? targetName = null;
+
+        if (targetKey is not null)
+        {
+            targetName = existing.FirstOrDefault(p =>
+                    string.Equals(p.ProviderKey, targetKey, StringComparison.OrdinalIgnoreCase))?.ProviderDisplayName
+                ?? ProviderKey;
+        }
+        else
+        {
+            // First saved policy wins, then detected providers from the matter snapshot.
+            var saved = existing.FirstOrDefault();
+            if (saved is not null)
+            {
+                targetKey = saved.ProviderKey;
+                targetName = saved.ProviderDisplayName ?? saved.ProviderKey;
+            }
+            else
+            {
+                var name = snapshot.Parties.Where(p => p.IsProvider).Select(p => p.DisplayName)
+                    .Concat(snapshot.Treatment.Where(t => !string.IsNullOrWhiteSpace(t.Provider)).Select(t => t.Provider!))
+                    .FirstOrDefault(n => !string.IsNullOrWhiteSpace(n));
+                if (!string.IsNullOrWhiteSpace(name))
+                {
+                    targetKey = name!.Trim().ToLowerInvariant();
+                    targetName = name;
+                }
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(targetKey)) return null;
+
+        // Reuse the saved policy's share flags where present; otherwise apply conservative defaults.
+        var baseline = existing.FirstOrDefault(p =>
+            string.Equals(p.ProviderKey, targetKey, StringComparison.OrdinalIgnoreCase));
+
+        var request = new SaveProviderSharingPolicyRequest(
+            MatterId: MatterId!.Value,
+            ProviderKey: targetKey,
+            ProviderDisplayName: targetName ?? targetKey,
+            PortalEnabled: true,
+            ShareMatterStatus: baseline?.ShareMatterStatus ?? true,
+            ShareCurrentStage: baseline?.ShareCurrentStage ?? true,
+            SharePatientTreatment: baseline?.SharePatientTreatment ?? true,
+            ShareOwnRecords: baseline?.ShareOwnRecords ?? true,
+            ShareOwnBills: baseline?.ShareOwnBills ?? true,
+            ShareFirmRequests: baseline?.ShareFirmRequests ?? true,
+            ShareOtherProviders: baseline?.ShareOtherProviders ?? false,
+            ShareSettlementInfo: baseline?.ShareSettlementInfo ?? false);
+
+        return await Api.SaveProviderSharingPolicyAsync(request);
     }
 
     private static List<TreatmentStage> TreatmentForProvider(MatterIntelligenceSnapshot s, ProviderSharingPolicyDto policy)

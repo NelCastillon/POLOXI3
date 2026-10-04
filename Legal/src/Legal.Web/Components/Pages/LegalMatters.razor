@@ -374,8 +374,23 @@
         StateHasChanged();
         try
         {
-            _matters = await Api.GetLegalDecisionMattersAsync();
-            _facets = await Api.GetLegalDecisionMatterFacetsAsync();
+            // Keep the loading glass visible while the API host is still coming up.
+            // A connection-refused / socket error means the backend isn't ready yet,
+            // so we retry quietly instead of surfacing a scary error to the user.
+            const int maxAttempts = 30;
+            for (var attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    _matters = await Api.GetLegalDecisionMattersAsync();
+                    _facets = await Api.GetLegalDecisionMatterFacetsAsync();
+                    break;
+                }
+                catch (Exception ex) when (IsApiNotReady(ex) && attempt < maxAttempts)
+                {
+                    await Task.Delay(1000);
+                }
+            }
         }
         catch (HttpRequestException ex) when (ex.StatusCode is System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden)
         {
@@ -397,6 +412,19 @@
             _loading = false;
             StateHasChanged();
         }
+    }
+
+    // True when the failure indicates the API host is not accepting connections yet
+    // (still starting up) rather than a genuine application error.
+    private static bool IsApiNotReady(Exception ex)
+    {
+        for (var e = ex; e is not null; e = e.InnerException!)
+        {
+            if (e is System.Net.Sockets.SocketException) return true;
+            if (e is HttpRequestException hre && hre.StatusCode is null) return true;
+            if (e.InnerException is null) break;
+        }
+        return false;
     }
 
     private void SetFilter(string filter) => _activeFilter = filter;

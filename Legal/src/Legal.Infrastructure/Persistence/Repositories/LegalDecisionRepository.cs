@@ -1355,45 +1355,81 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
     public async Task<Guid> CreateMatterAsync(Guid tenantId, Guid userId, DecisionMatterCreateRequest request, CancellationToken cancellationToken = default)
     {
         using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        var id = Guid.NewGuid();
-        await connection.ExecuteAsync(new CommandDefinition(
+
+        // Duplicate guard: a matter is "the same" when its normalized Title + MatterType +
+        // Jurisdiction match an existing non-deleted matter for this tenant. This mirrors the
+        // persisted MatterDedupeKey column and the filtered unique index (migration 0384).
+        // Pre-check gives a clean message; the unique-violation catch below is the race-safe backstop.
+        var dedupeKey = BuildMatterDedupeKey(request.Title, request.MatterTypeCode, request.Jurisdiction);
+        var existingId = await connection.QuerySingleOrDefaultAsync<Guid?>(new CommandDefinition(
             """
-            INSERT INTO POLOXI.Legal_DecisionMatter
-                (DecisionMatterId, Title, MatterTypeCode, Jurisdiction, Posture, Description, StatusCode, TenantId, CreatedByUserId,
-                 PracticeAreaCode, ClaimTypeCode, DomainPackCode,
-                 Subtype, CourtSystem, State, CourtLevel, County, GoverningLaw, MovingParty, RespondingParty, MotionTarget, RequestedDisposition)
-            VALUES
-                (@DecisionMatterId, @Title, @MatterTypeCode, @Jurisdiction, @Posture, @Description, N'OPEN', @TenantId, @UserId,
-                 @PracticeAreaCode, @ClaimTypeCode, @DomainPackCode,
-                 @Subtype, @CourtSystem, @State, @CourtLevel, @County, @GoverningLaw, @MovingParty, @RespondingParty, @MotionTarget, @RequestedDisposition);
+            SELECT TOP 1 DecisionMatterId
+            FROM POLOXI.Legal_DecisionMatter
+            WHERE IsDeleted = 0 AND TenantId = @TenantId AND MatterDedupeKey = @DedupeKey;
             """,
-            new
-            {
-                DecisionMatterId = id,
-                request.Title,
-                request.MatterTypeCode,
-                request.Jurisdiction,
-                request.Posture,
-                request.Description,
-                request.PracticeAreaCode,
-                request.ClaimTypeCode,
-                request.DomainPackCode,
-                request.Subtype,
-                request.CourtSystem,
-                request.State,
-                request.CourtLevel,
-                request.County,
-                request.GoverningLaw,
-                request.MovingParty,
-                request.RespondingParty,
-                request.MotionTarget,
-                request.RequestedDisposition,
-                TenantId = tenantId,
-                UserId = userId == Guid.Empty ? (Guid?)null : userId
-            },
+            new { TenantId = tenantId, DedupeKey = dedupeKey },
             cancellationToken: cancellationToken));
-        return id;
+        if (existingId is { } duplicateId && duplicateId != Guid.Empty)
+            throw new DuplicateMatterException(
+                "A matter with the same title, type, and jurisdiction already exists.", duplicateId);
+
+        var id = Guid.NewGuid();
+        try
+        {
+            await connection.ExecuteAsync(new CommandDefinition(
+                """
+                INSERT INTO POLOXI.Legal_DecisionMatter
+                    (DecisionMatterId, Title, MatterTypeCode, Jurisdiction, Posture, Description, StatusCode, TenantId, CreatedByUserId,
+                     PracticeAreaCode, ClaimTypeCode, DomainPackCode,
+                     Subtype, CourtSystem, State, CourtLevel, County, GoverningLaw, MovingParty, RespondingParty, MotionTarget, RequestedDisposition)
+                VALUES
+                    (@DecisionMatterId, @Title, @MatterTypeCode, @Jurisdiction, @Posture, @Description, N'OPEN', @TenantId, @UserId,
+                     @PracticeAreaCode, @ClaimTypeCode, @DomainPackCode,
+                     @Subtype, @CourtSystem, @State, @CourtLevel, @County, @GoverningLaw, @MovingParty, @RespondingParty, @MotionTarget, @RequestedDisposition);
+                """,
+                new
+                {
+                    DecisionMatterId = id,
+                    request.Title,
+                    request.MatterTypeCode,
+                    request.Jurisdiction,
+                    request.Posture,
+                    request.Description,
+                    request.PracticeAreaCode,
+                    request.ClaimTypeCode,
+                    request.DomainPackCode,
+                    request.Subtype,
+                    request.CourtSystem,
+                    request.State,
+                    request.CourtLevel,
+                    request.County,
+                    request.GoverningLaw,
+                    request.MovingParty,
+                    request.RespondingParty,
+                    request.MotionTarget,
+                    request.RequestedDisposition,
+                    TenantId = tenantId,
+                    UserId = userId == Guid.Empty ? (Guid?)null : userId
+                },
+                cancellationToken: cancellationToken));
+            return id;
+        }
+        catch (Microsoft.Data.SqlClient.SqlException ex) when (ex.Number is 2601 or 2627)
+        {
+            // Lost the race against a concurrent insert; translate the unique-index violation.
+            throw new DuplicateMatterException(
+                "A matter with the same title, type, and jurisdiction already exists.", Guid.Empty);
+        }
     }
+
+    // Normalized duplicate signature; must stay in sync with the persisted MatterDedupeKey
+    // computed column defined in migration 0384 (lowercased, trimmed, pipe-delimited).
+    private static string BuildMatterDedupeKey(string? title, string? matterTypeCode, string? jurisdiction)
+        => string.Join('|',
+            (title ?? string.Empty).Trim().ToLowerInvariant(),
+            (matterTypeCode ?? string.Empty).Trim().ToLowerInvariant(),
+            (jurisdiction ?? string.Empty).Trim().ToLowerInvariant());
+
 
     // ── Domain Pack (practice-area domain semantics) ─────────────────────────────────────────────
     // Loads a database-backed Domain Pack (global default rows use TenantId NULL; tenant rows override)
@@ -1515,12 +1551,34 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
             FROM RankedRelation WHERE ScopeRank = 1 ORDER BY SortOrder;
             """, new { PackId = pack.DecisionDomainPackId, TenantId = tenantId }, cancellationToken: cancellationToken))).ToArray();
 
+        // Canonical Decision Outcome candidates (migration 0396). Global (TenantId NULL) rows are defaults;
+        // tenant rows override by OutcomeCode. These are injected into the candidate universe so the Decision
+        // Outcome cards are never starved. Shared evaluation FACTORS are NOT part of this set.
+        var outcomeCandidates = (await connection.QueryAsync<DecisionDomainPackOutcomeCandidateDto>(new CommandDefinition(
+            """
+            WITH RankedOutcome AS
+            (
+                SELECT OutcomeCode, Name, Description, RoleCode, RequiresVerification, MatterTypeCode, SortOrder,
+                       ROW_NUMBER() OVER
+                       (
+                           PARTITION BY OutcomeCode
+                           ORDER BY CASE WHEN TenantId = @TenantId THEN 0 ELSE 1 END, SortOrder
+                       ) AS ScopeRank
+                FROM POLOXI.Legal_DecisionDomainPackOutcomeCandidate
+                WHERE IsDeleted = 0 AND IsActive = 1 AND DecisionDomainPackId = @PackId
+                  AND (TenantId = @TenantId OR TenantId IS NULL)
+            )
+            SELECT OutcomeCode, Name, Description, RoleCode, RequiresVerification, MatterTypeCode, SortOrder
+            FROM RankedOutcome WHERE ScopeRank = 1 ORDER BY SortOrder, OutcomeCode;
+            """, new { PackId = pack.DecisionDomainPackId, TenantId = tenantId }, cancellationToken: cancellationToken))).ToArray();
+
         return new DecisionDomainPackDto(
             pack.DecisionDomainPackId, pack.PackCode, pack.PracticeAreaCode, pack.Name, pack.Description,
             dimensions, evidenceTypes, profiles, matterTypes)
         {
             Concepts = concepts,
             ConceptRelations = conceptRelations,
+            OutcomeCandidates = outcomeCandidates,
         };
     }
 
@@ -2596,15 +2654,19 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
     }
 
     public async Task<bool> DeleteMatterAsync(Guid tenantId, Guid userId, Guid decisionMatterId, CancellationToken cancellationToken = default)
+        => await DeleteMatterAsync(tenantId, userId, decisionMatterId, includeAllTenants: false, cancellationToken);
+
+    public async Task<bool> DeleteMatterAsync(Guid tenantId, Guid userId, Guid decisionMatterId, bool includeAllTenants, CancellationToken cancellationToken = default)
     {
         using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         var affected = await connection.ExecuteAsync(new CommandDefinition(
-            """
+            $"""
             UPDATE POLOXI.Legal_DecisionMatter
             SET IsDeleted = 1,
                 ModifiedDateUtc = SYSUTCDATETIME(),
                 ModifiedByUserId = @UserId
-            WHERE IsDeleted = 0 AND TenantId = @TenantId AND DecisionMatterId = @DecisionMatterId;
+            WHERE IsDeleted = 0 AND DecisionMatterId = @DecisionMatterId
+                  {(includeAllTenants ? string.Empty : "AND TenantId = @TenantId")};
             """,
             new
             {
