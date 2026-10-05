@@ -57,7 +57,10 @@ public sealed record LpiReviewItemView(
     DateTimeOffset? EffectiveAt,
     string StateCode,
     string? StateReason,
-    IReadOnlyList<LpiReviewPlacementView> Placements);
+    IReadOnlyList<LpiReviewPlacementView> Placements,
+    // Provenance channel (ConditionDirected | DocumentDirected | MediaDirected) so the review panel can
+    // show whether a parked proposition came from document retrieval or the Media & Machine Evidence channel.
+    string RetrievalModeCode = nameof(LpiRetrievalMode.ConditionDirected));
 
 public sealed record LpiReviewPlacementView(
     Guid TargetNodeId,

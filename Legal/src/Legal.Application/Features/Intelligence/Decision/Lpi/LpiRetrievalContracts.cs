@@ -24,7 +24,11 @@ public enum LpiRetrievalMode
     ConditionDirected,
 
     // Detect material information that does not fit the current hierarchy (new defense, party, outcome).
-    DocumentDirected
+    DocumentDirected,
+
+    // Proposition originated from the Media & Machine Evidence channel (image/audio/structured extraction
+    // or manual annotation), anchored to an exact media source region/interval — NOT a document retrieval.
+    MediaDirected
 }
 
 // Qualitative relationship a proposition bears to a hierarchy node. Never a score.

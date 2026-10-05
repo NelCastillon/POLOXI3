@@ -90,7 +90,10 @@ public sealed record LpiReviewItem(
     DateTimeOffset? EffectiveAt,
     string StateCode,
     string? StateReason,
-    IReadOnlyList<LpiReviewPlacement> Placements);
+    IReadOnlyList<LpiReviewPlacement> Placements,
+    // Provenance mode stored at park time (ConditionDirected | DocumentDirected | MediaDirected). Carried
+    // through on accept so the committed proposition keeps its original channel instead of being relabeled.
+    string RetrievalModeCode = nameof(LpiRetrievalMode.ConditionDirected));
 
 public sealed record LpiReviewPlacement(
     Guid TargetNodeId,
@@ -111,7 +114,10 @@ public sealed record LpiReviewPark(
     IReadOnlyList<LpiPlacementProposal> Placements,
     LpiIntegrationContext Context,
     string ReviewStateCode,     // LpiProposalState: ReviewRequired | NeedsHierarchyReview
-    string ReviewReason);
+    string ReviewReason,
+    // Provenance mode persisted to Legal_RetrievedProposition.RetrievalModeCode. Defaults to
+    // ConditionDirected to preserve existing document-retrieval parking; media parks pass MediaDirected.
+    string RetrievalModeCode = nameof(LpiRetrievalMode.ConditionDirected));
 
 // A fully-prepared, validated commit payload assembled by the integration service.
 public sealed record LpiIntegrationCommit(
@@ -123,7 +129,10 @@ public sealed record LpiIntegrationCommit(
     IReadOnlyList<LpiPlacementProposal> Placements,
     LpiScoreInitializerResult? LpiCalculation,      // null when LPI disabled or not applicable
     LpiIntegrationContext Context,
-    Guid? SupersedesPropositionId);
+    Guid? SupersedesPropositionId,
+    // Provenance mode persisted to Legal_RetrievedProposition.RetrievalModeCode. Defaults to
+    // ConditionDirected to preserve existing document-retrieval commits; media commits pass MediaDirected.
+    string RetrievalModeCode = nameof(LpiRetrievalMode.ConditionDirected));
 
 // A withdrawal payload: the accepted proposition being retracted plus the placements whose contribution
 // must be inverted so POLOXI Core recompetes without it. History is preserved (state Withdrawn).

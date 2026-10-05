@@ -1,0 +1,533 @@
+@page "/legal/media-evidence"
+@using Legal.Application.Features.Intelligence.Decision
+@using Legal.Application.Features.Intelligence.Decision.Media
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Navigation
+
+<LegalWorkspace>
+    <div class="media-page">
+        <header class="media-hero">
+            <div class="media-hero-icon"><i class="bi bi-camera-reels"></i></div>
+            <div class="media-hero-copy">
+                <span>POLOXI Legal — Media &amp; Machine Intelligence channel</span>
+                <h1>Media &amp; Machine Evidence</h1>
+                <p>Register immutable photo and audio evidence, run capability-aware extraction into anchored proposition proposals, and confirm each proposition↔anchor link. Nothing here scores or picks a winner — accepted propositions flow through the shared review funnel and POLOXI Core alone competes them.</p>
+            </div>
+        </header>
+
+        @if (_matter is not null)
+        {
+            <div class="media-matter-banner">
+                <i class="bi bi-folder2-open"></i>
+                <div class="media-matter-banner-body">
+                    <span>Working within matter</span>
+                    <a href="@($"/legal/matters/{_matter.DecisionMatterId}")"><strong>@_matter.Title</strong></a>
+                </div>
+                <a class="um-btn um-btn-ghost um-btn-sm ms-auto" href="@($"/legal/decision?matterId={_matter.DecisionMatterId}")">
+                    <i class="bi bi-signpost-split"></i> Decision
+                </a>
+            </div>
+        }
+
+        @if (_loadError is not null)
+        {
+            <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_loadError</div>
+        }
+
+        @if (_banner is not null)
+        {
+            <div class="alert @(_bannerError ? "alert-danger" : "alert-info")"
+                 style="@(_bannerError ? "border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" : "border-left: 4px solid #0d6efd;")">
+                @_banner
+            </div>
+        }
+
+        @if (_matter is null)
+        {
+            <div class="alert alert-warning">
+                Open this workspace from a matter to register and process media evidence
+                (for example <code>/legal/media-evidence?matterId=&lt;id&gt;</code>).
+            </div>
+        }
+        else
+        {
+            <section class="media-grid">
+                <aside class="media-asset-pane" aria-label="Registered media assets">
+                    <div class="media-pane-head">
+                        <div class="media-pane-title"><i class="bi bi-collection"></i> <strong>Assets</strong> <span class="media-count">@_assets.Count</span></div>
+                        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadAssetsAsync" disabled="@_busy"><i class="bi bi-arrow-clockwise"></i></button>
+                    </div>
+
+                    <div class="media-upload">
+                        <label class="media-upload-label">
+                            <span><i class="bi bi-upload"></i> Upload photo or audio</span>
+                            <InputFile OnChange="OnFileSelected" accept="image/*,audio/*" disabled="@_busy" />
+                        </label>
+                        @if (_pendingFile is not null)
+                        {
+                            <div class="media-upload-pending">
+                                <i class="bi bi-file-earmark"></i>
+                                <span>@_pendingFile.Name (@FormatBytes(_pendingFile.Size))</span>
+                                <select class="um-input um-input-sm" @bind="_pendingAssetType">
+                                    <option value="@MediaAssetType.Photo">Photo</option>
+                                    <option value="@MediaAssetType.Audio">Audio</option>
+                                </select>
+                                <button class="um-btn um-btn-primary um-btn-sm" @onclick="RegisterAsync" disabled="@_busy">Register</button>
+                            </div>
+                        }
+                    </div>
+
+                    <ul class="media-asset-list">
+                        @foreach (var asset in _assets)
+                        {
+                            <li class="media-asset-item @(_selectedAsset?.MediaAssetId == asset.MediaAssetId ? "is-selected" : string.Empty)"
+                                @onclick="() => SelectAssetAsync(asset)">
+                                <i class="bi @(asset.AssetType == MediaAssetType.Audio ? "bi-music-note-beamed" : "bi-image")"></i>
+                                <div class="media-asset-meta">
+                                    <strong>@asset.OriginalFileName</strong>
+                                    <span>@asset.AssetType · @asset.CreatedDateUtc.LocalDateTime.ToString("g")</span>
+                                </div>
+                            </li>
+                        }
+                        @if (_assets.Count == 0)
+                        {
+                            <li class="media-asset-empty">No assets registered yet.</li>
+                        }
+                    </ul>
+                </aside>
+
+                <div class="media-viewer-pane" aria-label="Media preview and processing">
+                    @if (_selectedAsset is null)
+                    {
+                        <div class="media-viewer-empty"><i class="bi bi-hand-index"></i> Select an asset to preview and process.</div>
+                    }
+                    else
+                    {
+                        <div class="media-viewer-head">
+                            <div class="media-viewer-title"><i class="bi @(_selectedAsset.AssetType == MediaAssetType.Audio ? "bi-music-note-beamed" : "bi-image")"></i> <strong>@_selectedAsset.OriginalFileName</strong></div>
+                            <button class="um-btn um-btn-primary um-btn-sm" @onclick="ProcessAsync" disabled="@_busy">
+                                <i class="bi bi-cpu"></i> Process
+                            </button>
+                        </div>
+
+                        <div class="media-viewer-body">
+                            @if (_contentUrl is not null)
+                            {
+                                @if (_selectedAsset.AssetType == MediaAssetType.Audio)
+                                {
+                                    <audio controls preload="metadata" src="@_contentUrl" class="media-audio"></audio>
+                                }
+                                else
+                                {
+                                    <img src="@_contentUrl" alt="@_selectedAsset.OriginalFileName" class="media-image" />
+                                }
+                            }
+                        </div>
+
+                        @if (_lastProcessing is not null)
+                        {
+                            <div class="media-process-result">
+                                <span class="media-chip @ProcessingChipClass(_lastProcessing.StatusCode)">@_lastProcessing.StatusCode</span>
+                                <span>@_lastProcessing.ProposalsParked parked proposal(s)</span>
+                                @if (!string.IsNullOrWhiteSpace(_lastProcessing.Explanation))
+                                {
+                                    <span class="media-process-note">@_lastProcessing.Explanation</span>
+                                }
+                            </div>
+                        }
+
+                        <div class="media-manual">
+                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _showManual = !_showManual">
+                                <i class="bi bi-pencil-square"></i> @(_showManual ? "Hide" : "Manual annotation")
+                            </button>
+                            @if (_showManual)
+                            {
+                                <div class="media-manual-form">
+                                    <p class="media-manual-hint">Author one anchored proposition by hand when automated extraction is unavailable. Describe only what the source supports — do not fabricate observations, regions, or timestamps.</p>
+
+                                    <label>Proposition text
+                                        <textarea class="um-input" rows="2" @bind="_manual.PropositionText" placeholder="One atomic proposition…"></textarea>
+                                    </label>
+
+                                    <div class="media-manual-row">
+                                        <label>Evidence kind
+                                            <select class="um-input um-input-sm" @bind="_manual.EvidenceKind">
+                                                @foreach (var kind in Enum.GetValues<MediaEvidenceKind>())
+                                                {
+                                                    <option value="@kind">@kind</option>
+                                                }
+                                            </select>
+                                        </label>
+                                        <label>Attributed to
+                                            <input class="um-input um-input-sm" @bind="_manual.AttributedTo" placeholder="(optional)" />
+                                        </label>
+                                    </div>
+
+                                    @if (_selectedAsset.AssetType == MediaAssetType.Audio)
+                                    {
+                                        <div class="media-manual-row">
+                                            <label>Start (ms)
+                                                <input type="number" min="0" class="um-input um-input-sm" @bind="_manual.StartMs" />
+                                            </label>
+                                            <label>End (ms)
+                                                <input type="number" min="0" class="um-input um-input-sm" @bind="_manual.EndMs" />
+                                            </label>
+                                            <label>Speaker
+                                                <input class="um-input um-input-sm" @bind="_manual.SpeakerLabel" placeholder="(optional)" />
+                                            </label>
+                                        </div>
+                                    }
+                                    else
+                                    {
+                                        <div class="media-manual-row">
+                                            <label>X [0–1]
+                                                <input type="number" step="0.01" min="0" max="1" class="um-input um-input-sm" @bind="_manual.NormX" />
+                                            </label>
+                                            <label>Y [0–1]
+                                                <input type="number" step="0.01" min="0" max="1" class="um-input um-input-sm" @bind="_manual.NormY" />
+                                            </label>
+                                            <label>Width [0–1]
+                                                <input type="number" step="0.01" min="0" max="1" class="um-input um-input-sm" @bind="_manual.NormWidth" />
+                                            </label>
+                                            <label>Height [0–1]
+                                                <input type="number" step="0.01" min="0" max="1" class="um-input um-input-sm" @bind="_manual.NormHeight" />
+                                            </label>
+                                        </div>
+                                    }
+
+                                    <button class="um-btn um-btn-primary um-btn-sm" @onclick="SaveManualAsync" disabled="@(_busy || string.IsNullOrWhiteSpace(_manual.PropositionText))">
+                                        <i class="bi bi-plus-circle"></i> Park manual proposal
+                                    </button>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+
+                <div class="media-proposal-pane" aria-label="Parked proposition proposals">
+                    <div class="media-pane-head">
+                        <div class="media-pane-title"><i class="bi bi-inboxes"></i> <strong>Parked Proposals</strong> <span class="media-count">@_parkedPropositionIds.Count</span></div>
+                        <a class="um-btn um-btn-ghost um-btn-sm" href="@($"/legal/decision?matterId={_matter.DecisionMatterId}")" title="Accept or withdraw parked propositions in the shared review queue">
+                            <i class="bi bi-box-arrow-up-right"></i> Review queue
+                        </a>
+                    </div>
+
+                    @if (_parkedPropositionIds.Count == 0)
+                    {
+                        <div class="media-proposal-empty">Process an asset to park anchored proposition proposals. Accept or withdraw them in the shared Decision review queue.</div>
+                    }
+                    else
+                    {
+                        <ul class="media-proposal-list">
+                            @foreach (var propositionId in _parkedPropositionIds)
+                            {
+                                <li class="media-proposal-item">
+                                    <div class="media-proposal-id"><i class="bi bi-dot"></i> @propositionId</div>
+                                    @if (_evidenceLinks.TryGetValue(propositionId, out var links))
+                                    {
+                                        <ul class="media-link-list">
+                                            @foreach (var link in links)
+                                            {
+                                                <li class="media-link-item">
+                                                    <span class="media-chip media-chip-kind">@link.EvidenceKind</span>
+                                                    <span class="media-chip @ReviewChipClass(link.ReviewStatus)">@link.ReviewStatus</span>
+                                                    @if (link.ReviewStatus == EvidenceLinkReviewStatus.Pending)
+                                                    {
+                                                        <button class="um-btn um-btn-primary um-btn-sm" @onclick="() => ReviewLinkAsync(propositionId, link.PropositionEvidenceLinkId, EvidenceLinkReviewStatus.Confirmed)" disabled="@_busy">Confirm</button>
+                                                        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => ReviewLinkAsync(propositionId, link.PropositionEvidenceLinkId, EvidenceLinkReviewStatus.Rejected)" disabled="@_busy">Reject</button>
+                                                    }
+                                                </li>
+                                            }
+                                        </ul>
+                                    }
+                                    else
+                                    {
+                                        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => LoadLinksAsync(propositionId)" disabled="@_busy"><i class="bi bi-link-45deg"></i> Load links</button>
+                                    }
+                                </li>
+                            }
+                        </ul>
+                    }
+                </div>
+            </section>
+        }
+    </div>
+</LegalWorkspace>
+
+@code {
+    [Parameter, SupplyParameterFromQuery(Name = "matterId")]
+    public Guid? MatterId { get; set; }
+
+    private DecisionMatterDto? _matter;
+    private IReadOnlyList<MediaAsset> _assets = [];
+    private MediaAsset? _selectedAsset;
+    private string? _contentUrl;
+
+    private IBrowserFile? _pendingFile;
+    private MediaAssetType _pendingAssetType = MediaAssetType.Photo;
+
+    private Legal.Application.Abstractions.Intelligence.MediaProcessingResult? _lastProcessing;
+    private readonly List<Guid> _parkedPropositionIds = [];
+    private readonly Dictionary<Guid, IReadOnlyList<PropositionEvidenceLink>> _evidenceLinks = [];
+
+    private bool _busy;
+    private string? _loadError;
+    private string? _banner;
+    private bool _bannerError;
+
+    private bool _showManual;
+    private ManualForm _manual = new();
+
+    private sealed class ManualForm
+    {
+        public string PropositionText { get; set; } = string.Empty;
+        public MediaEvidenceKind EvidenceKind { get; set; } = MediaEvidenceKind.Observation;
+        public string? AttributedTo { get; set; }
+        public long? StartMs { get; set; }
+        public long? EndMs { get; set; }
+        public string? SpeakerLabel { get; set; }
+        public decimal? NormX { get; set; }
+        public decimal? NormY { get; set; }
+        public decimal? NormWidth { get; set; }
+        public decimal? NormHeight { get; set; }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Intelligence", "/intelligence"), new("Media & Machine Evidence", "/legal/media-evidence"));
+        try
+        {
+            if (MatterId is Guid mid)
+            {
+                _matter = await Api.GetLegalDecisionMatterAsync(mid);
+                if (_matter is not null)
+                    await LoadAssetsAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load media evidence workspace: {ex.Message}";
+        }
+    }
+
+    private async Task LoadAssetsAsync()
+    {
+        if (_matter is null) return;
+        try
+        {
+            _assets = await Api.GetMediaAssetsAsync(_matter.DecisionMatterId);
+        }
+        catch (Exception ex)
+        {
+            ShowBanner($"Failed to load assets: {ex.Message}", true);
+        }
+    }
+
+    private void OnFileSelected(InputFileChangeEventArgs args)
+    {
+        _pendingFile = args.File;
+        _pendingAssetType = _pendingFile.ContentType.StartsWith("audio", StringComparison.OrdinalIgnoreCase)
+            ? MediaAssetType.Audio
+            : MediaAssetType.Photo;
+        _banner = null;
+    }
+
+    private async Task RegisterAsync()
+    {
+        if (_matter is null || _pendingFile is null) return;
+        _busy = true;
+        try
+        {
+            var result = await Api.RegisterMediaAssetAsync(_matter.DecisionMatterId, _pendingFile, _pendingAssetType.ToString());
+            _pendingFile = null;
+            ShowBanner(result is null ? "Asset registered." : $"Asset registered (version {result.VersionNumber}, {FormatBytes(result.ByteLength)}).", false);
+            await LoadAssetsAsync();
+            var registered = result is null ? null : _assets.FirstOrDefault(a => a.MediaAssetId == result.MediaAssetId);
+            if (registered is not null)
+                await SelectAssetAsync(registered);
+        }
+        catch (Exception ex)
+        {
+            ShowBanner($"Registration failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task SelectAssetAsync(MediaAsset asset)
+    {
+        _selectedAsset = asset;
+        _lastProcessing = null;
+        _parkedPropositionIds.Clear();
+        _evidenceLinks.Clear();
+        _contentUrl = null;
+
+        if (_matter is null) return;
+        try
+        {
+            var versionId = await ResolveVersionIdAsync(asset);
+            _contentUrl = versionId == Guid.Empty ? null : Api.MediaVersionContentUrl(versionId);
+        }
+        catch (Exception ex)
+        {
+            ShowBanner($"Failed to open asset preview: {ex.Message}", true);
+        }
+    }
+
+    // The asset list does not carry version ids; the content/process endpoints are version-scoped. Resolve
+    // (and cache) the latest version id for an asset from the versions endpoint (returned newest first).
+    private async Task<Guid> ResolveVersionIdAsync(MediaAsset asset)
+    {
+        if (_matter is null) return Guid.Empty;
+        if (_versionByAsset.TryGetValue(asset.MediaAssetId, out var cached))
+            return cached;
+        var versions = await Api.GetMediaAssetVersionsAsync(_matter.DecisionMatterId, asset.MediaAssetId);
+        var latest = versions.FirstOrDefault();
+        if (latest is null) return Guid.Empty;
+        _versionByAsset[asset.MediaAssetId] = latest.MediaAssetVersionId;
+        return latest.MediaAssetVersionId;
+    }
+
+    private readonly Dictionary<Guid, Guid> _versionByAsset = [];
+
+    private async Task ProcessAsync()
+    {
+        if (_matter is null || _selectedAsset is null) return;
+        _busy = true;
+        try
+        {
+            var versionId = await ResolveVersionIdAsync(_selectedAsset);
+            _lastProcessing = await Api.ProcessMediaAssetAsync(_matter.DecisionMatterId, _selectedAsset.MediaAssetId, versionId, _selectedAsset.AssetType.ToString());
+            _parkedPropositionIds.Clear();
+            _evidenceLinks.Clear();
+            if (_lastProcessing is not null)
+            {
+                _parkedPropositionIds.AddRange(_lastProcessing.ParkedPropositionIds);
+                foreach (var pid in _parkedPropositionIds)
+                    await LoadLinksAsync(pid);
+            }
+            ShowBanner($"Processing complete: {_lastProcessing?.StatusCode}.", false);
+        }
+        catch (Exception ex)
+        {
+            ShowBanner($"Processing failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task LoadLinksAsync(Guid propositionId)
+    {
+        if (_matter is null) return;
+        try
+        {
+            _evidenceLinks[propositionId] = await Api.GetMediaEvidenceLinksAsync(_matter.DecisionMatterId, propositionId);
+        }
+        catch (Exception ex)
+        {
+            ShowBanner($"Failed to load evidence links: {ex.Message}", true);
+        }
+    }
+
+    private async Task SaveManualAsync()
+    {
+        if (_matter is null || _selectedAsset is null || string.IsNullOrWhiteSpace(_manual.PropositionText)) return;
+        _busy = true;
+        try
+        {
+            var versionId = await ResolveVersionIdAsync(_selectedAsset);
+            var isAudio = _selectedAsset.AssetType == MediaAssetType.Audio;
+            var request = new
+            {
+                AnchorType = isAudio ? "AudioInterval" : "ImageRegion",
+                EvidenceKind = _manual.EvidenceKind.ToString(),
+                PropositionText = _manual.PropositionText,
+                AssertionType = "Asserts",
+                AttributedTo = _manual.AttributedTo,
+                NormX = isAudio ? null : _manual.NormX,
+                NormY = isAudio ? null : _manual.NormY,
+                NormWidth = isAudio ? null : _manual.NormWidth,
+                NormHeight = isAudio ? null : _manual.NormHeight,
+                StartMs = isAudio ? _manual.StartMs : null,
+                EndMs = isAudio ? _manual.EndMs : null,
+                SpeakerLabel = isAudio ? _manual.SpeakerLabel : null
+            };
+            var result = await Api.CreateMediaManualProposalAsync(_matter.DecisionMatterId, versionId, request);
+            if (result is not null && result.StatusCode == "Parked")
+            {
+                if (!_parkedPropositionIds.Contains(result.RetrievedPropositionId))
+                    _parkedPropositionIds.Add(result.RetrievedPropositionId);
+                await LoadLinksAsync(result.RetrievedPropositionId);
+                _manual = new ManualForm();
+                ShowBanner("Manual proposal parked for review.", false);
+            }
+            else
+            {
+                ShowBanner($"Manual proposal not parked: {result?.StatusCode} — {result?.Explanation}", true);
+            }
+        }
+        catch (Exception ex)
+        {
+            ShowBanner($"Manual annotation failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ReviewLinkAsync(Guid propositionId, Guid linkId, EvidenceLinkReviewStatus status)
+    {
+        if (_matter is null) return;
+        _busy = true;
+        try
+        {
+            await Api.ReviewMediaEvidenceLinkAsync(_matter.DecisionMatterId, linkId, status.ToString());
+            await LoadLinksAsync(propositionId);
+            ShowBanner($"Evidence link {status.ToString().ToLowerInvariant()}.", false);
+        }
+        catch (Exception ex)
+        {
+            ShowBanner($"Review failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void ShowBanner(string message, bool isError)
+    {
+        _banner = message;
+        _bannerError = isError;
+    }
+
+    private static string ProcessingChipClass(string? statusCode) => statusCode switch
+    {
+        "Processed" => "media-chip-ok",
+        "CapabilityUnavailable" => "media-chip-warn",
+        "NoProposals" => "media-chip-warn",
+        _ => "media-chip-danger"
+    };
+
+    private static string ReviewChipClass(EvidenceLinkReviewStatus status) => status switch
+    {
+        EvidenceLinkReviewStatus.Confirmed => "media-chip-ok",
+        EvidenceLinkReviewStatus.Rejected => "media-chip-danger",
+        _ => "media-chip-warn"
+    };
+
+    private static string FormatBytes(long bytes)
+    {
+        string[] units = ["B", "KB", "MB", "GB"];
+        double size = bytes;
+        var unit = 0;
+        while (size >= 1024 && unit < units.Length - 1) { size /= 1024; unit++; }
+        return $"{size:0.#} {units[unit]}";
+    }
+}

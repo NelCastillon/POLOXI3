@@ -298,6 +298,23 @@ public static class ServiceCollectionExtensions
             services.AddSingleton<ILegalDocumentSecurityScanner, DisabledLegalDocumentSecurityScanner>();
         services.AddSingleton<INativeDocumentTextProvider, NativeDocumentTextProvider>();
         services.AddScoped<ILegalDocumentExtractionRouter, Legal.Application.Features.Intelligence.Decision.LegalDocumentExtractionRouter>();
+
+        // ── Media & Machine Evidence channel (Phase 3, Slice 1) ──────────────────────────────────────
+        // Private immutable media byte store (separate from the document corpus). Provider selected the
+        // same way as the document binary store; SQL carries only the opaque storage key.
+        services.AddScoped<Legal.Application.Abstractions.Persistence.IMediaEvidenceRepository, Legal.Infrastructure.Persistence.Repositories.MediaEvidenceRepository>();
+        if (configuration[$"{DocumentIntelligenceOptions.SectionName}:BinaryStoreProvider"]?.Equals("FileSystem", StringComparison.OrdinalIgnoreCase) == true)
+            services.AddSingleton<Legal.Application.Abstractions.Intelligence.IMediaBinaryStore, Legal.Infrastructure.Intelligence.FileSystemMediaBinaryStore>();
+        else
+            services.AddSingleton<Legal.Application.Abstractions.Intelligence.IMediaBinaryStore, Legal.Infrastructure.Intelligence.AzureBlobMediaBinaryStore>();
+
+        // Capability-aware PHOTO/AUDIO processors (typed HttpClients). Unavailable config → manual fallback.
+        services.AddHttpClient<Legal.Application.Abstractions.Intelligence.IMediaImageAnalyzer, Legal.Infrastructure.Services.AzureOpenAiMediaImageAnalyzer>();
+        services.AddHttpClient<Legal.Application.Abstractions.Intelligence.IMediaAudioTranscriber, Legal.Infrastructure.Services.AzureOpenAiMediaAudioTranscriber>();
+
+        // Media orchestration: processes assets, anchors proposals, and parks them through the SHARED LPI
+        // funnel. POLOXI Core still owns all scoring.
+        services.AddScoped<Legal.Application.Abstractions.Intelligence.IMediaEvidenceOrchestrationService, Legal.Application.Features.Intelligence.Decision.Media.MediaEvidenceOrchestrationService>();
         services.AddScoped<ILegalDocumentSearchProjectionDispatcher, LegalDocumentSearchProjectionDispatcher>();
         services.AddScoped<ILegalDocumentSemanticInterpreter, Legal.Application.Features.Intelligence.Decision.LegalDocumentSemanticInterpreter>();
         services.AddScoped<Legal.Application.Abstractions.Intelligence.IDomainPackResolver, Legal.Application.Features.Intelligence.Decision.DomainPackResolver>();

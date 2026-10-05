@@ -30,5 +30,6 @@ public interface IPropositionIntegrationService
         IReadOnlyList<LpiPlacementProposal> acceptedPlacements,
         LpiIntegrationContext integrationContext,
         LpiOperationKind operation = LpiOperationKind.Add,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        string retrievalModeCode = nameof(LpiRetrievalMode.ConditionDirected));
 }

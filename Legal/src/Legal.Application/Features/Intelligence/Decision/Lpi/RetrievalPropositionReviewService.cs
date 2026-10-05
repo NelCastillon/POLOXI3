@@ -94,7 +94,7 @@ public sealed class RetrievalPropositionReviewService(
             request.ScoringConfigurationVersion,
             BuildIdempotencyKey(item, placements));
 
-        return await integrationService.ApplyAsync(proposition, placements, context, LpiOperationKind.Add, cancellationToken);
+        return await integrationService.ApplyAsync(proposition, placements, context, LpiOperationKind.Add, cancellationToken, item.RetrievalModeCode);
     }
 
     public async Task<LpiIntegrationResult> ReviseAsync(
@@ -163,7 +163,7 @@ public sealed class RetrievalPropositionReviewService(
             request.ScoringConfigurationVersion,
             BuildReviseIdempotencyKey(prior, placements, request.PropositionText));
 
-        return await integrationService.ApplyAsync(proposition, placements, context, LpiOperationKind.Revise, cancellationToken);
+        return await integrationService.ApplyAsync(proposition, placements, context, LpiOperationKind.Revise, cancellationToken, prior.RetrievalModeCode);
     }
 
     public async Task<LpiIntegrationResult> WithdrawAsync(
@@ -286,7 +286,8 @@ public sealed class RetrievalPropositionReviewService(
         item.StateReason,
         item.Placements.Select(p => new LpiReviewPlacementView(
             p.TargetNodeId, p.LeftNeighborId, p.RightNeighborId,
-            p.PlacementFraction, p.RelationshipCode, p.Rationale)).ToList());
+            p.PlacementFraction, p.RelationshipCode, p.Rationale)).ToList(),
+        item.RetrievalModeCode);
 
     private static LpiAssertionType MapAssertion(string code) => code switch
     {

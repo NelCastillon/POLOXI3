@@ -813,6 +813,54 @@ public sealed class ApiClient(HttpClient httpClient)
     public Task<Legal.Application.Features.ProviderPortal.MatterReviewStateDto?> GetMatterReviewStateAsync(Guid matterId,CancellationToken token=default)=>_httpClient.GetFromJsonAsync<Legal.Application.Features.ProviderPortal.MatterReviewStateDto>($"api/legal_provider_portal/matters/{matterId}/review-state",token);
 
     public async Task<Legal.Application.Features.ProviderPortal.MatterReviewStateDto?> RecordMatterOpenedAsync(Guid matterId,CancellationToken token=default){using var response=await _httpClient.PostAsync($"api/legal_provider_portal/matters/{matterId}/review-state/open",null,token);await EnsureSuccessWithDetailAsync(response,token);return await response.Content.ReadFromJsonAsync<Legal.Application.Features.ProviderPortal.MatterReviewStateDto>(cancellationToken:token);}
+
+    // ── Media & Machine Evidence channel (Phase 3) ─────────────────────────────────────────────────
+    public async Task<IReadOnlyList<Legal.Application.Features.Intelligence.Decision.Media.MediaAsset>> GetMediaAssetsAsync(Guid matterId,CancellationToken token=default)=>await GetFromJsonWithTransientThrottleRetryAsync<IReadOnlyList<Legal.Application.Features.Intelligence.Decision.Media.MediaAsset>>($"api/legal_media/matters/{matterId}/assets",token)??[];
+
+    public async Task<IReadOnlyList<Legal.Application.Features.Intelligence.Decision.Media.MediaAssetVersion>> GetMediaAssetVersionsAsync(Guid matterId,Guid assetId,CancellationToken token=default)=>await GetFromJsonWithTransientThrottleRetryAsync<IReadOnlyList<Legal.Application.Features.Intelligence.Decision.Media.MediaAssetVersion>>($"api/legal_media/matters/{matterId}/assets/{assetId}/versions",token)??[];
+
+    public async Task<Legal.Application.Features.Intelligence.Decision.Media.MediaAssetRegistrationResult?> RegisterMediaAssetAsync(Guid matterId,IBrowserFile file,string assetType,string? sourceDescription=null,long? durationMs=null,int? widthPx=null,int? heightPx=null,CancellationToken token=default)
+    {
+        using var form=new MultipartFormDataContent();
+        using var stream=file.OpenReadStream(500*1024*1024,token);
+        using var content=new StreamContent(stream);
+        content.Headers.ContentType=new(string.IsNullOrWhiteSpace(file.ContentType)?"application/octet-stream":file.ContentType);
+        form.Add(content,"file",file.Name);
+        form.Add(new StringContent(assetType),"assetType");
+        if(!string.IsNullOrWhiteSpace(sourceDescription))form.Add(new StringContent(sourceDescription),"sourceDescription");
+        if(durationMs is {} d)form.Add(new StringContent(d.ToString()),"durationMs");
+        if(widthPx is {} w)form.Add(new StringContent(w.ToString()),"widthPx");
+        if(heightPx is {} h)form.Add(new StringContent(h.ToString()),"heightPx");
+        using var response=await _httpClient.PostAsync($"api/legal_media/matters/{matterId}/assets",form,token);
+        await EnsureSuccessWithDetailAsync(response,token);
+        return await response.Content.ReadFromJsonAsync<Legal.Application.Features.Intelligence.Decision.Media.MediaAssetRegistrationResult>(cancellationToken:token);
+    }
+
+    // Absolute URL for the authorized, range-capable asset content (for <img>/<audio> src). The auth
+    // cookie rides on the same host as the API when proxied; callers use this as an href/src.
+    public string MediaVersionContentUrl(Guid versionId)=>new Uri(_httpClient.BaseAddress!,$"api/legal_media/versions/{versionId}/content").ToString();
+
+    public async Task<Legal.Application.Abstractions.Intelligence.MediaProcessingResult?> ProcessMediaAssetAsync(Guid matterId,Guid assetId,Guid versionId,string assetType,CancellationToken token=default)
+    {
+        using var response=await _httpClient.PostAsJsonAsync($"api/legal_media/matters/{matterId}/assets/{assetId}/versions/{versionId}/process",new{AssetType=assetType},token);
+        await EnsureSuccessWithDetailAsync(response,token);
+        return await response.Content.ReadFromJsonAsync<Legal.Application.Abstractions.Intelligence.MediaProcessingResult>(cancellationToken:token);
+    }
+
+    public async Task<Legal.Application.Abstractions.Intelligence.MediaProposalResult?> CreateMediaManualProposalAsync(Guid matterId,Guid versionId,object request,CancellationToken token=default)
+    {
+        using var response=await _httpClient.PostAsJsonAsync($"api/legal_media/matters/{matterId}/versions/{versionId}/manual-proposal",request,token);
+        await EnsureSuccessWithDetailAsync(response,token);
+        return await response.Content.ReadFromJsonAsync<Legal.Application.Abstractions.Intelligence.MediaProposalResult>(cancellationToken:token);
+    }
+
+    public async Task<IReadOnlyList<Legal.Application.Features.Intelligence.Decision.Media.PropositionEvidenceLink>> GetMediaEvidenceLinksAsync(Guid matterId,Guid propositionId,CancellationToken token=default)=>await GetFromJsonWithTransientThrottleRetryAsync<IReadOnlyList<Legal.Application.Features.Intelligence.Decision.Media.PropositionEvidenceLink>>($"api/legal_media/matters/{matterId}/propositions/{propositionId}/evidence-links",token)??[];
+
+    public async Task ReviewMediaEvidenceLinkAsync(Guid matterId,Guid linkId,string status,CancellationToken token=default)
+    {
+        using var response=await _httpClient.PostAsJsonAsync($"api/legal_media/matters/{matterId}/evidence-links/{linkId}/review",new{Status=status},token);
+        await EnsureSuccessWithDetailAsync(response,token);
+    }
 }
 
 /// <summary>Normalised result of a Judz.ai auth endpoint call for the Blazor UI.</summary>

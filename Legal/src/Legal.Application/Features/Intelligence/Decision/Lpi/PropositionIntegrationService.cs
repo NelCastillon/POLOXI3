@@ -34,7 +34,8 @@ public sealed class PropositionIntegrationService(
         IReadOnlyList<LpiPlacementProposal> acceptedPlacements,
         LpiIntegrationContext integrationContext,
         LpiOperationKind operation = LpiOperationKind.Add,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string retrievalModeCode = nameof(LpiRetrievalMode.ConditionDirected))
     {
         ArgumentNullException.ThrowIfNull(acceptedProposition);
         ArgumentNullException.ThrowIfNull(acceptedPlacements);
@@ -81,7 +82,7 @@ public sealed class PropositionIntegrationService(
                 integrationContext.DecisionMatterId, LpiProposalState.ReviewRequired);
             return await ParkAsync(
                 acceptedProposition, acceptedPlacements, integrationContext, operation,
-                LpiProposalState.ReviewRequired, reason, cancellationToken);
+                LpiProposalState.ReviewRequired, reason, cancellationToken, retrievalModeCode);
         }
 
         if (!validation.IsValid)
@@ -92,7 +93,7 @@ public sealed class PropositionIntegrationService(
                 integrationContext.DecisionMatterId, validation.PreservedState, reason);
             return await ParkAsync(
                 acceptedProposition, acceptedPlacements, integrationContext, operation,
-                validation.PreservedState, reason, cancellationToken);
+                validation.PreservedState, reason, cancellationToken, retrievalModeCode);
         }
 
         // 4. Optional advisory LPI initialization (never for CONTEXT_ONLY-only placements).
@@ -111,7 +112,8 @@ public sealed class PropositionIntegrationService(
                 acceptedPlacements,
                 lpiCalculation,
                 integrationContext,
-                operation == LpiOperationKind.Add ? null : acceptedProposition.ProposalId),
+                operation == LpiOperationKind.Add ? null : acceptedProposition.ProposalId,
+                retrievalModeCode),
                 cancellationToken);
         }
         catch (Exception ex)
@@ -182,7 +184,8 @@ public sealed class PropositionIntegrationService(
         LpiOperationKind operation,
         LpiProposalState preservedState,
         string reason,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string retrievalModeCode = nameof(LpiRetrievalMode.ConditionDirected))
     {
         var reviewState = preservedState.ToString();
         var parkedId = await repository.ParkForReviewAsync(new LpiReviewPark(
@@ -194,7 +197,8 @@ public sealed class PropositionIntegrationService(
             acceptedPlacements,
             integrationContext,
             reviewState,
-            reason),
+            reason,
+            retrievalModeCode),
             cancellationToken);
 
         return new LpiIntegrationResult(

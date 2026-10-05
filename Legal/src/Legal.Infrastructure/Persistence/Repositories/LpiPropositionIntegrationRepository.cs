@@ -156,7 +156,7 @@ public sealed class LpiPropositionIntegrationRepository(ISqlConnectionFactory co
                     Id = propositionId, MatterId = commit.DecisionMatterId, VersionId = p.DocumentVersionId,
                     Locator = p.SourceLocator, SourceText = p.SourceText, PropositionText = p.PropositionText,
                     AssertionType = p.AssertionType.ToString(), AttributedTo = p.AttributedTo,
-                    EffectiveAt = p.EffectiveAt?.UtcDateTime, Mode = LpiRetrievalMode.ConditionDirected.ToString(),
+                    EffectiveAt = p.EffectiveAt?.UtcDateTime, Mode = commit.RetrievalModeCode,
                     TenantId = commit.TenantId, Actor = commit.ActorUserId
                 },
                 transaction: tx, cancellationToken: cancellationToken));
@@ -490,7 +490,7 @@ public sealed class LpiPropositionIntegrationRepository(ISqlConnectionFactory co
                     Id = propositionId, MatterId = park.DecisionMatterId, VersionId = p.DocumentVersionId,
                     Locator = p.SourceLocator, SourceText = p.SourceText, PropositionText = p.PropositionText,
                     AssertionType = p.AssertionType.ToString(), AttributedTo = p.AttributedTo,
-                    EffectiveAt = p.EffectiveAt?.UtcDateTime, Mode = LpiRetrievalMode.ConditionDirected.ToString(),
+                    EffectiveAt = p.EffectiveAt?.UtcDateTime, Mode = park.RetrievalModeCode,
                     State = park.ReviewStateCode, Reason = Truncate(park.ReviewReason, 2000),
                     TenantId = park.TenantId, Actor = park.ActorUserId
                 },
@@ -566,7 +566,7 @@ public sealed class LpiPropositionIntegrationRepository(ISqlConnectionFactory co
             """
             SELECT RetrievedPropositionId, DecisionMatterId, LegalDocumentVersionId, SourceLocator,
                    SourceText, PropositionText, AssertionTypeCode, AttributedTo, EffectiveAtUtc,
-                   StateCode, StateReason
+                   StateCode, StateReason, RetrievalModeCode
             FROM POLOXI.Legal_RetrievedProposition
             WHERE TenantId = @TenantId AND DecisionMatterId = @MatterId AND IsDeleted = 0
               AND StateCode IN (N'Extracted', N'PlacementProposed', N'ReviewRequired', N'NeedsHierarchyReview')
@@ -605,7 +605,7 @@ public sealed class LpiPropositionIntegrationRepository(ISqlConnectionFactory co
             """
             SELECT RetrievedPropositionId, DecisionMatterId, LegalDocumentVersionId, SourceLocator,
                    SourceText, PropositionText, AssertionTypeCode, AttributedTo, EffectiveAtUtc,
-                   StateCode, StateReason
+                   StateCode, StateReason, RetrievalModeCode
             FROM POLOXI.Legal_RetrievedProposition
             WHERE TenantId = @TenantId AND RetrievedPropositionId = @Id AND IsDeleted = 0;
             """,
@@ -670,7 +670,7 @@ public sealed class LpiPropositionIntegrationRepository(ISqlConnectionFactory co
             """
             SELECT RetrievedPropositionId, DecisionMatterId, LegalDocumentVersionId, SourceLocator,
                    SourceText, PropositionText, AssertionTypeCode, AttributedTo, EffectiveAtUtc,
-                   StateCode, StateReason
+                   StateCode, StateReason, RetrievalModeCode
             FROM POLOXI.Legal_RetrievedProposition
             WHERE TenantId = @TenantId AND RetrievedPropositionId = @Id AND IsDeleted = 0
               AND StateCode = N'Accepted';
@@ -933,7 +933,8 @@ public sealed class LpiPropositionIntegrationRepository(ISqlConnectionFactory co
             p.EffectiveAtUtc is { } e ? new DateTimeOffset(DateTime.SpecifyKind(e, DateTimeKind.Utc)) : null,
             p.StateCode,
             p.StateReason,
-            placements);
+            placements,
+            p.RetrievalModeCode);
     }
 
     private static async Task<IReadOnlyList<CandidateLineage>> ResolveCandidateLineageAsync(
@@ -1049,7 +1050,8 @@ public sealed class LpiPropositionIntegrationRepository(ISqlConnectionFactory co
         string? AttributedTo,
         DateTime? EffectiveAtUtc,
         string StateCode,
-        string? StateReason);
+        string? StateReason,
+        string RetrievalModeCode);
 
     private sealed record ReviewLinkRow(
         Guid RetrievedPropositionId,
