@@ -35,6 +35,102 @@
             </div>
         }
 
+        @if (_matter is not null)
+        {
+            <section class="decision-review-panel" aria-label="Retrieved proposition review">
+                <div class="decision-review-head">
+                    <div class="decision-review-title">
+                        <i class="bi bi-inbox"></i>
+                        <strong>Retrieved Proposition Review</strong>
+                        <span class="decision-review-count">@_reviewItems.Count pending</span>
+                    </div>
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadReviewQueueAsync" disabled="@_reviewBusy">
+                        <i class="bi bi-arrow-clockwise"></i> Refresh
+                    </button>
+                    <button class="um-btn um-btn-primary um-btn-sm" @onclick="RunRetrievalPassAsync" disabled="@_reviewBusy" title="Scan matter documents and park newly extracted propositions for review">
+                        <i class="bi bi-search"></i> Run Retrieval
+                    </button>
+                </div>
+
+                @if (_reviewBanner is not null)
+                {
+                    <div class="alert @(_reviewBannerError ? "alert-danger" : "alert-info")"
+                         style="@(_reviewBannerError ? "border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" : "border-left: 4px solid #0d6efd;")">
+                        @_reviewBanner
+                    </div>
+                }
+
+                @if (_reviewError is not null)
+                {
+                    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_reviewError</div>
+                }
+
+                @if (_reviewItems.Count == 0)
+                {
+                    <p class="decision-review-empty"><i class="bi bi-check2-circle"></i> No retrieved propositions are awaiting review for this matter.</p>
+                }
+                else
+                {
+                    <div class="decision-review-list">
+                        @foreach (var item in _reviewItems)
+                        {
+                            <article class="decision-review-item" @key="item.RetrievedPropositionId">
+                                <div class="decision-review-item-head">
+                                    <span class="decision-review-state decision-review-state--@item.StateCode.ToLowerInvariant()">@item.StateCode</span>
+                                    <span class="decision-review-assertion">@item.AssertionTypeCode</span>
+                                    @if (!string.IsNullOrWhiteSpace(item.AttributedTo))
+                                    {
+                                        <span class="decision-review-attributed" title="Attributed to">@item.AttributedTo</span>
+                                    }
+                                </div>
+                                <p class="decision-review-proposition">@item.PropositionText</p>
+                                <blockquote class="decision-review-source" title="@item.SourceLocator">&ldquo;@item.SourceText&rdquo;</blockquote>
+                                <div class="decision-review-locator"><i class="bi bi-geo-alt"></i> @item.SourceLocator</div>
+
+                                @if (item.Placements.Count > 0)
+                                {
+                                    <ul class="decision-review-placements">
+                                        @foreach (var placement in item.Placements)
+                                        {
+                                            <li>
+                                                <span class="decision-review-rel decision-review-rel--@placement.RelationshipCode.ToLowerInvariant()">@placement.RelationshipCode</span>
+                                                <code>@placement.TargetNodeId.ToString("N").Substring(0, 8)</code>
+                                                @if (!string.IsNullOrWhiteSpace(placement.Rationale))
+                                                {
+                                                    <span class="decision-review-rationale">@placement.Rationale</span>
+                                                }
+                                            </li>
+                                        }
+                                    </ul>
+                                }
+
+                                @{
+                                    var isAccepted = string.Equals(item.StateCode, "Accepted", StringComparison.OrdinalIgnoreCase);
+                                }
+                                <div class="decision-review-actions">
+                                    @if (isAccepted)
+                                    {
+                                        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => WithdrawReviewItemAsync(item)" disabled="@_reviewBusy">
+                                            <i class="bi bi-x-octagon"></i> Withdraw
+                                        </button>
+                                    }
+                                    else
+                                    {
+                                        <button class="um-btn um-btn-primary um-btn-sm" @onclick="() => AcceptReviewItemAsync(item)" disabled="@_reviewBusy">
+                                            <i class="bi bi-check2"></i> Accept
+                                        </button>
+                                        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => RejectReviewItemAsync(item)" disabled="@_reviewBusy">
+                                            <i class="bi bi-slash-circle"></i> Reject
+                                        </button>
+                                    }
+                                </div>
+                            </article>
+                        }
+                    </div>
+                }
+            </section>
+        }
+
         <section class="decision-composer" aria-label="Legal decision question">
             <div class="decision-composer-input">
                 <i class="bi bi-scale" aria-hidden="true"></i>
@@ -935,6 +1031,13 @@
 
     private DecisionMatterDto? _matter;
 
+    // ── Retrieved Proposition Review state ───────────────────────────────────────────────────────
+    private IReadOnlyList<Legal.Application.Abstractions.Intelligence.LpiReviewItemView> _reviewItems = [];
+    private bool _reviewBusy;
+    private string? _reviewError;
+    private string? _reviewBanner;
+    private bool _reviewBannerError;
+
     private DecisionCandidateDto? Winner => _response is null ? null
         : (_response.Candidates.FirstOrDefault(x => x.IsWinner)
            ?? _response.Candidates.OrderBy(x => x.RankOrder).FirstOrDefault());
@@ -1088,6 +1191,9 @@
             if (MatterId is Guid mid)
                 _matter = await Api.GetLegalDecisionMatterAsync(mid);
 
+            if (_matter is not null)
+                await LoadReviewQueueAsync();
+
             if (SessionId is Guid sid)
             {
                 _response = await Api.GetLegalDecisionSessionAsync(sid);
@@ -1107,6 +1213,172 @@
         {
             _error = $"Failed to load decision options: {ex.Message}";
         }
+    }
+
+    // ── Retrieved Proposition Review handlers ────────────────────────────────────────────────────
+    // Revisions to the decision are owned by POLOXI Core; this panel only routes attorney actions through
+    // the shared integration funnel and surfaces the returned reassessment status.
+    private async Task LoadReviewQueueAsync()
+    {
+        if (_matter is null) return;
+        _reviewBusy = true;
+        _reviewError = null;
+        try
+        {
+            _reviewItems = await Api.GetRetrievedPropositionReviewAsync(_matter.DecisionMatterId);
+        }
+        catch (Exception ex)
+        {
+            _reviewError = $"Failed to load the review queue: {ex.Message}";
+        }
+        finally
+        {
+            _reviewBusy = false;
+        }
+    }
+
+    // Trigger one Document-Retrieval pass. The server extracts atomic propositions and parks them for
+    // review; it never scores or ranks. On success we refresh the queue so newly parked items appear.
+    private async Task RunRetrievalPassAsync()
+    {
+        if (_matter is null) return;
+        _reviewBusy = true;
+        _reviewError = null;
+        try
+        {
+            var request = new
+            {
+                Mode = "ConditionDirected",
+                DecisionQuestion = string.IsNullOrWhiteSpace(_query) ? _matter.Title : _query,
+                CorrelationId = (string?)null,
+                RetrievalQuery = (string?)(string.IsNullOrWhiteSpace(_query) ? null : _query),
+                DocumentVersionIds = (IReadOnlyList<Guid>?)null,
+                MaxPassages = 50
+            };
+            var result = await Api.RunRetrievalPassAsync(_matter.DecisionMatterId, request);
+            if (result is null)
+            {
+                SetReviewBanner("Retrieval pass completed, but no summary was returned.", isError: true);
+            }
+            else if (result.StatusCode == "Failed")
+            {
+                SetReviewBanner($"Retrieval pass failed: {result.FailureReason}", isError: true);
+            }
+            else
+            {
+                SetReviewBanner(
+                    $"Retrieval pass {result.StatusCode}: scanned {result.PassagesScanned} passage(s), extracted {result.PropositionsExtracted} proposition(s), parked {result.ItemsParked} for review.",
+                    isError: false);
+            }
+            await LoadReviewQueueAsync();
+        }
+        catch (Exception ex)
+        {
+            SetReviewBanner($"Retrieval pass failed: {ex.Message}", isError: true);
+        }
+        finally
+        {
+            _reviewBusy = false;
+        }
+    }
+
+    private async Task AcceptReviewItemAsync(Legal.Application.Abstractions.Intelligence.LpiReviewItemView item)
+    {
+        if (_matter is null) return;
+        _reviewBusy = true;
+        _reviewError = null;
+        try
+        {
+            var request = new
+            {
+                AcceptedPlacementTargetNodeIds = (IReadOnlyList<Guid>?)null
+            };
+            var result = await Api.AcceptRetrievedPropositionAsync(_matter.DecisionMatterId, item.RetrievedPropositionId, request);
+            ApplyReviewResult(result, "accepted");
+            await LoadReviewQueueAsync();
+        }
+        catch (Exception ex)
+        {
+            SetReviewBanner($"Accept failed: {ex.Message}", isError: true);
+        }
+        finally
+        {
+            _reviewBusy = false;
+        }
+    }
+
+    private async Task RejectReviewItemAsync(Legal.Application.Abstractions.Intelligence.LpiReviewItemView item)
+    {
+        if (_matter is null) return;
+        _reviewBusy = true;
+        _reviewError = null;
+        try
+        {
+            var request = new { Reason = "Rejected by attorney review." };
+            await Api.RejectRetrievedPropositionAsync(_matter.DecisionMatterId, item.RetrievedPropositionId, request);
+            SetReviewBanner("Proposition rejected and preserved. It will not influence the ranking.", isError: false);
+            await LoadReviewQueueAsync();
+        }
+        catch (Exception ex)
+        {
+            SetReviewBanner($"Reject failed: {ex.Message}", isError: true);
+        }
+        finally
+        {
+            _reviewBusy = false;
+        }
+    }
+
+    private async Task WithdrawReviewItemAsync(Legal.Application.Abstractions.Intelligence.LpiReviewItemView item)
+    {
+        if (_matter is null) return;
+        _reviewBusy = true;
+        _reviewError = null;
+        try
+        {
+            var request = new
+            {
+                Reason = "Withdrawn by attorney review."
+            };
+            var result = await Api.WithdrawRetrievedPropositionAsync(_matter.DecisionMatterId, item.RetrievedPropositionId, request);
+            ApplyReviewResult(result, "withdrawn");
+            await LoadReviewQueueAsync();
+        }
+        catch (Exception ex)
+        {
+            SetReviewBanner($"Withdraw failed: {ex.Message}", isError: true);
+        }
+        finally
+        {
+            _reviewBusy = false;
+        }
+    }
+
+    // Surface the funnel's reassessment status so the attorney never reads the old ranking as current.
+    private void ApplyReviewResult(Legal.Application.Features.Intelligence.Decision.Lpi.LpiIntegrationResult? result, string verb)
+    {
+        if (result is null)
+        {
+            SetReviewBanner($"Proposition {verb}, but no result was returned.", isError: true);
+            return;
+        }
+
+        var (isError, message) = result.StatusCode switch
+        {
+            "EvaluationPending" => (false, $"Proposition {verb}. POLOXI Core reassessment is enqueued — the displayed ranking will update once recompetition completes."),
+            "EvaluationFailed" => (true, $"Proposition {verb}, but the reassessment failed to enqueue. The displayed ranking does NOT yet reflect this change. {result.Explanation}"),
+            "Applied" => (false, $"Proposition {verb}. {result.Explanation}"),
+            "Idempotent" => (false, $"Proposition already {verb} (no duplicate applied)."),
+            "Rejected" => (true, $"Could not {verb} the proposition: {result.Explanation}"),
+            _ => (!result.Applied, result.Explanation)
+        };
+        SetReviewBanner(message, isError);
+    }
+
+    private void SetReviewBanner(string message, bool isError)
+    {
+        _reviewBanner = message;
+        _reviewBannerError = isError;
     }
 
     // Build a sensible starting decision question from the matter's structured metadata so the

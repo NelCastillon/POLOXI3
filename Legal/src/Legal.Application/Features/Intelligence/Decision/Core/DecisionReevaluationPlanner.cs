@@ -15,9 +15,13 @@ namespace Legal.Application.Features.Intelligence.Decision.Core;
 // candidate/branch state, calls Plan(...), then persists the resulting Result as a new snapshot. This
 // is the piece the end-to-end trace test previously stubbed with hand-built signals.
 //
-// Direction is deterministic from the change classification: a MATERIAL_CONTRADICTION weakens the
-// affected candidates; a matched supporting change (POTENTIAL_IMPACT / NEW_MATERIAL_FACT) strengthens
-// them. Magnitude is severity-scaled. History is never mutated; only a fresh recompeted state is returned.
+// Direction is deterministic. For legacy MatterChangeProcessor impacts (which share one event-level
+// classification) a MATERIAL_CONTRADICTION weakens the affected candidates and any other matched
+// material/potential change strengthens them. For LPI retrieval impacts, the owning-candidate NET
+// direction is resolved upstream through the dependency/defeating-edge lineage and encoded per-impact
+// (CurrentStateCode = Strengthened | Weakened), so ONE source change can strengthen one candidate while
+// weakening another. Magnitude is severity-scaled. History is never mutated; only a fresh recompeted
+// state is returned.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 public static class DecisionReevaluationPlanner
 {
@@ -62,11 +66,12 @@ public static class DecisionReevaluationPlanner
         if (impacts.Count == 0 || candidates.Count == 0)
             return [];
 
-        // A material contradiction weakens the candidates that relied on the now-contested proposition;
-        // any other material/potential change that matched an existing proposition adds support to them.
-        var isContradiction = string.Equals(
+        // Default (fallback) direction from the event-level classification: a material contradiction
+        // weakens the affected candidates; any other matched material/potential change strengthens them.
+        // This preserves the original MatterChangeProcessor path, where every candidate impact of one
+        // event shares the event's single classification sign.
+        var classificationIsContradiction = string.Equals(
             classificationCode, MatterChangeClassification.MaterialContradiction, StringComparison.OrdinalIgnoreCase);
-        var directionSign = isContradiction ? -1.0 : 1.0;
 
         var byCode = candidates
             .GroupBy(c => c.CandidateCode, StringComparer.OrdinalIgnoreCase)
@@ -82,6 +87,30 @@ public static class DecisionReevaluationPlanner
             if (!byCode.TryGetValue(impact.AffectedKey, out var candidateId) || !seen.Add(candidateId))
                 continue;
 
+            // PER-CANDIDATE polarity: a single source change can STRENGTHEN one candidate while
+            // WEAKENING another (supporting a defense condition weakens the opposing outcome). The
+            // owning-candidate direction is resolved upstream (dependency/defeating-edge lineage) and
+            // encoded on the impact's CurrentStateCode. Fall back to the event classification sign when
+            // the impact carries no explicit direction (legacy MatterChangeProcessor impacts).
+            //
+            // A QUALIFIES placement carries the neutral RequiresEvaluation state: it conditions/narrows
+            // the outcome and must NOT be given a fabricated sign. It still triggers reevaluation (so the
+            // change is recorded and the candidate's branch is reopened for attorney evaluation), but with
+            // a ZERO support delta so the ranking is never biased by an unevaluated qualifier.
+            if (IsRequiresEvaluation(impact.CurrentStateCode))
+            {
+                signals.Add(new DecisionBranchSignal(
+                    DecisionBranchSignalKinds.SupportChanged,
+                    BranchId: null,
+                    CandidateId: candidateId,
+                    SupportDelta: 0.0,
+                    ReopenRequested: true,
+                    ReasonCode: "IMPACT_CANDIDATE_REQUIRES_EVALUATION"));
+                continue;
+            }
+
+            var directionSign = ResolveDirectionSign(impact.CurrentStateCode, classificationIsContradiction);
+
             var isMaterial = string.Equals(
                 impact.ImpactSeverityCode, DecisionImpactSeverity.Material, StringComparison.OrdinalIgnoreCase);
             var magnitude = isMaterial ? MaterialMagnitude : PotentialMagnitude;
@@ -92,9 +121,32 @@ public static class DecisionReevaluationPlanner
                 CandidateId: candidateId,
                 SupportDelta: directionSign * magnitude,
                 ReopenRequested: isMaterial,
-                ReasonCode: isContradiction ? "IMPACT_MATERIAL_CONTRADICTION" : "IMPACT_SUPPORT_CHANGED"));
+                ReasonCode: directionSign < 0 ? "IMPACT_CANDIDATE_WEAKENED" : "IMPACT_CANDIDATE_STRENGTHENED"));
         }
 
         return signals;
+    }
+
+    // Per-impact direction tokens written by the lineage resolver. These are NOT fixed relationship
+    // signs: they are the already-resolved NET effect on a specific candidate after accounting for the
+    // qualitative relationship AND the dependency path (e.g. a DEFEATING/defense condition inverts it).
+    private const string Weakened = "Weakened";
+    private const string Strengthened = "Strengthened";
+
+    // Neutral state written for a QUALIFIES placement: the qualifier conditions/narrows the outcome and
+    // has no direction, so it produces a zero-delta reopen signal (evaluation required) rather than a
+    // fabricated strengthen/weaken sign.
+    private const string RequiresEvaluation = "RequiresEvaluation";
+
+    private static bool IsRequiresEvaluation(string? currentStateCode)
+        => string.Equals(currentStateCode, RequiresEvaluation, StringComparison.OrdinalIgnoreCase);
+
+    private static double ResolveDirectionSign(string? currentStateCode, bool classificationIsContradiction)
+    {
+        if (string.Equals(currentStateCode, Weakened, StringComparison.OrdinalIgnoreCase))
+            return -1.0;
+        if (string.Equals(currentStateCode, Strengthened, StringComparison.OrdinalIgnoreCase))
+            return 1.0;
+        return classificationIsContradiction ? -1.0 : 1.0;
     }
 }

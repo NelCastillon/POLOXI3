@@ -4,6 +4,7 @@ using Legal.Application.Abstractions.Persistence;
 using Legal.Application.Abstractions.Services;
 using Legal.Application.Features.Intelligence.Decision;
 using Legal.Application.Features.Intelligence.Epistemic;
+using Legal.Application.Features.Intelligence.Decision.Lpi;
 using Legal.Application.Features.Saas;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -16,7 +17,7 @@ namespace Legal.Api.Controllers;
 // (/legal/decision). Evolves independently from the Intelligence Wide (/legal/search) controller.
 [ApiController]
 [Route("api/legal_decision")]
-public sealed class LegalDecisionController(ILegalDecisionService service,IIntelligenceExecutionService executionService,ILegalDocumentCorpusRepository documentCorpusRepository,IAttorneyDecisionInputRepository attorneyDecisionInputRepository,IAttorneyDecisionInputService attorneyDecisionInputService,ILegalDecisionContractService decisionContractService,ILegalDocumentIntakeService documentIntakeService,ILegalMatterCorpusActivationService corpusActivationService,IDecisionIntegrityRepository integrityRepository,IMatterPropositionInformationValueService propositionInformationValueService,INextBestActionService nextBestActionService,IWhatToResolveNextService whatToResolveNextService,IOptions<DocumentIntelligenceOptions> documentOptions) : ControllerBase
+public sealed class LegalDecisionController(ILegalDecisionService service,IIntelligenceExecutionService executionService,ILegalDocumentCorpusRepository documentCorpusRepository,IAttorneyDecisionInputRepository attorneyDecisionInputRepository,IAttorneyDecisionInputService attorneyDecisionInputService,ILegalDecisionContractService decisionContractService,ILegalDocumentIntakeService documentIntakeService,ILegalMatterCorpusActivationService corpusActivationService,IDecisionIntegrityRepository integrityRepository,IMatterPropositionInformationValueService propositionInformationValueService,INextBestActionService nextBestActionService,IWhatToResolveNextService whatToResolveNextService,IPropositionIntegrationService propositionIntegrationService,IRetrievalPropositionReviewService retrievalReviewService,IRetrievalOrchestrationService retrievalOrchestrationService,IDecisionRevisionResolver decisionRevisionResolver,IOptions<DocumentIntelligenceOptions> documentOptions) : ControllerBase
 {
     private const string CapabilityCode = JudzCapabilities.LegalDecision;
     private Guid TenantId => AuthenticatedRequestContext.GetTenantId(User) ?? throw new UnauthorizedAccessException("An authenticated tenant context is required.");
@@ -36,6 +37,172 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
                 GrantedPermissions = AuthenticatedRequestContext.GetGrantedPermissions(User)
             },
             cancellationToken));
+    }
+
+    // Apply ONE attorney-reviewed retrieved proposition through the shared LPI integration funnel.
+    // Retrieval supplies the proposition; the shared service validates, optionally LPI-initializes
+    // (CONTEXT_ONLY excluded), commits atomically, and enqueues the existing POLOXI reassessment.
+    // POLOXI Core alone scores candidates and selects the winner.
+    [HttpPost("propositions/integrate")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> IntegrateProposition([FromBody] IntegrateReviewedPropositionRequest request, CancellationToken cancellationToken)
+    {
+        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, CapabilityCode, request.MatterId, null, cancellationToken);
+        if (denied is not null) return denied;
+
+        var proposition = new RetrievedProposition(
+            request.ProposalId,
+            request.MatterId,
+            request.DocumentVersionId,
+            request.SourceLocator,
+            request.SourceText,
+            request.PropositionText,
+            request.AssertionType,
+            request.AttributedTo,
+            request.EffectiveAt);
+
+        var context = new LpiIntegrationContext(
+            TenantId,
+            ActorUserId,
+            request.MatterId,
+            request.DecisionContractRevision,
+            request.CandidateSetRevision,
+            request.HierarchyRevision,
+            request.DocumentVersionId,
+            ActorUserId,
+            request.ScoringConfigurationVersion,
+            request.IdempotencyKey);
+
+        var result = await propositionIntegrationService.ApplyAsync(
+            proposition, request.Placements, context, LpiOperationKind.Add, cancellationToken);
+        return Ok(result);
+    }
+
+    // Document-Retrieval review queue: every parked, non-terminal retrieved proposition awaiting
+    // attorney action for a matter. Feeds the Retrieved Proposition Review panel. Review is read-only;
+    // no scoring happens until a proposition is accepted through the shared funnel.
+    [HttpGet("matters/{matterId:guid}/propositions/review")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> GetPendingPropositionReview(Guid matterId, CancellationToken cancellationToken)
+    {
+        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, CapabilityCode, matterId, null, cancellationToken);
+        if (denied is not null) return denied;
+        return Ok(await retrievalReviewService.GetPendingAsync(TenantId, matterId, cancellationToken));
+    }
+
+    // Accept a reviewed retrieved proposition (optionally a reviewed subset of its placements) and route
+    // it through the SHARED integration funnel. The returned reassessment status (Applied | Idempotent |
+    // Rejected | EvaluationPending | EvaluationFailed) lets the UI avoid showing the old ranking as current.
+    [HttpPost("matters/{matterId:guid}/propositions/review/{propositionId:guid}/accept")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> AcceptPropositionReview(Guid matterId, Guid propositionId, [FromBody] AcceptRetrievedPropositionRequest request, CancellationToken cancellationToken)
+    {
+        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, CapabilityCode, matterId, null, cancellationToken);
+        if (denied is not null) return denied;
+
+        var revisions = await decisionRevisionResolver.ResolveAsync(TenantId, matterId, cancellationToken);
+        var result = await retrievalReviewService.AcceptAsync(new LpiReviewAcceptRequest(
+            TenantId,
+            ActorUserId,
+            propositionId,
+            revisions.DecisionContractRevision,
+            revisions.CandidateSetRevision,
+            revisions.HierarchyRevision,
+            revisions.ScoringConfigurationVersion,
+            request.AcceptedPlacementTargetNodeIds), cancellationToken);
+        return Ok(result);
+    }
+
+    // Terminal reject: preserve the proposition but mark it Rejected with the reviewer reason. No change
+    // event, no reassessment.
+    [HttpPost("matters/{matterId:guid}/propositions/review/{propositionId:guid}/reject")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> RejectPropositionReview(Guid matterId, Guid propositionId, [FromBody] RejectRetrievedPropositionRequest request, CancellationToken cancellationToken)
+    {
+        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, CapabilityCode, matterId, null, cancellationToken);
+        if (denied is not null) return denied;
+
+        await retrievalReviewService.RejectAsync(new LpiReviewRejectRequest(
+            TenantId, ActorUserId, propositionId, request.Reason), cancellationToken);
+        return NoContent();
+    }
+
+    // Revise an ACCEPTED proposition: supersede it with a corrected one through the SHARED funnel. The
+    // prior proposition is preserved (state Superseded); the correction drives a fresh reassessment.
+    [HttpPost("matters/{matterId:guid}/propositions/review/{propositionId:guid}/revise")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> RevisePropositionReview(Guid matterId, Guid propositionId, [FromBody] ReviseRetrievedPropositionRequest request, CancellationToken cancellationToken)
+    {
+        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, CapabilityCode, matterId, null, cancellationToken);
+        if (denied is not null) return denied;
+
+        var revisions = await decisionRevisionResolver.ResolveAsync(TenantId, matterId, cancellationToken);
+        var result = await retrievalReviewService.ReviseAsync(new LpiReviewReviseRequest(
+            TenantId,
+            ActorUserId,
+            propositionId,
+            request.PropositionText,
+            revisions.DecisionContractRevision,
+            revisions.CandidateSetRevision,
+            revisions.HierarchyRevision,
+            revisions.ScoringConfigurationVersion,
+            request.Placements,
+            request.Reason), cancellationToken);
+        return Ok(result);
+    }
+
+    // Withdraw an ACCEPTED proposition: retract its contribution through the SHARED funnel so POLOXI Core
+    // recompetes without it. The source record is preserved (state Withdrawn); nothing is deleted.
+    [HttpPost("matters/{matterId:guid}/propositions/review/{propositionId:guid}/withdraw")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> WithdrawPropositionReview(Guid matterId, Guid propositionId, [FromBody] WithdrawRetrievedPropositionRequest request, CancellationToken cancellationToken)
+    {
+        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, CapabilityCode, matterId, null, cancellationToken);
+        if (denied is not null) return denied;
+
+        var revisions = await decisionRevisionResolver.ResolveAsync(TenantId, matterId, cancellationToken);
+        var result = await retrievalReviewService.WithdrawAsync(new LpiReviewWithdrawRequest(
+            TenantId,
+            ActorUserId,
+            propositionId,
+            revisions.DecisionContractRevision,
+            revisions.CandidateSetRevision,
+            revisions.HierarchyRevision,
+            revisions.ScoringConfigurationVersion,
+            request.Reason), cancellationToken);
+        return Ok(result);
+    }
+
+    // Run ONE Document-Retrieval pass for a matter: enumerate the passages worth processing, extract
+    // atomic propositions, and PARK each for attorney review. Proposal-only — it never scores, applies,
+    // or ranks; acceptance still flows through the shared funnel and POLOXI Core remains the sole authority.
+    [HttpPost("matters/{matterId:guid}/propositions/retrieval/run")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> RunRetrievalPass(Guid matterId, [FromBody] RunRetrievalPassRequest request, CancellationToken cancellationToken)
+    {
+        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, CapabilityCode, matterId, null, cancellationToken);
+        if (denied is not null) return denied;
+
+        var mode = Enum.TryParse<LpiRetrievalMode>(request.Mode, ignoreCase: true, out var parsedMode)
+            ? parsedMode
+            : LpiRetrievalMode.ConditionDirected;
+
+        var revisions = await decisionRevisionResolver.ResolveAsync(TenantId, matterId, cancellationToken);
+        var result = await retrievalOrchestrationService.RunAsync(new RetrievalOrchestrationRequest(
+            TenantId,
+            ActorUserId,
+            matterId,
+            mode,
+            request.DecisionQuestion,
+            revisions.DecisionContractRevision,
+            revisions.CandidateSetRevision,
+            revisions.HierarchyRevision,
+            revisions.ScoringConfigurationVersion,
+            request.CorrelationId ?? Guid.NewGuid().ToString("N"),
+            request.RetrievalQuery,
+            request.DocumentVersionIds,
+            request.MaxPassages), cancellationToken);
+        return Ok(result);
     }
 
     // Database-backed model options for the decision Model dropdown.
@@ -860,3 +1027,53 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
             TenantId, ActorUserId, context, AuthenticatedRequestContext.GetGrantedPermissions(User), cancellationToken));
     }
 }
+
+// Request body for POST api/legal_decision/propositions/integrate. Carries ONE attorney-reviewed
+// retrieved proposition and its accepted placements plus the revision/idempotency context. TenantId,
+// ActorUserId, and ReviewerUserId are derived from the authenticated context, never the client.
+public sealed record IntegrateReviewedPropositionRequest(
+    Guid ProposalId,
+    Guid MatterId,
+    Guid DocumentVersionId,
+    string SourceLocator,
+    string SourceText,
+    string PropositionText,
+    LpiAssertionType AssertionType,
+    string? AttributedTo,
+    DateTimeOffset? EffectiveAt,
+    IReadOnlyList<LpiPlacementProposal> Placements,
+    long DecisionContractRevision,
+    long CandidateSetRevision,
+    long HierarchyRevision,
+    string ScoringConfigurationVersion,
+    string IdempotencyKey);
+
+// Request body for accepting a parked retrieved proposition. TenantId/ReviewerUserId come from the
+// authenticated context; the proposition id comes from the route. AcceptedPlacementTargetNodeIds is an
+// optional reviewed subset of the proposed placements (null/empty = accept all proposed placements).
+public sealed record AcceptRetrievedPropositionRequest(
+    IReadOnlyList<Guid>? AcceptedPlacementTargetNodeIds = null);
+
+// Request body for rejecting a parked retrieved proposition. The proposition is preserved, not deleted.
+public sealed record RejectRetrievedPropositionRequest(string Reason);
+
+// Request body for revising an ACCEPTED proposition. The prior proposition (route id) is superseded by a
+// corrected one. Placements optionally change the node/relationship; when null the originals are reused.
+public sealed record ReviseRetrievedPropositionRequest(
+    string PropositionText,
+    IReadOnlyList<LpiReviewPlacementEdit>? Placements = null,
+    string? Reason = null);
+
+// Request body for withdrawing an ACCEPTED proposition. The source is preserved (state Withdrawn).
+public sealed record WithdrawRetrievedPropositionRequest(
+    string Reason);
+
+// Request body for running one Document-Retrieval pass. Mode is parsed to LpiRetrievalMode
+// (ConditionDirected | DocumentDirected); unknown/empty falls back to ConditionDirected.
+public sealed record RunRetrievalPassRequest(
+    string Mode,
+    string DecisionQuestion,
+    string? CorrelationId = null,
+    string? RetrievalQuery = null,
+    IReadOnlyList<Guid>? DocumentVersionIds = null,
+    int MaxPassages = 50);

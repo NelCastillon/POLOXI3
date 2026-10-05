@@ -155,6 +155,37 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IExistingPoloxiEvaluationAdapter, ExistingPoloxiEvaluationAdapter>();
         services.AddScoped<IAttorneyDecisionInputService, AttorneyDecisionInputService>();
 
+        // LPI (Legal Proposition Intelligence) OPTIONAL ancestor-informed score INITIALIZER. Pure and
+        // advisory; ancestor influence is DISABLED by default so the existing local-only initialization
+        // is preserved until regression testing validates the blended path. POLOXI Core still owns the
+        // authoritative recompute; this only initializes a candidate-specific starting score.
+        var lpiOptions = new LpiScoreInitializerOptions();
+        configuration.GetSection(LpiScoreInitializerOptions.SectionName).Bind(lpiOptions);
+        services.AddSingleton(lpiOptions);
+        services.AddScoped<ILpiScoreInitializer, LpiScoreInitializer>();
+
+        // LPI Document-Retrieval proposition integration (Phase 2): the ONE shared insertion funnel used
+        // by both the manual ADI path and the retrieval path. The service validates, optionally LPI-
+        // initializes (CONTEXT_ONLY excluded), and atomically commits the proposition + placements +
+        // change event + outbox reassessment. POLOXI Core still owns all scoring.
+        services.AddScoped<ILpiPropositionIntegrationRepository, LpiPropositionIntegrationRepository>();
+        services.AddScoped<IPropositionIntegrationService, Legal.Application.Features.Intelligence.Decision.Lpi.PropositionIntegrationService>();
+
+        // Document-Retrieval sending half: DECISION_EXTRACTION_V1 extraction (parks for review) and the
+        // attorney review/accept service that routes accepted propositions through the SHARED funnel above.
+        services.AddScoped<IRetrievalPropositionExtractionService, Legal.Application.Features.Intelligence.Decision.Lpi.RetrievalPropositionExtractionService>();
+        services.AddScoped<IRetrievalPropositionReviewService, Legal.Application.Features.Intelligence.Decision.Lpi.RetrievalPropositionReviewService>();
+
+        // Document-Retrieval orchestration: condition-directed / document-directed passage fan-out that
+        // builds the authoritative hierarchy context and invokes extraction per passage. Proposal-only —
+        // it selects passages and parks propositions; it never scores candidates.
+        services.AddScoped<IRetrievalOrchestrationService, Legal.Application.Features.Intelligence.Decision.Lpi.RetrievalOrchestrationService>();
+
+        // Authoritative, server-side source of the decision identity revisions (contract/candidate/
+        // hierarchy) and scoring-config version that every retrieved-proposition lifecycle operation
+        // must carry. The UI never supplies these; this resolver loads them from POLOXI Core state.
+        services.AddScoped<IDecisionRevisionResolver, Legal.Application.Features.Intelligence.Decision.Lpi.DecisionRevisionResolver>();
+
         // Decision Contract: first-class, versioned, DB-backed problem-specification workspace.
         services.AddScoped<ILegalDecisionContractService, LegalDecisionContractService>();
 

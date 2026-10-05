@@ -1,6 +1,7 @@
 using Legal.Application.Abstractions.Intelligence;
 using Legal.Application.Abstractions.Persistence;
 using Legal.Application.Features.Intelligence.Decision;
+using Legal.Application.Features.Intelligence.Decision.Core;
 using Microsoft.Extensions.Logging;
 
 namespace Legal.Application.Features.Intelligence.Decision;
@@ -14,6 +15,7 @@ namespace Legal.Application.Features.Intelligence.Decision;
 public sealed class ExistingPoloxiEvaluationAdapter(
     IAttorneyDecisionInputRepository repository,
     IDecisionIntegrityRepository integrityRepository,
+    ILpiScoreInitializer lpiScoreInitializer,
     ILogger<ExistingPoloxiEvaluationAdapter> logger) : IExistingPoloxiEvaluationAdapter
 {
     public async Task<DecisionMutationPreview> ProjectAsync(
@@ -74,6 +76,58 @@ public sealed class ExistingPoloxiEvaluationAdapter(
             + $"Uncertainty Δ +{uncertaintyDelta:0.####}; Information Value {ivBand}. "
             + "Projection is advisory; POLOXI performs the authoritative affected-closure recompute after commit.";
 
+        // ── Optional ancestor-informed LPI initialization (advisory; disabled by default) ────────
+        // Pre-insertion ancestor scores are read from the DB and fed to the pure initializer. This does
+        // NOT change parent aggregation; it only surfaces an existing-vs-ancestor-informed initial score
+        // so the attorney can compare before commit. When disabled, the result mirrors local-only init.
+        LpiInitializationPreview? lpiInitialization = null;
+        try
+        {
+            // While ancestor influence is OFF (the default), skip the extra pre-insertion ancestor and
+            // hierarchy-version DB reads entirely and compute the local-only initialization. This keeps
+            // the existing preview path at its original cost until the blended path is validated.
+            var ancestorScores = lpiScoreInitializer.AncestorInfluenceEnabled && command.ParentNodeId is { } parentId
+                ? await repository.GetAncestorScoresAsync(tenantId, command.MatterId, parentId, command.NodeLevel, cancellationToken)
+                : Array.Empty<(Guid NodeId, int Depth, decimal Value, long NodeVersion)>();
+
+            var hierarchyRevision = lpiScoreInitializer.AncestorInfluenceEnabled
+                ? await repository.GetHierarchyVersionAsync(tenantId, command.MatterId, cancellationToken)
+                : 0L;
+
+            var previousNeighbor = ResolveNeighbor(siblings, command.PreviousSiblingId);
+            var nextNeighbor = ResolveNeighbor(siblings, command.NextSiblingId);
+
+            var lpiInput = new LpiScoreInitializerInput(
+                CandidateNodeId: command.CandidateNodeId,
+                HierarchyRevision: hierarchyRevision,
+                PreviousNeighborScore: previousNeighbor,
+                NextNeighborScore: nextNeighbor,
+                PlacementFraction: 0.5m,
+                PreInsertionAncestorScores: ancestorScores
+                    .Select(a => new LpiAncestorScore(a.NodeId, a.Depth, a.Value, a.NodeVersion))
+                    .ToArray());
+
+            var lpi = lpiScoreInitializer.Compute(lpiInput);
+            lpiInitialization = new LpiInitializationPreview(
+                Enabled: lpi.Method != LpiInitializationMethod.Disabled,
+                HasScore: lpi.HasScore,
+                InitialScore: lpi.InitialScore,
+                LocalBaseline: lpi.LocalBaseline,
+                AncestorContext: lpi.AncestorContext,
+                Alpha: lpi.Alpha,
+                Lambda: lpi.Lambda,
+                FormulaVersion: lpi.FormulaVersion,
+                Method: lpi.Method.ToString(),
+                AncestorsUsed: lpi.AncestorsUsed
+                    .Select(a => new LpiAncestorUsed(a.NodeId, a.Depth, a.Value, a.NodeVersion))
+                    .ToArray(),
+                Explanation: lpi.Explanation);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "LPI ancestor-informed initialization preview failed; omitting advisory initialization.");
+        }
+
         return new DecisionMutationPreview(
             PreviewToken: Guid.NewGuid(),
             command.BaseSnapshotId,
@@ -91,7 +145,18 @@ public sealed class ExistingPoloxiEvaluationAdapter(
             affectedPath,
             findings,
             ScoreProjectionAdvisory: true,
-            explanation);
+            explanation,
+            lpiInitialization);
+    }
+
+    // Resolves a neighbor sibling's score by id from the loaded sibling set (null when absent/unscored).
+    private static decimal? ResolveNeighbor(
+        IReadOnlyList<(Guid NodeId, string NodeText, decimal? Value)> siblings, Guid? neighborId)
+    {
+        if (neighborId is not { } id) return null;
+        foreach (var s in siblings)
+            if (s.NodeId == id) return s.Value;
+        return null;
     }
 
     // §13 affected-closure path shape: L5 → L4 → L3 → L2 → L1 candidate → competition.

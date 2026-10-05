@@ -274,6 +274,8 @@ public sealed class HumanIntelligenceChannelTests
 
         public Task<IReadOnlyList<(Guid NodeId, string NodeText, decimal? Value)>> GetSiblingValuesAsync(Guid tenantId, Guid matterId, Guid candidateNodeId, Guid? parentNodeId, int nodeLevel, CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
+        public Task<IReadOnlyList<(Guid NodeId, int Depth, decimal Value, long NodeVersion)>> GetAncestorScoresAsync(Guid tenantId, Guid matterId, Guid parentNodeId, int maxDepth, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
         public Task<IReadOnlyList<AttorneyDuplicateCandidateDto>> FindDuplicateCandidatesAsync(Guid tenantId, Guid matterId, string nodeText, CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
         public Task<long> GetHierarchyVersionAsync(Guid tenantId, Guid matterId, CancellationToken cancellationToken = default)

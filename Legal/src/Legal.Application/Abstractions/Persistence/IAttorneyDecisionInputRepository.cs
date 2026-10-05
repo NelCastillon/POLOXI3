@@ -17,6 +17,14 @@ public interface IAttorneyDecisionInputRepository
         Guid tenantId, Guid matterId, Guid candidateNodeId, Guid? parentNodeId, int nodeLevel,
         CancellationToken cancellationToken = default);
 
+    // Returns the PRE-INSERTION ancestor scores up the ParentNodeId chain from the given parent node,
+    // ordered nearest-first (Depth 1 = immediate parent). Each ancestor's score is the active approved
+    // assessment value or the node's evaluated value. Used only to INITIALIZE a candidate score (LPI);
+    // it never changes parent aggregation. Excludes the candidate's own node by construction.
+    Task<IReadOnlyList<(Guid NodeId, int Depth, decimal Value, long NodeVersion)>> GetAncestorScoresAsync(
+        Guid tenantId, Guid matterId, Guid parentNodeId, int maxDepth,
+        CancellationToken cancellationToken = default);
+
     // Duplicate candidates by canonical-key / text similarity within the same matter (§8).
     Task<IReadOnlyList<AttorneyDuplicateCandidateDto>> FindDuplicateCandidatesAsync(
         Guid tenantId, Guid matterId, string nodeText, CancellationToken cancellationToken = default);

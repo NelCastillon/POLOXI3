@@ -38,6 +38,13 @@ public sealed class DecisionReevaluationPlannerTests
             PreviousStateCode: "Previously evaluated", CurrentStateCode: "Reevaluation required",
             severity, Rationale: "depends on affected proposition");
 
+    private static DecisionImpactDto CandidateImpact(string candidateCode, string severity, string currentState)
+        => new(
+            Guid.NewGuid(), MatterChangeEventId: Guid.NewGuid(),
+            DecisionImpactKind.Candidate, candidateCode, candidateCode,
+            PreviousStateCode: "Previously evaluated", CurrentStateCode: currentState,
+            severity, Rationale: "depends on affected proposition");
+
     [Fact]
     public void MaterialContradictionImpact_WeakensAffectedCandidate_ViaRecompetition()
     {
@@ -112,6 +119,62 @@ public sealed class DecisionReevaluationPlannerTests
             MatterChangeClassification.PotentialImpact, impacts, candidates, branches, Settings(), new HashSet<Guid>());
 
         Assert.False(plan.ReevaluationOccurred);
+        Assert.False(plan.Result.WinnerChanged);
+        Assert.Equal(c1.DecisionCandidateId, plan.Result.CurrentWinnerId);
+    }
+
+    [Fact]
+    public void PerImpactState_OverridesEventClassification_MixedPolarityPerCandidate()
+    {
+        // One source change: strengthens C1 and weakens C2 in the SAME reevaluation, driven purely by
+        // each impact's CurrentStateCode regardless of the event-level classification.
+        var c1 = Candidate("C1", "Acme prevails", composite: 0.55m, verification: 0.60m, winner: false);
+        var c2 = Candidate("C2", "Globex prevails", composite: 0.58m, verification: 0.62m, winner: true);
+        var candidates = new[] { c1, c2 };
+        var branches = new[] { Branch("C1.B1"), Branch("C2.B1") };
+
+        var impacts = new[]
+        {
+            CandidateImpact("C1", DecisionImpactSeverity.Material, "Strengthened"),
+            CandidateImpact("C2", DecisionImpactSeverity.Material, "Weakened"),
+        };
+        var reopenAllowed = new HashSet<Guid>(branches.Select(b => b.DecisionBranchId));
+
+        // Even though the event classification is MaterialContradiction, per-impact state wins.
+        var plan = DecisionReevaluationPlanner.Run(
+            MatterChangeClassification.MaterialContradiction, impacts, candidates, branches, Settings(), reopenAllowed);
+
+        Assert.True(plan.ReevaluationOccurred);
+        var c1Signal = Assert.Single(plan.Signals, s => s.CandidateId == c1.DecisionCandidateId);
+        var c2Signal = Assert.Single(plan.Signals, s => s.CandidateId == c2.DecisionCandidateId);
+        Assert.True(c1Signal.SupportDelta > 0);
+        Assert.True(c2Signal.SupportDelta < 0);
+    }
+
+    [Fact]
+    public void QualifiesImpact_RequiresEvaluation_ReopensWithoutBiasingRanking()
+    {
+        // A QUALIFIES placement conditions/narrows an outcome: it must trigger reevaluation (reopen) but
+        // carry NO fabricated direction, so the displayed ranking is not biased by an unevaluated qualifier.
+        var c1 = Candidate("C1", "Acme prevails", composite: 0.62m, verification: 0.80m, winner: true);
+        var c2 = Candidate("C2", "Globex prevails", composite: 0.58m, verification: 0.60m, winner: false);
+        var candidates = new[] { c1, c2 };
+        var branches = new[] { Branch("C1.B1"), Branch("C2.B1") };
+
+        var impacts = new[] { CandidateImpact("C1", DecisionImpactSeverity.Potential, "RequiresEvaluation") };
+        var reopenAllowed = new HashSet<Guid>(branches.Select(b => b.DecisionBranchId));
+
+        var plan = DecisionReevaluationPlanner.Run(
+            MatterChangeClassification.NewMaterialFact, impacts, candidates, branches, Settings(), reopenAllowed);
+
+        // Reevaluation IS triggered (a signal exists) but the signal is directionless.
+        Assert.True(plan.ReevaluationOccurred);
+        var signal = Assert.Single(plan.Signals);
+        Assert.Equal(c1.DecisionCandidateId, signal.CandidateId);
+        Assert.Equal(0.0, signal.SupportDelta);
+        Assert.True(signal.ReopenRequested);
+
+        // The qualifier did not flip or re-order the winner on its own.
         Assert.False(plan.Result.WinnerChanged);
         Assert.Equal(c1.DecisionCandidateId, plan.Result.CurrentWinnerId);
     }

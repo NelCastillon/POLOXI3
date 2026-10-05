@@ -161,7 +161,26 @@ public sealed record DecisionMutationPreview(
     IReadOnlyCollection<string> AffectedPath,
     IReadOnlyCollection<string> IntegrityFindings,
     bool ScoreProjectionAdvisory,    // true when the authoritative recompute is deferred to async closure
-    string ExplanationSummary);      // §17 CDI "why it moves"
+    string ExplanationSummary,       // §17 CDI "why it moves"
+    LpiInitializationPreview? LpiInitialization = null); // optional ancestor-informed initialization (advisory)
+
+// §4/LPI optional ancestor-informed INITIALIZATION preview. Additive and advisory: it shows the
+// existing local-only baseline alongside the ancestor-informed value so the attorney can compare
+// BEFORE commit. It never changes parent aggregation; POLOXI Core owns the authoritative recompute.
+public sealed record LpiInitializationPreview(
+    bool Enabled,                    // false when ancestor influence is disabled (existing behavior)
+    bool HasScore,
+    decimal? InitialScore,           // value that would initialize the candidate (null when Uninitialized)
+    decimal? LocalBaseline,          // B_c — existing local-only value, always shown for comparison
+    decimal? AncestorContext,        // A_c — λ-decayed ancestor mean (null when no ancestors)
+    decimal Alpha,
+    decimal Lambda,
+    string FormulaVersion,
+    string Method,                   // Disabled | LocalOnly | Blended | AncestorOnlyReviewRequired | Uninitialized
+    IReadOnlyCollection<LpiAncestorUsed> AncestorsUsed,
+    string Explanation);             // initialization "why", separate from outcome-support changes
+
+public sealed record LpiAncestorUsed(Guid NodeId, int Depth, decimal Value, long NodeVersion);
 
 // §16 Confirm/Commit step: commit the node + assessment (+optional approval) in one transaction.
 public sealed record CommitAttorneyInputCommand(

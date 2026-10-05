@@ -134,6 +134,48 @@ public sealed class AttorneyDecisionInputRepository(ISqlConnectionFactory connec
         return rows.Select(r => (r.DecisionNodeId, r.NodeText, r.Value)).ToArray();
     }
 
+    // Pre-insertion ancestor scores up the ParentNodeId chain (nearest-first). Used only to INITIALIZE
+    // a candidate score (LPI); never changes parent aggregation. A recursive CTE walks parents from the
+    // given parent node; each ancestor's score is the active approved assessment value or EvaluatedValue.
+    public async Task<IReadOnlyList<(Guid NodeId, int Depth, decimal Value, long NodeVersion)>> GetAncestorScoresAsync(
+        Guid tenantId, Guid matterId, Guid parentNodeId, int maxDepth,
+        CancellationToken cancellationToken = default)
+    {
+        if (parentNodeId == Guid.Empty || maxDepth <= 0) return [];
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var rows = await connection.QueryAsync<AncestorRow>(new CommandDefinition(
+            """
+            WITH Ancestors AS (
+                SELECT n.DecisionNodeId, n.ParentNodeId, n.NodeVersion, 1 AS Depth
+                FROM POLOXI.Legal_DecisionNode n
+                WHERE n.TenantId = @TenantId AND n.MatterId = @MatterId AND n.IsDeleted = 0
+                  AND n.DecisionNodeId = @ParentNodeId
+                UNION ALL
+                SELECT p.DecisionNodeId, p.ParentNodeId, p.NodeVersion, a.Depth + 1
+                FROM POLOXI.Legal_DecisionNode p
+                JOIN Ancestors a ON p.DecisionNodeId = a.ParentNodeId
+                WHERE p.TenantId = @TenantId AND p.MatterId = @MatterId AND p.IsDeleted = 0
+                  AND a.Depth < @MaxDepth
+            )
+            SELECT a.DecisionNodeId, a.Depth, a.NodeVersion,
+                   COALESCE(ama.ConfirmedValue, n.EvaluatedValue) AS Value
+            FROM Ancestors a
+            JOIN POLOXI.Legal_DecisionNode n ON n.DecisionNodeId = a.DecisionNodeId
+            OUTER APPLY (
+                SELECT TOP 1 asr.ConfirmedValue
+                FROM POLOXI.Legal_ApprovedMatterAssessment ap
+                JOIN POLOXI.Legal_AttorneyRelativeAssessment asr ON asr.AssessmentId = ap.AssessmentId
+                WHERE ap.DecisionNodeId = a.DecisionNodeId AND ap.IsActive = 1 AND ap.IsDeleted = 0
+            ) ama
+            WHERE COALESCE(ama.ConfirmedValue, n.EvaluatedValue) IS NOT NULL
+            ORDER BY a.Depth
+            OPTION (MAXRECURSION 100);
+            """,
+            new { TenantId = tenantId, MatterId = matterId, ParentNodeId = parentNodeId, MaxDepth = maxDepth },
+            cancellationToken: cancellationToken));
+        return rows.Select(r => (r.DecisionNodeId, r.Depth, r.Value, r.NodeVersion)).ToArray();
+    }
+
     public async Task<IReadOnlyList<AttorneyDuplicateCandidateDto>> FindDuplicateCandidatesAsync(
         Guid tenantId, Guid matterId, string nodeText, CancellationToken cancellationToken = default)
     {
@@ -671,6 +713,7 @@ public sealed class AttorneyDecisionInputRepository(ISqlConnectionFactory connec
     }
 
     private sealed record SiblingRow(Guid DecisionNodeId, string NodeText, decimal? Value);
+    private sealed record AncestorRow(Guid DecisionNodeId, int Depth, decimal Value, long NodeVersion);
     private sealed record DuplicateRow(Guid DecisionNodeId, string CanonicalKey, string NodeText);
 
     private sealed record NodeRow(
