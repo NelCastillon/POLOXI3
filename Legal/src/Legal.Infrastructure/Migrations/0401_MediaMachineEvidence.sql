@@ -240,6 +240,15 @@ CREATE TABLE POLOXI.Legal_PropositionEvidenceLink
 
 GO
 
+-- Self-heal: if a prior partial run created the table without RetrievedPropositionId, add it so the
+-- index below can be created. Idempotent and safe on reruns.
+IF OBJECT_ID(N'POLOXI.Legal_PropositionEvidenceLink',N'U') IS NOT NULL
+   AND COL_LENGTH(N'POLOXI.Legal_PropositionEvidenceLink', N'RetrievedPropositionId') IS NULL
+	ALTER TABLE POLOXI.Legal_PropositionEvidenceLink
+		ADD RetrievedPropositionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_Legal_PropEvidenceLink_RetProp DEFAULT '00000000-0000-0000-0000-000000000000';
+
+GO
+
 IF OBJECT_ID(N'POLOXI.IX_Legal_PropEvidenceLink_Prop',N'IX') IS NULL
 	CREATE INDEX IX_Legal_PropEvidenceLink_Prop
 		ON POLOXI.Legal_PropositionEvidenceLink (TenantId, RetrievedPropositionId) WHERE IsDeleted = 0;

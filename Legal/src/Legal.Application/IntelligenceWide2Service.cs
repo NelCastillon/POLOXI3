@@ -1831,12 +1831,17 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             if(string.Equals(request.ContextCode?.Trim(),WideSearchContexts.Legal,StringComparison.OrdinalIgnoreCase)&&answerStatus!="USER_CLARIFICATION_REQUIRED")
             {
                 // Narrative source: the authoritative scored candidates when candidate competition produced
-                // them. On a BLOCKED / interpretation-only run no candidate cleared scoring, so the Overview
-                // falls back to the top-level (L1) competing outcome branches. Compose the landscape narrative
-                // over those SAME branches (projected as provisional candidates) so the Overview cards always
-                // carry a narrative. Presentation-only: identities, confidence, and interpretation all come
-                // from persisted branches; nothing is re-ranked, re-scored, or fabricated.
-                var landscapeCandidates=candidates.Count>0?candidates:BuildFallbackLandscapeCandidates(survivorsFinal);
+                // them. On a BLOCKED / interpretation-only run no candidate cleared scoring, so compose the
+                // per-candidate narrative over the SAME proposed outcomes the Overview cards render (the
+                // normalized registration-plan candidates, by identity), and only if none exist fall back to
+                // the top-level (L1) competing outcome branches. Presentation-only: identities, confidence,
+                // and interpretation all come from persisted candidates/branches; nothing is re-ranked,
+                // re-scored, or fabricated.
+                var landscapeCandidates=candidates.Count>0
+                    ?candidates
+                    :BuildProposedLandscapeCandidates() is {Count:>0} proposed
+                        ?proposed
+                        :BuildFallbackLandscapeCandidates(survivorsFinal);
                 if(landscapeCandidates.Count>0)
                 {
                     llmCalls++;
@@ -2243,6 +2248,27 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     // narrative that the Overview renders. These mirror EXACTLY the branches the Overview L1 fallback cards
     // show (top 3 non-eliminated L1 branches by confidence). Presentation-only: DisplayName, Interpretation,
     // and Confidence are copied verbatim from the persisted branches; no new facts, scores, or rankings.
+    // Proposed-outcome landscape source: when no candidate cleared scoring, compose the per-candidate
+    // narrative over the SAME proposed outcomes the Overview cards render — the normalized registration-plan
+    // candidates (OriginalTitle / MaterialDistinction). This keeps candidate identity verbatim so the UI's
+    // per-card narrative match succeeds. Presentation-only; nothing is scored, ranked, or fabricated.
+    private IReadOnlyCollection<WideCandidateDto> BuildProposedLandscapeCandidates()
+    {
+        if(_legalNormalization is null)return [];
+        var rank=0;
+        return _legalNormalization.Plan.Candidates
+            .Where(c=>!string.IsNullOrWhiteSpace(c.DisplayName))
+            .Take(10)
+            .Select(c=>new WideCandidateDto(
+                Guid.NewGuid(),
+                ++rank,
+                c.DisplayName.Trim(),
+                string.IsNullOrWhiteSpace(c.Identity.Signature)?null:c.Identity.Signature.Trim(),
+                0m,
+                []))
+            .ToArray();
+    }
+
     private static IReadOnlyCollection<WideCandidateDto> BuildFallbackLandscapeCandidates(IReadOnlyCollection<WideBranchRecord> survivorsFinal)
     {
         var l1=survivorsFinal

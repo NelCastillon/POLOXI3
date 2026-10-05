@@ -28,7 +28,15 @@ public enum LpiRetrievalMode
 
     // Proposition originated from the Media & Machine Evidence channel (image/audio/structured extraction
     // or manual annotation), anchored to an exact media source region/interval — NOT a document retrieval.
-    MediaDirected
+    // MediaDirected is the generic channel marker; the sub-type members below record the exact media kind.
+    MediaDirected,
+
+    // Media & Machine Evidence sub-type provenance, derived from the evidence anchor type. These keep the
+    // exact media origin visible end-to-end (review queue, DCI trace) without changing scoring behavior.
+    MediaImageDirected,
+    MediaAudioDirected,
+    MediaVideoDirected,
+    MediaStructuredDirected
 }
 
 // Qualitative relationship a proposition bears to a hierarchy node. Never a score.

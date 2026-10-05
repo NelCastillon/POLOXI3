@@ -191,7 +191,7 @@ public sealed class MediaEvidenceOrchestrationService(
         var proposalId = await ParkPropositionAsync(
             request.TenantId, request.ActorUserId, request.DecisionMatterId, request.MediaAssetVersionId,
             request.PropositionText, request.AssertionType, request.AttributedTo, request.EffectiveAt,
-            [], cancellationToken);
+            [], request.AnchorType, cancellationToken);
 
         var linkId = await mediaRepository.AddEvidenceLinkAsync(new PropositionEvidenceLink(
             Guid.NewGuid(), request.TenantId, request.DecisionMatterId, proposalId, anchorId,
@@ -278,7 +278,7 @@ public sealed class MediaEvidenceOrchestrationService(
             var proposalId = await ParkPropositionAsync(
                 request.TenantId, request.ActorUserId, request.DecisionMatterId, version.MediaAssetVersionId,
                 extracted.PropositionText ?? string.Empty, MapAssertion(extracted.AssertionType),
-                extracted.AttributedTo, ParseEffectiveAt(extracted.EffectiveAt), placements, cancellationToken);
+                extracted.AttributedTo, ParseEffectiveAt(extracted.EffectiveAt), placements, anchorType.Value, cancellationToken);
 
             await mediaRepository.AddEvidenceLinkAsync(new PropositionEvidenceLink(
                 Guid.NewGuid(), request.TenantId, request.DecisionMatterId, proposalId, anchorId,
@@ -295,7 +295,7 @@ public sealed class MediaEvidenceOrchestrationService(
     private async Task<Guid> ParkPropositionAsync(
         Guid tenantId, Guid actorUserId, Guid decisionMatterId, Guid mediaAssetVersionId,
         string propositionText, LpiAssertionType assertionType, string? attributedTo, DateTimeOffset? effectiveAt,
-        IReadOnlyList<LpiPlacementProposal> placements, CancellationToken cancellationToken)
+        IReadOnlyList<LpiPlacementProposal> placements, EvidenceAnchorType anchorType, CancellationToken cancellationToken)
     {
         var proposalId = Guid.NewGuid();
         var snapshot = await revisionResolver.ResolveAsync(tenantId, decisionMatterId, cancellationToken);
@@ -328,10 +328,22 @@ public sealed class MediaEvidenceOrchestrationService(
         await integrationRepository.ParkForReviewAsync(new LpiReviewPark(
             tenantId, actorUserId, decisionMatterId, LpiOperationKind.Add,
             proposition, placements, context, reviewState, reviewReason,
-            RetrievalModeCode: nameof(LpiRetrievalMode.MediaDirected)), cancellationToken);
+            RetrievalModeCode: MapRetrievalMode(anchorType)), cancellationToken);
 
         return proposalId;
     }
+
+    // Map the media sub-type (anchor kind) to its dedicated provenance mode so the exact media origin is
+    // preserved end-to-end. Falls back to the generic MediaDirected channel marker if a new anchor type
+    // is introduced without a dedicated mode.
+    private static string MapRetrievalMode(EvidenceAnchorType anchorType) => anchorType switch
+    {
+        EvidenceAnchorType.ImageRegion => nameof(LpiRetrievalMode.MediaImageDirected),
+        EvidenceAnchorType.AudioInterval => nameof(LpiRetrievalMode.MediaAudioDirected),
+        EvidenceAnchorType.VideoInterval => nameof(LpiRetrievalMode.MediaVideoDirected),
+        EvidenceAnchorType.StructuredRecord => nameof(LpiRetrievalMode.MediaStructuredDirected),
+        _ => nameof(LpiRetrievalMode.MediaDirected)
+    };
 
     private async Task<MediaProcessingResult> FinishUnavailableOrFailedAsync(
         MediaProcessingRequest request, MediaProcessingRun run, MediaProcessorOutcome outcome,
