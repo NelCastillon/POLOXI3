@@ -340,10 +340,17 @@
                                                             }
                                                             else
                                                             {
-                                                                <span class="ov-card-support ov-card-support--advisory" title="Advisory LLM score only — not a POLOXI competition result.">Not scored</span>
+                                                                <span class="ov-card-support ov-card-support--advisory" title="Dependency-establishment support — no Candidate × Branch competition ran for this matter.">@o.SupportPct% support</span>
                                                             }
                                                         </div>
-                                                        <div class="ov-card-track"><div class="ov-card-fill" style="width:@(OvCompetitionValid ? o.SupportPct : 0)%"></div></div>
+                                                        <div class="ov-card-track"><div class="ov-card-fill" style="width:@(o.SupportPct)%"></div></div>
+                                                        <p class="ov-card-scoreformula" title="How this outcome's score and rank were computed.">@o.ScoreFormulaFor(OvCompetitionValid)</p>
+                                                        @if (OvCompetitionValid && o.EvidenceCoverage <= 0m)
+                                                        {
+                                                            <p class="ov-card-unverified" title="POLOXI competed this outcome across the matter's reasoning dimensions, but no retrieved evidence supports it yet.">
+                                                                <i class="bi bi-exclamation-triangle" aria-hidden="true"></i> 0% evidence coverage &middot; UNVERIFIED &mdash; scored on reasoning dimensions only, not an evidence-grounded determination.
+                                                            </p>
+                                                        }
                                                         <h5 class="ov-card-title">@o.Title</h5>
                                                         <p class="ov-card-detail">@o.CardText</p>
                                                         @if (o.FullNarrative.Count > 0)
@@ -401,7 +408,8 @@
                                                                                 }
                                                                                 else
                                                                                 {
-                                                                                    <span class="ov-table-bar-val ov-card-support--advisory" title="Advisory LLM score only — not a POLOXI competition result.">Not scored</span>
+                                                                                    <div class="ov-table-bar"><div class="ov-table-bar-fill ov-card--c@(o.Index)" style="width:@(o.SupportPct)%"></div></div>
+                                                                                    <span class="ov-table-bar-val ov-card-support--advisory" title="Dependency-establishment support — no Candidate × Branch competition ran for this matter.">@o.SupportPct%</span>
                                                                                 }
                                                                             </td>
                                                                         }
@@ -520,7 +528,8 @@
                                                                         }
                                                                         else
                                                                         {
-                                                                            <span class="ov-table-bar-val ov-card-support--advisory" title="Advisory LLM score only — not a POLOXI competition result.">Not scored</span>
+                                                                            <div class="ov-table-bar"><div class="ov-table-bar-fill ov-card--c@(o.Index)" style="width:@(o.SupportPct)%"></div></div>
+                                                                            <span class="ov-table-bar-val ov-card-support--advisory" title="Dependency-establishment support — no Candidate × Branch competition ran for this matter.">@o.SupportPct%</span>
                                                                         }
                                                                     </td>
                                                                 }
@@ -1049,6 +1058,9 @@
                                                 break;
                                             case "Decision Change Intelligence (DCI)":
                                                 @DciDashboard
+                                                break;
+                                            case "Channel Scoring (LPI)":
+                                                @ChannelScoringLpiDashboard
                                                 break;
                                             case "Decision Contract":
                                 @if (_matter is not null)
@@ -4250,6 +4262,16 @@
     private Guid? _dciSelectedDeltaId;
     private Legal.Application.Features.Intelligence.Decision.DecisionChangeReviewDto? _dciChangeReview;
     private bool _dciChangeReviewLoading;
+
+    // ── Channel Scoring (LPI) — read-only transparency trace ─────────────────────────────────────────
+    // DB-backed: the same verified channel contributions + durable lineage POLOXI already folded into
+    // the latest decision session's candidate competition, explained with the exact δ formula/value and
+    // effect. Nothing is recomputed here — POLOXI remains the sole scorer; this only shows how channels
+    // affected the Outcome candidate scoring. Loaded lazily when the tab is first opened. Fail-soft.
+    private Legal.Application.Features.Intelligence.Decision.Channels.ChannelScoringLpiReadModel? _channelScoring;
+    private bool _channelScoringLoading;
+    private bool _channelScoringLoaded;
+    private string? _channelScoringError;
     private bool _dciOnlyChangedNodes;
 
     // Advisory proposition-level Information Value (POLOXI VIV scale). Display-only overlay reusing the
@@ -4463,6 +4485,29 @@
         }
     }
 
+    // Loads the read-only Channel Scoring (LPI) trace for this matter's latest decision session. Advisory
+    // and fail-soft: a failure here never affects the authoritative decision or any other panel.
+    private async Task LoadChannelScoringAsync()
+    {
+        if (MatterId is not { } matterId || matterId == Guid.Empty || _channelScoringLoading)
+            return;
+        _channelScoringLoading = true;
+        _channelScoringError = null;
+        try
+        {
+            _channelScoring = await Api.GetChannelScoringLpiAsync(matterId);
+            _channelScoringLoaded = true;
+        }
+        catch (Exception ex)
+        {
+            _channelScoringError = $"Failed to load channel scoring: {ex.Message}";
+        }
+        finally
+        {
+            _channelScoringLoading = false;
+            StateHasChanged();
+        }
+    }
     private async Task LoadHumanIntelligenceAsync()
     {
         if (MatterId is not { } matterId || matterId == Guid.Empty || _humanIntelLoading)
@@ -5818,6 +5863,133 @@
         if (view == "Why It Changed" && _dciChangeReview is null && DciSelectedDelta?.MatterChangeEventId is { } eventId)
             await LoadDciChangeReviewAsync(eventId);
     }
+
+    // Read-only Channel Scoring (LPI) dashboard: shows the formula legend, every channel contribution's
+    // applied δ (or honest no-effect reason), per-dimension net push, and how it fed POLOXI's competition.
+    private RenderFragment ChannelScoringLpiDashboard => __builder =>
+    {
+        var model = _channelScoring;
+
+        <div class="dci-root">
+            <div class="dci-topbar">
+                <div class="dci-topbar-title">
+                    <span class="dci-topbar-icon"><i class="bi bi-diagram-3" aria-hidden="true"></i></span>
+                    <div>
+                        <div class="dci-topbar-heading">
+                            <h4>Channel Scoring (LPI) &mdash; How Channels Affected the Outcome</h4>
+                            <span class="dci-badge dci-badge--live"><span class="dci-live-dot" aria-hidden="true"></span> POLOXI</span>
+                        </div>
+                        <p class="dfi-panel-sub">Every verified channel contribution is converted into a bounded, signed <strong>&delta;</strong> and folded into the latest decision session's POLOXI candidate competition. Channels never score candidates themselves &mdash; POLOXI owns the composite score, margin and winner. This is a read-only trace of the exact math that was applied.</p>
+                    </div>
+                </div>
+            </div>
+
+            @if (_channelScoringLoading)
+            {
+                <div class="dfi-panel-card"><p class="dfi-panel-sub">Loading channel scoring trace&hellip;</p></div>
+            }
+            else if (_channelScoringError is not null)
+            {
+                <div class="dfi-panel-card"><div class="alert alert-danger" style="border-left: 4px solid #dc3545;">@_channelScoringError</div></div>
+            }
+            else if (model is null || model.TotalContributions == 0)
+            {
+                <div class="dfi-panel-card">
+                    <p class="dfi-panel-sub">No channel contributions have been folded into this matter's latest decision session yet. When a channel (Document Evidence, Legal Authority, Human Intelligence, &hellip;) produces a verified contribution with authoritative lineage, its scoring trace appears here.</p>
+                </div>
+            }
+            else
+            {
+                <div class="dfi-panel-card" style="margin-bottom:14px;">
+                    <div style="display:flex; gap:18px; flex-wrap:wrap;">
+                        <div><span class="dfi-panel-sub">Contributions</span><div style="font-size:1.25rem; font-weight:600;">@model.TotalContributions</div></div>
+                        <div><span class="dfi-panel-sub">Applied to scoring</span><div style="font-size:1.25rem; font-weight:600; color:#198754;">@model.EffectiveContributions</div></div>
+                        <div><span class="dfi-panel-sub">No effect</span><div style="font-size:1.25rem; font-weight:600; color:#6c757d;">@model.NoEffectContributions</div></div>
+                    </div>
+                </div>
+
+                <div class="dfi-panel-card" style="margin-bottom:14px;">
+                    <h5 style="margin-bottom:8px;"><i class="bi bi-calculator" aria-hidden="true"></i> Scoring formula &amp; values</h5>
+                    <ul style="margin:0 0 10px 0; padding-left:18px;">
+                        <li><code>@model.Formula.SupportFormula</code></li>
+                        <li><code>@model.Formula.QualifiedSupportFormula</code></li>
+                        <li><code>@model.Formula.ContradictionFormula</code></li>
+                        <li><code>@model.Formula.PlacementFormula</code></li>
+                    </ul>
+                    <p class="dfi-panel-sub" style="margin-bottom:4px;"><strong>Gating rules</strong> (why a contribution does or does not move scoring):</p>
+                    <ul style="margin:0; padding-left:18px;" class="dfi-panel-sub">
+                        @foreach (var rule in model.Formula.GatingRules)
+                        {
+                            <li>@rule</li>
+                        }
+                    </ul>
+                </div>
+
+                @if (model.DimensionAggregates.Count > 0)
+                {
+                    <div class="dfi-panel-card" style="margin-bottom:14px;">
+                        <h5 style="margin-bottom:8px;"><i class="bi bi-sliders" aria-hidden="true"></i> Net push per POLOXI dimension</h5>
+                        <table class="table table-sm" style="margin:0;">
+                            <thead>
+                                <tr><th>Dimension</th><th style="text-align:right;">Contributions</th><th style="text-align:right;">+ δ</th><th style="text-align:right;">− δ</th><th style="text-align:right;">Net δ</th></tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var agg in model.DimensionAggregates)
+                                {
+                                    <tr>
+                                        <td><strong>@agg.Dimension</strong></td>
+                                        <td style="text-align:right;">@agg.ContributionCount</td>
+                                        <td style="text-align:right; color:#198754;">@agg.PositiveDelta.ToString("+0.###;-0.###;0")</td>
+                                        <td style="text-align:right; color:#dc3545;">@agg.NegativeDelta.ToString("+0.###;-0.###;0")</td>
+                                        <td style="text-align:right; font-weight:600; color:@(agg.NetDelta >= 0 ? "#198754" : "#dc3545")">@agg.NetDelta.ToString("+0.###;-0.###;0")</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                        <p class="dfi-panel-sub" style="margin-top:6px;">These signed inputs land on the named POLOXI dimension; POLOXI Core alone decides their effect on the final candidate composite score and ranking.</p>
+                    </div>
+                }
+
+                <div class="dfi-panel-card">
+                    <h5 style="margin-bottom:8px;"><i class="bi bi-list-columns-reverse" aria-hidden="true"></i> Contribution trace</h5>
+                    <table class="table table-sm" style="margin:0;">
+                        <thead>
+                            <tr>
+                                <th>Channel</th>
+                                <th>Relation</th>
+                                <th>Verification</th>
+                                <th>Dimension</th>
+                                <th>Formula applied</th>
+                                <th style="text-align:right;">δ</th>
+                                <th>Effect on scoring</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var row in model.Contributions)
+                            {
+                                var applied = row.AppliedDelta != 0.0;
+                                <tr style="@(applied ? "" : "opacity:0.7;")">
+                                    <td><strong>@row.ChannelType</strong>@if (row.SourceLabel is not null){<div class="dfi-panel-sub" style="font-size:0.78rem;">@row.SourceLabel</div>}</td>
+                                    <td>@row.Relation</td>
+                                    <td>
+                                        <span class="badge @(row.VerificationState == "Verified" ? "bg-success" : "bg-secondary")">@row.VerificationState</span>
+                                    </td>
+                                    <td>@(row.TargetDimension ?? "—")</td>
+                                    <td><code style="font-size:0.78rem;">@row.FormulaApplied</code></td>
+                                    <td style="text-align:right; font-weight:600; color:@(row.AppliedDelta > 0 ? "#198754" : row.AppliedDelta < 0 ? "#dc3545" : "#6c757d")">@row.AppliedDelta.ToString("+0.###;-0.###;0")</td>
+                                    <td>
+                                        <span class="badge @(applied ? "bg-primary" : "bg-light text-dark")">@row.Effect</span>
+                                        <div class="dfi-panel-sub" style="font-size:0.8rem; margin-top:2px;">@row.EffectExplanation</div>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
+    };
+
 
     private RenderFragment DciDashboard => __builder =>
     {
@@ -7960,7 +8132,7 @@
 
     // ── Decision Intelligence console (reads existing response + matter fields only) ──
     private string _dfiTab = "Overview";
-    private static readonly string[] DfiTabs = ["Overview", "Decision Analysis", "Decision Contract", "Hierarchy", "Hierarchy Details", "Factor Matrix", "Evidence", "Document Intelligence", "Competition", "Readiness", "Decision Change Intelligence (DCI)", "Continuous Decision Calibration (CDC)", "Human Intelligence", "Investigation", "Audit"];
+    private static readonly string[] DfiTabs = ["Overview", "Decision Analysis", "Decision Contract", "Hierarchy", "Hierarchy Details", "Factor Matrix", "Evidence", "Document Intelligence", "Competition", "Readiness", "Decision Change Intelligence (DCI)", "Continuous Decision Calibration (CDC)", "Channel Scoring (LPI)", "Human Intelligence", "Investigation", "Audit"];
 
     private void SelectDfiTab(string tab)
     {
@@ -7971,6 +8143,8 @@
             _ = LoadProvenanceAsync();
         if (tab == "Human Intelligence" && _humanIntel is null && !_humanIntelLoading)
             _ = LoadHumanIntelligenceAsync();
+        if (tab == "Channel Scoring (LPI)" && !_channelScoringLoaded && !_channelScoringLoading)
+            _ = LoadChannelScoringAsync();
     }
 
     // ══ Continuous Decision Calibration (CDC) projections ═══════════════════════════════════════════
@@ -8467,6 +8641,12 @@
         // when the composer did not run or produced no deep sections for this candidate.
         public IReadOnlyList<(string Label, string Text)> FullNarrative { get; init; } = [];
 
+        // Candidate-level evidence coverage from the Candidate x Branch competition (0..1). On a legal
+        // matter with no retrieved evidence the competition still runs over reframed hierarchy dimensions,
+        // so a scored card can carry 0 coverage. The card discloses this as UNVERIFIED so a POLOXI score is
+        // never mistaken for an evidence-grounded, attorney-ready determination.
+        public decimal EvidenceCoverage { get; init; }
+
         // Deterministic text for the Overview card so it is NEVER blank: prefer the composed landscape
         // narrative, then the candidate Detail, then a derived viability/support summary built from the
         // persisted scores already on this record. Nothing is fabricated — every value comes from the run.
@@ -8481,6 +8661,19 @@
                     + $"{KeySupportingFactors} supporting factor(s), {CriticalDependencies} dependency(ies), "
                     + $"{MissingEvidence} with missing or unverified evidence, {MainVulnerabilities} vulnerability(ies).";
             }
+        }
+
+        // Small-print methodology line disclosing HOW this outcome's score and rank were computed, built
+        // only from persisted run values (nothing fabricated). The engine label switches between POLOXI
+        // (authoritative Candidate × Branch competition) and LLM (advisory proposal score) based on whether
+        // the competition actually executed. Shown under the support bar.
+        public string ScoreFormulaFor(bool poloxiScored)
+        {
+            var dims = BranchScores.Count;
+            var dimText = dims == 1 ? "1 scored dimension" : $"{dims} scored dimensions";
+            var engine = poloxiScored ? "POLOXI" : "LLM";
+            return $"{engine} · Rank #{Index} · composite score {CompositeScore:P0} aggregated across {dimText} "
+                + $"(Candidate × Branch matrix); support {SupportPct}% = this score ÷ sum of all candidates' scores.";
         }
     }
 
@@ -8581,8 +8774,6 @@
             {
                 var normalized = _response?.DecisionInspector?.NormalizedCandidates;
                 if (normalized is null || normalized.Count == 0) return [];
-                var proposedSummaries = DfiCandidateDependencySummaries
-                    .ToDictionary(s => s.CandidateTitle, s => s, StringComparer.OrdinalIgnoreCase);
                 var proposed = new List<OvOutcome>();
                 var seenTitles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 var idx = 0;
@@ -8591,11 +8782,20 @@
                     var title = string.IsNullOrWhiteSpace(nc.OriginalTitle) ? nc.NormalizedCandidateId : nc.OriginalTitle;
                     if (string.IsNullOrWhiteSpace(title) || !seenTitles.Add(title)) continue;
                     idx++;
-                    proposedSummaries.TryGetValue(title, out var psum);
+                    // Build the dependency summary directly from the factor-relationship inventory (joined
+                    // by candidate TITLE) so the proposed cards get a real establishment ratio even though
+                    // _response.Candidates — and therefore DfiCandidateDependencySummaries — is empty here.
+                    var psum = BuildDependencySummaryForTitle(title);
                     var pTotal = psum?.Total ?? 0;
                     var pEstablished = psum?.Established ?? 0;
                     var pMissing = pTotal - pEstablished;
                     var pVulns = psum?.Required.Count(d => string.Equals(d.Tone, "danger", StringComparison.OrdinalIgnoreCase)) ?? 0;
+                    // Proposed-candidate score: no Candidate × Branch competition ran, so derive a real,
+                    // traceable support value from how many of this candidate's required dependencies are
+                    // established (established ÷ total). This replaces the hardcoded "Not scored / 0%" with
+                    // the dependency-establishment ratio actually present on the run.
+                    var pScore = pTotal > 0 ? (decimal)pEstablished / pTotal : 0m;
+                    var pSupportPct = (int)Math.Round((double)pScore * 100);
                     var proposedTags = new List<(string, string)>
                     {
                         ("Proposed outcome", "info"),
@@ -8606,8 +8806,8 @@
                         idx,
                         title,
                         nc.MaterialDistinction,
-                        0m,
-                        0,
+                        pScore,
+                        pSupportPct,
                         false,
                         "Proposed — not scored",
                         "muted",
@@ -8684,7 +8884,7 @@
                     c.EstimatedResolutionLabel,
                     c.EstimatedCostBand,
                     c.BranchScores.Take(8).ToArray())
-                    { Narrative = OvNarrativeFor(c.DisplayName), FullNarrative = OvFullNarrativeFor(c.DisplayName) });
+                    { Narrative = OvNarrativeFor(c.DisplayName), FullNarrative = OvFullNarrativeFor(c.DisplayName), EvidenceCoverage = c.EvidenceCoverage });
             }
             return outcomes;
         }
@@ -9161,49 +9361,60 @@
         return ("UNRESOLVED", "warn");
     }
 
+    // Compute a required-dependency summary for a single candidate title directly from the factor
+    // relationship inventory. Relationships join by candidate TITLE, so this works for both scored
+    // competition candidates AND normalized proposed candidates (even when _response.Candidates is
+    // empty). Returns null when the candidate has no required dependencies.
+    private DfiCandidateDependencySummary? BuildDependencySummaryForTitle(string candidateTitle)
+    {
+        if (string.IsNullOrWhiteSpace(candidateTitle)) return null;
+        var factorsById = DfiFactors
+            .GroupBy(f => f.FactorId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+        var required = DfiRelations
+            .Where(rel => rel.IsRequired
+                && string.Equals(rel.CandidateTitle, candidateTitle, StringComparison.OrdinalIgnoreCase))
+            .GroupBy(rel => rel.FactorId, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.First())
+            .Select(rel =>
+            {
+                if (!factorsById.TryGetValue(rel.FactorId, out var f))
+                    return new DfiRequiredDependency(rel.FactorName, "UNRESOLVED", "warn", null);
+                // Milestone B: a REQUIRED link with no validated legal/logical basis (lexical only)
+                // must not be presented as established, even if the factor value is supplied.
+                if (!rel.IsValidatedRelation)
+                    return new DfiRequiredDependency(
+                        rel.FactorName, "UNVALIDATED", "danger",
+                        "Dependency relationship is not validated — establish the legal or logical basis before treating it as required.");
+                var (state, tone) = DfiFactorState(f);
+                var obligation = string.Equals(state, "SUPPORTED", StringComparison.OrdinalIgnoreCase)
+                    ? null
+                    : (f.VerificationObligation ?? f.MissingInformation);
+                return new DfiRequiredDependency(rel.FactorName, state, tone, obligation);
+            })
+            .OrderBy(d => string.Equals(d.State, "SUPPORTED", StringComparison.OrdinalIgnoreCase) ? 1 : 0)
+            .ToArray();
+
+        if (required.Length == 0) return null;
+        var established = required.Count(d => string.Equals(d.State, "SUPPORTED", StringComparison.OrdinalIgnoreCase));
+        return new DfiCandidateDependencySummary(
+            candidateTitle,
+            required,
+            established,
+            required.Length,
+            required.Any(d => !string.Equals(d.State, "SUPPORTED", StringComparison.OrdinalIgnoreCase)));
+    }
+
     private IReadOnlyList<DfiCandidateDependencySummary> DfiCandidateDependencySummaries
     {
         get
         {
-            var factorsById = DfiFactors
-                .GroupBy(f => f.FactorId, StringComparer.OrdinalIgnoreCase)
-                .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
             var summaries = new List<DfiCandidateDependencySummary>();
             foreach (var cand in FinalRankedCandidates)
             {
                 // Relationships join by candidate title (both derive from the candidate display name).
-                var required = DfiRelations
-                    .Where(rel => rel.IsRequired
-                        && string.Equals(rel.CandidateTitle, cand.DisplayName, StringComparison.OrdinalIgnoreCase))
-                    .GroupBy(rel => rel.FactorId, StringComparer.OrdinalIgnoreCase)
-                    .Select(g => g.First())
-                    .Select(rel =>
-                    {
-                        if (!factorsById.TryGetValue(rel.FactorId, out var f))
-                            return new DfiRequiredDependency(rel.FactorName, "UNRESOLVED", "warn", null);
-                        // Milestone B: a REQUIRED link with no validated legal/logical basis (lexical only)
-                        // must not be presented as established, even if the factor value is supplied.
-                        if (!rel.IsValidatedRelation)
-                            return new DfiRequiredDependency(
-                                rel.FactorName, "UNVALIDATED", "danger",
-                                "Dependency relationship is not validated — establish the legal or logical basis before treating it as required.");
-                        var (state, tone) = DfiFactorState(f);
-                        var obligation = string.Equals(state, "SUPPORTED", StringComparison.OrdinalIgnoreCase)
-                            ? null
-                            : (f.VerificationObligation ?? f.MissingInformation);
-                        return new DfiRequiredDependency(rel.FactorName, state, tone, obligation);
-                    })
-                    .OrderBy(d => string.Equals(d.State, "SUPPORTED", StringComparison.OrdinalIgnoreCase) ? 1 : 0)
-                    .ToArray();
-
-                if (required.Length == 0) continue;
-                var established = required.Count(d => string.Equals(d.State, "SUPPORTED", StringComparison.OrdinalIgnoreCase));
-                summaries.Add(new DfiCandidateDependencySummary(
-                    cand.DisplayName,
-                    required,
-                    established,
-                    required.Length,
-                    required.Any(d => !string.Equals(d.State, "SUPPORTED", StringComparison.OrdinalIgnoreCase))));
+                var summary = BuildDependencySummaryForTitle(cand.DisplayName);
+                if (summary is not null) summaries.Add(summary);
             }
             return summaries;
         }

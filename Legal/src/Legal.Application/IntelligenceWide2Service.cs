@@ -15,7 +15,7 @@ namespace Legal.Application;
 // Isolated clone of the POLOXI search orchestration used by /intelligence/search/poloxi_wide.
 // Intentionally duplicates IntelligenceService.SearchWithPoloxiAsync so this "Wide" path can be
 // tweaked freely without changing /intelligence/search/poloxi behavior.
-public sealed partial class IntelligenceWide2Service(IIntelligenceRepository repository,IIntelligenceWide2Repository wideRepository,IAiProviderRouter aiProviderRouter,IExternalKnowledgeProvider externalKnowledgeProvider,ILegalRetriever legalRetriever,IPromptCatalog promptCatalog,IAdaptiveRetriever adaptiveRetriever,IAbvResolutionEngine abvEngine,ILegalDecisionRepository legalDecisionRepository,IErrorLogService errorLog,ILogger<IntelligenceWide2Service> logger,IWide2ProgressPublisher? progressPublisher=null,ILegalHierarchyExecutionRepository? hierarchyExecutionRepository=null):IIntelligenceWide2Service
+public sealed partial class IntelligenceWide2Service(IIntelligenceRepository repository,IIntelligenceWide2Repository wideRepository,IAiProviderRouter aiProviderRouter,IExternalKnowledgeProvider externalKnowledgeProvider,ILegalRetriever legalRetriever,IPromptCatalog promptCatalog,IAdaptiveRetriever adaptiveRetriever,IAbvResolutionEngine abvEngine,ILegalDecisionRepository legalDecisionRepository,IErrorLogService errorLog,ILogger<IntelligenceWide2Service> logger,IWide2ProgressPublisher? progressPublisher=null,ILegalHierarchyExecutionRepository? hierarchyExecutionRepository=null,Features.Intelligence.Decision.Channels.IChannelContributionProjectionService? channelProjectionService=null):IIntelligenceWide2Service
 {
     // Real-time cockpit KPI feed. Optional so hosts without SignalR (or tests) run unchanged. Publishing
     // is fully fail-soft: a broken/absent transport must never affect grounding, scoring, or readiness.
@@ -1506,6 +1506,11 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             var completion=await CompleteRankingAsync(request,executionId,queryContract,survivorsFinal,interpretiveResults,competitionBasis,externalKnowledgeAll,configuration,llmCalls,rankingCompletionRequired,effectiveContractCount,cancellationToken);
             candidates=completion.Candidates;
             llmCalls=completion.LlmCalls;
+            // ENFORCED channel scoring: fold verified Decision Channel contributions (Document Evidence,
+            // Legal Authority, Human Intelligence, Investigation, Decision Contract, External Research, and
+            // Media/Machine propositions) into the authoritative candidate ranking BEFORE readiness/status,
+            // top-candidate derivation, and response assembly. Fully fail-soft and no-op off a legal matter.
+            candidates=await ApplyChannelContributionsAsync(request,candidates,cancellationToken);
             // R4 decision readiness: registration success is NOT an evidence-grounded decision. Record whether
             // authoritative scoring produced competing candidates or whether the unchanged evidence/readiness
             // rules blocked a winner, so a normalized-but-unsupported run is never reported as a decision.
@@ -3086,7 +3091,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                     // web query. Resolved citations route through the same identity/support gate.
                     if(useLegalGrounding&&authorities.Count==0)
                     {
-                        var resolved=ResolveConceptAuthorities($"{branch.DisplayName}. {branch.Interpretation}. {branch.SearchText}. {request.Query}",legalConceptMap);
+                        var resolved=ResolveConceptAuthorities($"{branch.DisplayName}. {branch.Interpretation}. {branch.SearchText}. {request.Query}",legalConceptMap,targetSovereign);
                         if(resolved.Count>0)
                         {
                             authorities=resolved;
@@ -6241,6 +6246,40 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 .Take(6);
             var competitionCandidates=topSurvivors.Concat(rootDimensions).DistinctBy(branch=>branch.WideBranchId).OrderByDescending(branch=>branch.PoloxiConfidence).Take(10).ToArray();
             var branches=competitionCandidates.Where(branch=>ClassifyCompetitionRole(branch,queryContract)==CompetitionRole.ScoreableCriterion&&!IsDispositionBranch(branch)).ToArray();
+            // Legal-decision scoring-axis recovery: on a legal EVALUATE run the hierarchy can narrow
+            // ENTIRELY into competing dispositions (demoted to NonScoring), leaving no scoreable survivor
+            // branch. The dispositions still compete as CANDIDATES below, but with no scoring axis the
+            // Candidate x Branch matrix bailed here with return [], so every outcome showed "Not scored".
+            // The true evaluative axes for the matter are the normalization gate's REGISTERED SHARED
+            // DEPENDENCIES (the procedural/factual/burden/evidentiary propositions ProjectFactorInventory
+            // already treats as global factors). Materialize them as scoring-axis branches so the
+            // competition runs over the real decision factors. Not fabricated: every axis is a validated
+            // plan dependency with a deterministic id/label. Evidence coverage stays 0 so the determinacy
+            // gate keeps the run UNVERIFIED. Strictly gated to a legal EVALUATE run with a VALID plan.
+            if(branches.Length==0&&IsLegalDecisionEvaluationRun
+                &&_legalNormalization is{Plan.IsValid:true} planForAxes
+                &&planForAxes.Plan.Dependencies.Count>0)
+            {
+                branches=planForAxes.Plan.Dependencies
+                    .Where(dep=>!string.IsNullOrWhiteSpace(dep.Label)||!string.IsNullOrWhiteSpace(dep.Question))
+                    .Take(10)
+                    .Select((dep,idx)=>new WideBranchRecord(
+                        Guid.NewGuid(),executionId,null,request.TenantId,1,
+                        $"SYN-DEP-{idx+1}",
+                        (string.IsNullOrWhiteSpace(dep.Label)?dep.Question:dep.Label)!.Trim(),
+                        string.IsNullOrWhiteSpace(dep.Question)?dep.Label.Trim():dep.Question!.Trim(),
+                        null,null,"INTERPRETIVE",0,0.5m,false,null,false,null,idx)
+                    {
+                        BranchStateCode=WideBranchStates.Active,
+                        BranchRoleCode=WideBranchRoles.Preference,
+                        InterpretationPrior=0.5m,
+                        EvidenceSupport=0m,
+                        PoloxiConfidence=0.5m,
+                    })
+                    .ToArray();
+                if(branches.Length>0)
+                    logger.LogInformation("Wide2 EVALUATE synthesized {Count} scoring axis(es) from the normalization plan's shared dependencies for matter {MatterId} (hierarchy narrowed entirely into dispositions).",branches.Length,_matterContext?.MatterId);
+            }
             if(branches.Length==0)return [];
             // V3.5 Hierarchical Roll-Up: the progressive-narrowing children of each scoring dimension
             // carry concrete meaning ("Safe Environment" -> "Low Violent Crime Rate", "Police Response
@@ -6313,10 +6352,23 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             // no verified winner is ever claimed. Strictly gated to a legal EVALUATE run + IsDecisionOutcome
             // recognition, so non-legal entity ranking is untouched and only real dispositions bypass the
             // host floor.
+            // When the normalization gate produced a VALID plan, the incoming discoveredCandidates ARE the
+            // gate's authoritative EligibleCandidateNames — already role-classified and identity-normalized.
+            // Re-gating them through (a) the verb-based IsDecisionOutcomeCandidate heuristic or (b) the
+            // Title-Case proper-noun validity check (IsValidCandidateForContract → IsValidCandidateName)
+            // silently discards every registered candidate that is a noun-form, SENTENCE-CASE legal
+            // disposition (e.g. "Confidential negotiated settlement" — lowercase significant words mark it as
+            // a "description" and the proper-noun rule rejects it). That collapsed a 59-candidate universe to
+            // zero and reported NO_COMPETING_CANDIDATES. A gate-registered candidate is valid BY REGISTRATION,
+            // not by capitalization: trust the gate and admit directly. Both heuristics are kept ONLY for the
+            // legacy path (no valid plan) so non-legal / unregistered runs are untouched. Evidence confidence
+            // stays 0 and the downstream determinacy gate keeps the run UNVERIFIED.
+            var hasValidNormalizationPlan=_legalNormalization is{Plan.IsValid:true};
             var dispositionCandidates=IsLegalDecisionEvaluationRun
                 ?discoveredCandidates
                     .SelectMany(name=>ExpandNormalizedCandidateNames(name,queryContract))
-                    .Where(name=>IsDecisionOutcomeCandidate(name)&&IsValidCandidateForContract(name,queryContract)
+                    .Where(name=>(hasValidNormalizationPlan
+                            ||(IsDecisionOutcomeCandidate(name)&&IsValidCandidateForContract(name,queryContract)))
                         &&!knownNames.Contains(name)&&!branchIdentityKeys.Contains(CandidateIdentityKey(name)))
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .Select(name=>(Name:name,Detail:(string?)"Registered competing legal disposition admitted for adjudication; evidence confidence is established separately."))

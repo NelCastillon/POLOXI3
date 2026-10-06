@@ -17,7 +17,7 @@ namespace Legal.Api.Controllers;
 // (/legal/decision). Evolves independently from the Intelligence Wide (/legal/search) controller.
 [ApiController]
 [Route("api/legal_decision")]
-public sealed class LegalDecisionController(ILegalDecisionService service,IIntelligenceExecutionService executionService,ILegalDocumentCorpusRepository documentCorpusRepository,IAttorneyDecisionInputRepository attorneyDecisionInputRepository,IAttorneyDecisionInputService attorneyDecisionInputService,ILegalDecisionContractService decisionContractService,ILegalDocumentIntakeService documentIntakeService,ILegalMatterCorpusActivationService corpusActivationService,IDecisionIntegrityRepository integrityRepository,IMatterPropositionInformationValueService propositionInformationValueService,INextBestActionService nextBestActionService,IWhatToResolveNextService whatToResolveNextService,IPropositionIntegrationService propositionIntegrationService,IRetrievalPropositionReviewService retrievalReviewService,IRetrievalOrchestrationService retrievalOrchestrationService,IDecisionRevisionResolver decisionRevisionResolver,IOptions<DocumentIntelligenceOptions> documentOptions) : ControllerBase
+public sealed class LegalDecisionController(ILegalDecisionService service,IIntelligenceExecutionService executionService,ILegalDocumentCorpusRepository documentCorpusRepository,IAttorneyDecisionInputRepository attorneyDecisionInputRepository,IAttorneyDecisionInputService attorneyDecisionInputService,ILegalDecisionContractService decisionContractService,ILegalDocumentIntakeService documentIntakeService,ILegalMatterCorpusActivationService corpusActivationService,IDecisionIntegrityRepository integrityRepository,IMatterPropositionInformationValueService propositionInformationValueService,INextBestActionService nextBestActionService,IWhatToResolveNextService whatToResolveNextService,IPropositionIntegrationService propositionIntegrationService,IRetrievalPropositionReviewService retrievalReviewService,IRetrievalOrchestrationService retrievalOrchestrationService,IDecisionRevisionResolver decisionRevisionResolver,Legal.Application.Features.Intelligence.Decision.Channels.IChannelScoringLpiService channelScoringLpiService,IOptions<DocumentIntelligenceOptions> documentOptions) : ControllerBase
 {
     private const string CapabilityCode = JudzCapabilities.LegalDecision;
     private Guid TenantId => AuthenticatedRequestContext.GetTenantId(User) ?? throw new UnauthorizedAccessException("An authenticated tenant context is required.");
@@ -298,6 +298,24 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
     {
         var analysis = await service.GetCandidateFullAnalysisAsync(TenantId, matterId, candidateIndex, cancellationToken);
         return analysis is null ? NotFound() : Ok(analysis);
+    }
+
+    // Read-only Channel Scoring LPI trace: how each verified channel contribution's typed δ was folded
+    // into the latest decision session's POLOXI candidate competition. Returns an honest empty model when
+    // the matter has no session / no channel contributions. POLOXI remains the sole scorer; this only explains.
+    [HttpGet("matters/{matterId:guid}/channel-scoring")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> MatterChannelScoring(Guid matterId, CancellationToken cancellationToken)
+    {
+        var matter = await service.GetMatterAsync(TenantId, matterId, cancellationToken);
+        if (matter is null)
+            return NotFound();
+
+        if (matter.LatestSessionId is not { } sessionId)
+            return Ok(Legal.Application.Features.Intelligence.Decision.Channels.ChannelScoringLpiReadModel.Empty(matterId));
+
+        var trace = await channelScoringLpiService.GetForSessionAsync(TenantId, sessionId, matterId, cancellationToken);
+        return Ok(trace);
     }
 
     [HttpGet("matters/{matterId:guid}/documents")]

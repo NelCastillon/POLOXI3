@@ -172,6 +172,15 @@ public sealed class AzureOpenAiProvider(HttpClient httpClient,ILogger<AzureOpenA
         // models (gpt-4.1-mini) keep the full configured budget and are unaffected, which is why the step
         // only failed on astra. Granting the full configured budget restores parity.
         if(featureCode.Contains("INFORMATION_VALUE",StringComparison.OrdinalIgnoreCase))return configuredBudget;
+        // HIERARCHY_STEP (ProposeNextLevelAsync) emits ONE structured JSON payload describing every child
+        // node proposed for a whole level. On wide/deep matters that payload is far larger than a
+        // mechanical extraction, so it belongs with DISCOVERY/INFORMATION_VALUE, not the 4000 cap. On a
+        // reasoning model (e.g. gpt-6-astra) max_completion_tokens also bounds hidden reasoning tokens, so
+        // the 4000 cap leaves too little room for the visible JSON -> finish_reason=length -> the route
+        // truncates and the whole Wide operation fails with AiProviderUnavailableException. Non-reasoning
+        // models (gpt-4.1-mini, luna) already returned the full configured budget above and are unaffected,
+        // which is why only astra failed. Granting the full configured budget restores parity.
+        if(featureCode.Contains("HIERARCHY",StringComparison.OrdinalIgnoreCase))return configuredBudget;
         var stageCap=featureCode.Equals("DECISION_GRAPH",StringComparison.OrdinalIgnoreCase)?8000:4000;
         return Math.Min(configuredBudget,stageCap);
     }

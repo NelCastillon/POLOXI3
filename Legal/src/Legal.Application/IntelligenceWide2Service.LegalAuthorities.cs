@@ -81,11 +81,19 @@ public sealed partial class IntelligenceWide2Service
     // Deterministic AND-match: every keyword in a concept row must appear in the branch text. The emitted
     // citations flow through the SAME retrieval + mandatory identity gate, so a wrong mapping simply fails
     // verification and is dropped (never inflates confidence). Returns up to three authorities.
-    private static IReadOnlyList<LegalAuthorityReference> ResolveConceptAuthorities(string text,IReadOnlyCollection<WideLegalConceptAuthorityDto> conceptMap)
+    //
+    // targetSovereign: when the matter targets a specific US-state sovereign (e.g. "California"), concept
+    // rows whose CitationText names a DIFFERENT US-state sovereign are skipped BEFORE the three-authority
+    // cap. Without this, an out-of-state row (e.g. a New-York-only seed) could fill the cap and starve the
+    // in-state authority, which the post-retrieval scope gate then drops as SCOPE_INELIGIBLE — leaving the
+    // branch with ZERO evidence. Federal/UCC/U.S. Code rows and case names (no identifiable state sovereign)
+    // are always kept. A null/empty targetSovereign preserves the original jurisdiction-agnostic behavior.
+    private static IReadOnlyList<LegalAuthorityReference> ResolveConceptAuthorities(string text,IReadOnlyCollection<WideLegalConceptAuthorityDto> conceptMap,string? targetSovereign=null)
     {
         if(string.IsNullOrWhiteSpace(text)||conceptMap.Count==0)return [];
         var haystack=NormalizeQuery(text).ToLowerInvariant();
         if(haystack.Length<3)return [];
+        var target=LegalJurisdictionScope.ExtractSovereign(targetSovereign);
         var seen=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var authorities=new List<LegalAuthorityReference>();
         foreach(var concept in conceptMap)
@@ -98,6 +106,13 @@ public sealed partial class IntelligenceWide2Service
             // constitutional) questions. Empty anchors preserve the original keyword-only behavior.
             var anchors=(concept.ContextAnchors??string.Empty).Split([',',';'],StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries);
             if(anchors.Length>0&&!anchors.Any(anchor=>ContainsWord(haystack,anchor.ToLowerInvariant())))continue;
+            // Jurisdiction gate (before the cap): drop a concept row that names a different US-state
+            // sovereign than the matter so an out-of-state seed cannot crowd out the in-state authority.
+            if(!string.IsNullOrWhiteSpace(target))
+            {
+                var conceptSovereign=LegalJurisdictionScope.ExtractSovereign(concept.CitationText);
+                if(!string.IsNullOrWhiteSpace(conceptSovereign)&&!string.Equals(conceptSovereign,target,StringComparison.OrdinalIgnoreCase))continue;
+            }
             var citation=NormalizeQuery(concept.CitationText);
             if(citation.Length<3||!seen.Add(citation))continue;
             var tokens=(concept.VerificationTokens??string.Empty).Split(',',StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries).Where(token=>token.Length>=1).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();

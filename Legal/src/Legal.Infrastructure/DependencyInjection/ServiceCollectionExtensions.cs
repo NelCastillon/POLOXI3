@@ -334,6 +334,9 @@ public static class ServiceCollectionExtensions
         // Channel → typed recompetition bridge: rehydrates persisted contributions, prefetches durable
         // node lineage (0368), and runs the pure LegalChannelSignalAdapter to emit typed DecisionBranchSignals.
         services.AddScoped<Legal.Application.Features.Intelligence.Decision.Channels.IChannelContributionProjectionService, Legal.Application.Features.Intelligence.Decision.Channels.ChannelContributionProjectionService>();
+        // Read-only Channel Scoring LPI trace: explains how each verified channel contribution's typed δ
+        // affected the POLOXI candidate competition. Reuses the same contributions + lineage; no new scoring.
+        services.AddScoped<Legal.Application.Features.Intelligence.Decision.Channels.IChannelScoringLpiService, Legal.Application.Features.Intelligence.Decision.Channels.ChannelScoringLpiService>();
         services.AddScoped<IDecisionReevaluationDispatcher, DecisionReevaluationDispatcher>();
         services.AddScoped<ILegalMatterContextRetriever, Legal.Application.Features.Intelligence.Decision.LegalMatterContextRetriever>();
         services.AddSingleton<IDecisionResearchSourceRouter, Legal.Application.Features.Intelligence.Decision.DecisionResearchSourceRouter>();

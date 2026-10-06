@@ -69,13 +69,17 @@ public sealed partial class LegalDecisionService
         MaterialLegalIdentity Identity, NormalizationDecision Decision,
         IReadOnlyList<string> MergedSemanticIds, IReadOnlyList<string> OriginatingOutcomeNodeIds)
     {
-        // Competition eligibility (§9): ONLY materially substantive/conditional resolutions with a
-        // settled identity may compete as authoritative Core candidates. Baseline states, procedural
-        // pathways/consequences, dependency propositions, and any REQUIRES_REVIEW identity are registered
-        // and preserved for provenance but must NOT enter authoritative candidate competition.
+        // Competition eligibility (§9): materially substantive/conditional resolutions AND
+        // case-terminating procedural consequences (dismissal, summary judgment, default judgment,
+        // nonsuit) with a settled identity may compete as authoritative Core candidates. A merits- or
+        // procedural-terminating disposition is a genuine outcome the tribunal can reach, so it competes
+        // alongside settlements and adjudicated judgments. Baseline states, procedural PATHWAYS (discovery/
+        // trial prep — not terminal), dependency propositions, and any REQUIRES_REVIEW identity are
+        // registered and preserved for provenance but must NOT enter authoritative candidate competition.
         public bool EligibleToCompete =>
             (Role == CandidateSemanticRole.SubstantiveResolution
-                || Role == CandidateSemanticRole.ConditionalResolution)
+                || Role == CandidateSemanticRole.ConditionalResolution
+                || Role == CandidateSemanticRole.ProceduralConsequence)
             && Decision != NormalizationDecision.RequiresReview;
     }
 
@@ -401,9 +405,12 @@ public sealed partial class LegalDecisionService
         if (string.Equals(a.Signature, b.Signature, StringComparison.OrdinalIgnoreCase))
             return NormalizationDecision.Merge;
 
-        // Same family + polarity, no conflict, but different distinctive qualifiers ⇒ overlapping but not
-        // provably identical (confidential negotiated vs early mediated settlement) ⇒ REQUIRES_REVIEW.
-        return NormalizationDecision.RequiresReview;
+        // Same family + polarity, no conflict, but DIFFERENT distinctive qualifiers ⇒ materially distinct
+        // outcomes the tribunal can separately reach (confidential vs. non-confidential settlement; summary-
+        // judgment vs. early dismissal with prejudice). Keep them DISTINCT so each competes and is displayed
+        // as its own Decision Outcome. Only identical fingerprints merge; genuinely opposed identities are
+        // already separated above. Nothing here is scored — Core remains the sole competition authority.
+        return NormalizationDecision.KeepDistinct;
     }
 
     private static bool HasQualifierConflict(IReadOnlyList<string> a, IReadOnlyList<string> b)

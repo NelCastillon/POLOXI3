@@ -36,9 +36,11 @@ public sealed class LegalChannelSignalAdapter(IChannelContributionLineageResolve
     // Bounded, qualitative-to-signed magnitudes. These are NOT scores: they are the fixed δ a
     // qualitative relation is permitted to contribute, always within POLOXI's [-1,1] signal range.
     // POLOXI still owns whether that δ changes strength, uncertainty, margin, or the winner.
-    private const double SupportMagnitude = 0.30;
-    private const double QualifiedSupportMagnitude = 0.15;
-    private const double ContradictionMagnitude = -0.30;
+    // Constants + classification live in ChannelScoringFormula (single source of truth) so the live
+    // scoring path and the read-only Channel Scoring LPI trace can never drift apart.
+    private const double SupportMagnitude = ChannelScoringFormula.SupportMagnitude;
+    private const double QualifiedSupportMagnitude = ChannelScoringFormula.QualifiedSupportMagnitude;
+    private const double ContradictionMagnitude = ChannelScoringFormula.ContradictionMagnitude;
 
     private readonly IChannelContributionLineageResolver _lineageResolver =
         lineageResolver ?? throw new ArgumentNullException(nameof(lineageResolver));
