@@ -181,6 +181,11 @@ public static class ServiceCollectionExtensions
         // it selects passages and parks propositions; it never scores candidates.
         services.AddScoped<IRetrievalOrchestrationService, Legal.Application.Features.Intelligence.Decision.Lpi.RetrievalOrchestrationService>();
 
+        // Legal-Authority orchestration: matches VERIFIED legal-authority evidence to authoritative
+        // hierarchy nodes and parks each as a proposition for attorney review. Proposal-only \u2014 it never
+        // scores candidates; acceptance flows through the shared LPI integration funnel.
+        services.AddScoped<ILegalAuthorityOrchestrationService, Legal.Application.Features.Intelligence.Decision.Lpi.LegalAuthorityOrchestrationService>();
+
         // Authoritative, server-side source of the decision identity revisions (contract/candidate/
         // hierarchy) and scoring-config version that every retrieved-proposition lifecycle operation
         // must carry. The UI never supplies these; this resolver loads them from POLOXI Core state.
@@ -220,6 +225,13 @@ public static class ServiceCollectionExtensions
                     AutomaticDecompression = System.Net.DecompressionMethods.GZip
                         | System.Net.DecompressionMethods.Deflate
                         | System.Net.DecompressionMethods.Brotli,
+                    // Session hardening: several official statutory hosts (e.g. California leginfo, a JSF app)
+                    // now reject a "cold" GET to a section page that arrives without a JSESSIONID / WAF cookie
+                    // first issued by visiting the site root. Enabling a shared cookie jar lets the retriever's
+                    // per-host warm-up navigation collect those cookies and replay them on the document GET.
+                    UseCookies = true,
+                    CookieContainer = new System.Net.CookieContainer(),
+                    AllowAutoRedirect = true,
                 };
                 var proxyUrl = configuration["Legal:OfficialAuthority:Proxy"];
                 if (!string.IsNullOrWhiteSpace(proxyUrl))

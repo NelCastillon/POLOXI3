@@ -3125,7 +3125,12 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                     if(authorities.Count>0)
                     {
                         var collected=new List<WideExternalKnowledgeSnippet>();
-                        foreach(var authority in authorities.Take(2))
+                        // Retrieve ALL resolved authorities (the extractor and concept resolver each cap at 3),
+                        // so a branch's decisive authority is never dropped before the mandatory identity gate
+                        // just because it ranked third. Every authority still flows through RetrieveStampedAsync's
+                        // identity + scope + proposition-support admission gate, so broadening retrieval here only
+                        // adds VERIFIED grounding and never admits an unverifiable authority.
+                        foreach(var authority in authorities.Take(MaximumAuthoritiesPerBranch))
                         {
                             var attributionQuery=NormalizeQuery($"{authority.Query} {branch.DisplayName}").ToLowerInvariant();
                             collected.AddRange(await RetrieveStampedAsync(branch,authority.Query,attributionQuery,authority.Kind,authority));

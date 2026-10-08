@@ -1059,6 +1059,9 @@
                                             case "Decision Change Intelligence (DCI)":
                                                 @DciDashboard
                                                 break;
+                                            case "Legal Authority":
+                                                @LegalAuthorityDashboard
+                                                break;
                                             case "Channel Scoring (LPI)":
                                                 @ChannelScoringLpiDashboard
                                                 break;
@@ -4139,6 +4142,20 @@
     private string? _evidenceGraphError;
     private Guid? _diSelectedDocumentId;
 
+    // ── Document retrieval review workspace (park-only, like Legal Authority) ────────────────────────
+    // DB/API-backed: the server extracts atomic propositions from matter documents and parks them for
+    // attorney review (Document-Directed retrieval). Accept/Reject/Withdraw are routed through the shared
+    // LPI integration funnel; POLOXI Core alone recompetes and owns the ranking. The exact Document
+    // Evidence channel δ-contributions are read from the same channel-scoring trace POLOXI already folded
+    // into the latest decision session. Loaded lazily when the tab is first opened. Fail-soft.
+    private bool _docReviewLoading;
+    private bool _docReviewLoaded;
+    private string? _docReviewError;
+    private bool _docReviewBusy;
+    private string? _docReviewBanner;
+    private bool _docReviewBannerError;
+    private IReadOnlyList<Legal.Application.Abstractions.Intelligence.LpiReviewItemView> _docReviewItems = [];
+
     // Enterprise Document Intelligence workbench sub-tabs (native Blazor, DB-backed projections).
     private static readonly string[] DiSubTabs =
         ["Document Review", "Passage Analysis", "Atomic Propositions", "Evidence Bindings", "Impact on Decisions", "Evidence Provenance", "Document Cleanup"];
@@ -4273,6 +4290,22 @@
     private bool _channelScoringLoaded;
     private string? _channelScoringError;
     private bool _dciOnlyChangedNodes;
+
+    // ── Legal Authority workspace ───────────────────────────────────────────────────────────────────
+    // DB/API-backed read-only transparency for the grounded Legal Authority channel. It reuses the same
+    // authoritative sources the rest of the page already trusts: the proposed/verified authorities from
+    // the latest decision session (_response.ProposedLegalAuthorities), the park-only attorney review
+    // queue (Api.GetRetrievedPropositionReviewAsync), and the exact channel-scoring trace
+    // (Api.GetChannelScoringLpiAsync) filtered to the LegalAuthority channel code. Legal Authority never
+    // scores candidates itself — it parks items for attorney review and POLOXI Core owns the ranking.
+    // Loaded lazily when the tab is first opened. Fail-soft.
+    private bool _legalAuthorityLoading;
+    private bool _legalAuthorityLoaded;
+    private string? _legalAuthorityError;
+    private bool _legalAuthorityBusy;
+    private string? _legalAuthorityBanner;
+    private bool _legalAuthorityBannerError;
+    private IReadOnlyList<Legal.Application.Abstractions.Intelligence.LpiReviewItemView> _legalAuthorityReviewItems = [];
 
     // Advisory proposition-level Information Value (POLOXI VIV scale). Display-only overlay reusing the
     // claim-level scorer; loaded for the matter's latest decision session and rendered separately from the
@@ -4508,6 +4541,186 @@
             StateHasChanged();
         }
     }
+
+    // ── Legal Authority workspace loaders & actions ─────────────────────────────────────────────────
+    // All data is DB/API-backed and read-only except the governed run/accept/reject actions, which are
+    // routed through the same server endpoints the Legal Decision console already uses. Legal Authority
+    // orchestration is park-only; POLOXI Core remains the sole scorer.
+    private async Task LoadLegalAuthorityWorkspaceAsync()
+    {
+        if (MatterId is not { } matterId || matterId == Guid.Empty || _legalAuthorityLoading)
+            return;
+        _legalAuthorityLoading = true;
+        _legalAuthorityError = null;
+        try
+        {
+            _legalAuthorityReviewItems = await Api.GetRetrievedPropositionReviewAsync(matterId);
+            if (!_channelScoringLoaded && !_channelScoringLoading)
+                await LoadChannelScoringAsync();
+            _legalAuthorityLoaded = true;
+        }
+        catch (Exception ex)
+        {
+            _legalAuthorityError = $"Failed to load the Legal Authority workspace: {ex.Message}";
+        }
+        finally
+        {
+            _legalAuthorityLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    // Trigger one Legal Authority pass: the server scans VERIFIED legal-authority evidence, matches it to
+    // authoritative hierarchy nodes, and parks matched/unmatched propositions for attorney review. It never
+    // scores or ranks. On success we refresh the review queue so newly parked items appear.
+    private async Task RunLegalAuthorityPassAsync()
+    {
+        if (MatterId is not { } matterId || matterId == Guid.Empty || _legalAuthorityBusy)
+            return;
+        _legalAuthorityBusy = true;
+        _legalAuthorityBanner = null;
+        try
+        {
+            var result = await Api.RunAuthorityPassAsync(matterId);
+            if (result is null)
+                SetLegalAuthorityBanner("Authority pass completed, but no summary was returned.", isError: true);
+            else if (string.Equals(result.StatusCode, "Failed", StringComparison.OrdinalIgnoreCase))
+                SetLegalAuthorityBanner($"Authority pass failed: {result.FailureReason}", isError: true);
+            else
+                SetLegalAuthorityBanner($"Authority pass {result.StatusCode}: scanned {result.AuthoritiesScanned} authority(ies), matched {result.AuthoritiesMatched}, parked {result.ItemsParked} for review.", isError: false);
+            await RefreshLegalAuthorityReviewAsync();
+        }
+        catch (Exception ex)
+        {
+            SetLegalAuthorityBanner($"Authority pass failed: {ex.Message}", isError: true);
+        }
+        finally
+        {
+            _legalAuthorityBusy = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task RefreshLegalAuthorityReviewAsync()
+    {
+        if (MatterId is not { } matterId || matterId == Guid.Empty)
+            return;
+        try
+        {
+            _legalAuthorityReviewItems = await Api.GetRetrievedPropositionReviewAsync(matterId);
+        }
+        catch (Exception ex)
+        {
+            _legalAuthorityError = $"Failed to refresh the review queue: {ex.Message}";
+        }
+    }
+
+    // Attorney acceptance of a parked proposition. Server-side the acceptance is routed through the shared
+    // LPI integration funnel; POLOXI Core recompetes with the accepted contribution. Revisions/scoring
+    // config are resolved from the current decision state server-side.
+    private async Task AcceptLegalAuthorityItemAsync(Legal.Application.Abstractions.Intelligence.LpiReviewItemView item)
+    {
+        if (MatterId is not { } matterId || matterId == Guid.Empty || _legalAuthorityBusy)
+            return;
+        _legalAuthorityBusy = true;
+        _legalAuthorityBanner = null;
+        try
+        {
+            var request = new { AcceptedPlacementTargetNodeIds = (IReadOnlyList<Guid>?)null };
+            var result = await Api.AcceptRetrievedPropositionAsync(matterId, item.RetrievedPropositionId, request);
+            ApplyLegalAuthorityReviewResult(result, "accepted");
+            await RefreshLegalAuthorityReviewAsync();
+        }
+        catch (Exception ex)
+        {
+            SetLegalAuthorityBanner($"Accept failed: {ex.Message}", isError: true);
+        }
+        finally
+        {
+            _legalAuthorityBusy = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task RejectLegalAuthorityItemAsync(Legal.Application.Abstractions.Intelligence.LpiReviewItemView item)
+    {
+        if (MatterId is not { } matterId || matterId == Guid.Empty || _legalAuthorityBusy)
+            return;
+        _legalAuthorityBusy = true;
+        _legalAuthorityBanner = null;
+        try
+        {
+            var request = new { Reason = "Rejected by attorney review." };
+            await Api.RejectRetrievedPropositionAsync(matterId, item.RetrievedPropositionId, request);
+            SetLegalAuthorityBanner("Proposition rejected and preserved. It will not influence the ranking.", isError: false);
+            await RefreshLegalAuthorityReviewAsync();
+        }
+        catch (Exception ex)
+        {
+            SetLegalAuthorityBanner($"Reject failed: {ex.Message}", isError: true);
+        }
+        finally
+        {
+            _legalAuthorityBusy = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task WithdrawLegalAuthorityItemAsync(Legal.Application.Abstractions.Intelligence.LpiReviewItemView item)
+    {
+        if (MatterId is not { } matterId || matterId == Guid.Empty || _legalAuthorityBusy)
+            return;
+        _legalAuthorityBusy = true;
+        _legalAuthorityBanner = null;
+        try
+        {
+            var request = new { Reason = "Withdrawn by attorney review." };
+            var result = await Api.WithdrawRetrievedPropositionAsync(matterId, item.RetrievedPropositionId, request);
+            ApplyLegalAuthorityReviewResult(result, "withdrawn");
+            await RefreshLegalAuthorityReviewAsync();
+        }
+        catch (Exception ex)
+        {
+            SetLegalAuthorityBanner($"Withdraw failed: {ex.Message}", isError: true);
+        }
+        finally
+        {
+            _legalAuthorityBusy = false;
+            StateHasChanged();
+        }
+    }
+
+    // Surface the funnel's reassessment status so the attorney never reads the old ranking as current.
+    private void ApplyLegalAuthorityReviewResult(Legal.Application.Features.Intelligence.Decision.Lpi.LpiIntegrationResult? result, string verb)
+    {
+        if (result is null)
+        {
+            SetLegalAuthorityBanner($"Proposition {verb}, but no result was returned.", isError: true);
+            return;
+        }
+        var (isError, message) = result.StatusCode switch
+        {
+            "EvaluationPending" => (false, $"Proposition {verb}. POLOXI Core reassessment is enqueued — the displayed ranking will update once recompetition completes."),
+            "EvaluationFailed" => (true, $"Proposition {verb}, but the reassessment failed to enqueue. The displayed ranking does NOT yet reflect this change. {result.Explanation}"),
+            "Applied" => (false, $"Proposition {verb}. {result.Explanation}"),
+            "Idempotent" => (false, $"Proposition already {verb} (no duplicate applied)."),
+            "Rejected" => (true, $"Could not {verb} the proposition: {result.Explanation}"),
+            _ => (!result.Applied, result.Explanation)
+        };
+        SetLegalAuthorityBanner(message, isError);
+    }
+
+    private void SetLegalAuthorityBanner(string message, bool isError)
+    {
+        _legalAuthorityBanner = message;
+        _legalAuthorityBannerError = isError;
+    }
+
+    // Filtered, read-only view of the Legal Authority channel's scoring contributions (exact δ formula and
+    // applied value) drawn from the same channel-scoring trace POLOXI Core already folded into the ranking.
+    private IReadOnlyList<Legal.Application.Features.Intelligence.Decision.Channels.ChannelContributionTrace> LegalAuthorityContributions
+        => _channelScoring?.Contributions?.Where(c => string.Equals(c.ChannelType, "LegalAuthority", StringComparison.OrdinalIgnoreCase)).ToArray() ?? [];
+
     private async Task LoadHumanIntelligenceAsync()
     {
         if (MatterId is not { } matterId || matterId == Guid.Empty || _humanIntelLoading)
@@ -5866,10 +6079,220 @@
 
     // Read-only Channel Scoring (LPI) dashboard: shows the formula legend, every channel contribution's
     // applied δ (or honest no-effect reason), per-dimension net push, and how it fed POLOXI's competition.
+    private RenderFragment LegalAuthorityDashboard => __builder =>
+    {
+        var authorities = DaAuthorities;
+        var contributions = LegalAuthorityContributions;
+        var authorityReview = _legalAuthorityReviewItems
+            .Where(i => string.Equals(i.AssertionTypeCode, "LegalAuthority", StringComparison.OrdinalIgnoreCase)
+                     || string.Equals(i.RetrievalModeCode, "AuthorityDirected", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        var reviewItems = authorityReview.Length > 0 ? authorityReview : _legalAuthorityReviewItems;
+        var model = _channelScoring;
+
+        <div class="dci-root">
+            <div class="dci-topbar">
+                <div class="dci-topbar-title">
+                    <span class="dci-topbar-icon"><i class="bi bi-bank" aria-hidden="true"></i></span>
+                    <div>
+                        <div class="dci-topbar-heading">
+                            <h4>Legal Authority &mdash; Grounded Channel Workspace</h4>
+                            <span class="dci-badge dci-badge--live"><span class="dci-live-dot" aria-hidden="true"></span> POLOXI</span>
+                        </div>
+                        <p class="dfi-panel-sub">The Legal Authority channel consumes only <strong>verified</strong> legal-authority evidence, matches it to authoritative hierarchy nodes/propositions, and parks it for attorney review. It never scores candidates itself &mdash; POLOXI Core owns the ranking. This workspace shows the retrieved authorities, the hierarchy/proposition matches parked for review, and the exact &delta; math the channel folded into scoring.</p>
+                    </div>
+                </div>
+                <div class="dfi-topbar-actions" style="gap:8px;">
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadLegalAuthorityWorkspaceAsync" disabled="@(_legalAuthorityBusy || _legalAuthorityLoading)">
+                        <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+                    </button>
+                    <button class="um-btn um-btn-primary um-btn-sm" @onclick="RunLegalAuthorityPassAsync" disabled="@_legalAuthorityBusy" title="Match verified legal authorities to the hierarchy and park them for attorney review">
+                        <i class="bi bi-play-circle" aria-hidden="true"></i> Run Authority Pass
+                    </button>
+                </div>
+            </div>
+
+            @if (_legalAuthorityBanner is not null)
+            {
+                <div class="alert @(_legalAuthorityBannerError ? "alert-danger" : "alert-info")"
+                     style="@(_legalAuthorityBannerError ? "border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" : "border-left: 4px solid #0d6efd;")">
+                    @_legalAuthorityBanner
+                </div>
+            }
+
+            @if (_legalAuthorityLoading)
+            {
+                <div class="dfi-panel-card"><p class="dfi-panel-sub">Loading Legal Authority workspace&hellip;</p></div>
+            }
+            else if (_legalAuthorityError is not null)
+            {
+                <div class="dfi-panel-card"><div class="alert alert-danger" style="border-left: 4px solid #dc3545;">@_legalAuthorityError</div></div>
+            }
+            else
+            {
+                <div class="dfi-panel-card" style="margin-bottom:14px;">
+                    <div style="display:flex; gap:18px; flex-wrap:wrap;">
+                        <div><span class="dfi-panel-sub">Authorities retrieved</span><div style="font-size:1.25rem; font-weight:600;">@authorities.Count</div></div>
+                        <div><span class="dfi-panel-sub">Verified</span><div style="font-size:1.25rem; font-weight:600; color:#198754;">@authorities.Count(a => string.Equals(a.VerificationStatus, "VERIFIED", StringComparison.OrdinalIgnoreCase))</div></div>
+                        <div><span class="dfi-panel-sub">Coverage</span><div style="font-size:1.25rem; font-weight:600;">@DaAuthorityCoverage.ToString("P0")</div></div>
+                        <div><span class="dfi-panel-sub">Parked for review</span><div style="font-size:1.25rem; font-weight:600; color:#fd7e14;">@reviewItems.Count</div></div>
+                        <div><span class="dfi-panel-sub">Scoring contributions</span><div style="font-size:1.25rem; font-weight:600;">@contributions.Count</div></div>
+                    </div>
+                </div>
+
+                <div class="dfi-panel-card" style="margin-bottom:14px;">
+                    <h5 style="margin-bottom:8px;"><i class="bi bi-bank2" aria-hidden="true"></i> Retrieved legal authorities</h5>
+                    @if (authorities.Count == 0)
+                    {
+                        <p class="dfi-panel-sub">No legal authorities have been retrieved for this matter's latest decision session yet. Run an authority pass or retrieval to surface authorities here.</p>
+                    }
+                    else
+                    {
+                        <table class="table table-sm" style="margin:0;">
+                            <thead>
+                                <tr><th>Authority</th><th>Kind</th><th>Relevance</th><th>Verification</th></tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var a in authorities)
+                                {
+                                    <tr>
+                                        <td><strong>@a.Name</strong></td>
+                                        <td>@a.Kind</td>
+                                        <td>@a.Relevance</td>
+                                        <td><span class="dfi-tag dfi-tag-@(string.Equals(a.VerificationStatus, "VERIFIED", StringComparison.OrdinalIgnoreCase) ? "ok" : "warn")">@a.VerificationStatus</span></td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    }
+                </div>
+
+                <div class="dfi-panel-card" style="margin-bottom:14px;">
+                    <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+                        <h5 style="margin:0;"><i class="bi bi-inbox" aria-hidden="true"></i> Hierarchy / proposition matches parked for review</h5>
+                        <span class="dfi-tag">@reviewItems.Count pending</span>
+                    </div>
+                    @if (_legalAuthorityError is null && reviewItems.Count == 0)
+                    {
+                        <p class="dfi-panel-sub"><i class="bi bi-check2-circle" aria-hidden="true"></i> No authority propositions are awaiting review for this matter.</p>
+                    }
+                    else
+                    {
+                        <div class="decision-review-list">
+                            @foreach (var item in reviewItems)
+                            {
+                                var isAccepted = string.Equals(item.StateCode, "Accepted", StringComparison.OrdinalIgnoreCase);
+                                <article class="decision-review-item" @key="item.RetrievedPropositionId">
+                                    <div class="decision-review-item-head">
+                                        <span class="decision-review-state decision-review-state--@item.StateCode.ToLowerInvariant()">@item.StateCode</span>
+                                        <span class="decision-review-assertion">@item.AssertionTypeCode</span>
+                                        @if (!string.IsNullOrWhiteSpace(item.AttributedTo))
+                                        {
+                                            <span class="decision-review-attributed" title="Attributed to">@item.AttributedTo</span>
+                                        }
+                                    </div>
+                                    <p class="decision-review-proposition">@item.PropositionText</p>
+                                    @if (!string.IsNullOrWhiteSpace(item.SourceText))
+                                    {
+                                        <blockquote class="decision-review-source" title="@item.SourceLocator">&ldquo;@item.SourceText&rdquo;</blockquote>
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(item.SourceLocator))
+                                    {
+                                        <div class="decision-review-locator"><i class="bi bi-geo-alt" aria-hidden="true"></i> @item.SourceLocator</div>
+                                    }
+                                    @if (item.Placements.Count > 0)
+                                    {
+                                        <ul class="decision-review-placements">
+                                            @foreach (var placement in item.Placements)
+                                            {
+                                                <li>
+                                                    <span class="decision-review-rel decision-review-rel--@placement.RelationshipCode.ToLowerInvariant()">@placement.RelationshipCode</span>
+                                                    <code>@placement.TargetNodeId.ToString("N").Substring(0, 8)</code>
+                                                    @if (!string.IsNullOrWhiteSpace(placement.Rationale))
+                                                    {
+                                                        <span class="decision-review-rationale">@placement.Rationale</span>
+                                                    }
+                                                </li>
+                                            }
+                                        </ul>
+                                    }
+                                    <div class="decision-review-actions">
+                                        @if (isAccepted)
+                                        {
+                                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => WithdrawLegalAuthorityItemAsync(item)" disabled="@_legalAuthorityBusy">
+                                                <i class="bi bi-x-octagon" aria-hidden="true"></i> Withdraw
+                                            </button>
+                                        }
+                                        else
+                                        {
+                                            <button class="um-btn um-btn-primary um-btn-sm" @onclick="() => AcceptLegalAuthorityItemAsync(item)" disabled="@_legalAuthorityBusy">
+                                                <i class="bi bi-check2" aria-hidden="true"></i> Accept
+                                            </button>
+                                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => RejectLegalAuthorityItemAsync(item)" disabled="@_legalAuthorityBusy">
+                                                <i class="bi bi-slash-circle" aria-hidden="true"></i> Reject
+                                            </button>
+                                        }
+                                    </div>
+                                </article>
+                            }
+                        </div>
+                    }
+                </div>
+
+                <div class="dfi-panel-card">
+                    <h5 style="margin-bottom:8px;"><i class="bi bi-calculator" aria-hidden="true"></i> Legal Authority scoring &amp; channel contributions</h5>
+                    @if (model is not null)
+                    {
+                        <ul style="margin:0 0 10px 0; padding-left:18px;">
+                            <li><code>@model.Formula.SupportFormula</code></li>
+                            <li><code>@model.Formula.QualifiedSupportFormula</code></li>
+                            <li><code>@model.Formula.ContradictionFormula</code></li>
+                            <li><code>@model.Formula.PlacementFormula</code></li>
+                        </ul>
+                    }
+                    @if (contributions.Count == 0)
+                    {
+                        <p class="dfi-panel-sub">No Legal Authority channel contributions have been folded into this matter's latest decision session yet. Once a verified authority is accepted and carries authoritative lineage, its exact &delta; appears here.</p>
+                    }
+                    else
+                    {
+                        <table class="table table-sm" style="margin:0;">
+                            <thead>
+                                <tr>
+                                    <th>Relation</th>
+                                    <th>Verification</th>
+                                    <th>Dimension</th>
+                                    <th>Formula applied</th>
+                                    <th style="text-align:right;">Applied &delta;</th>
+                                    <th>Effect</th>
+                                    <th>Source</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var c in contributions)
+                                {
+                                    <tr>
+                                        <td>@c.Relation</td>
+                                        <td>@c.VerificationState</td>
+                                        <td>@c.TargetDimension</td>
+                                        <td><code>@c.FormulaApplied</code></td>
+                                        <td style="text-align:right; font-weight:600; color:@(c.AppliedDelta >= 0 ? "#198754" : "#dc3545")">@c.AppliedDelta.ToString("+0.###;-0.###;0")</td>
+                                        <td title="@c.EffectExplanation">@c.Effect</td>
+                                        <td>@c.SourceLabel</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                        <p class="dfi-panel-sub" style="margin-top:6px;">These signed inputs land on the named POLOXI dimension; POLOXI Core alone decides their effect on the final candidate composite score and ranking.</p>
+                    }
+                </div>
+            }
+        </div>
+    };
+
     private RenderFragment ChannelScoringLpiDashboard => __builder =>
     {
         var model = _channelScoring;
-
         <div class="dci-root">
             <div class="dci-topbar">
                 <div class="dci-topbar-title">
@@ -8132,7 +8555,7 @@
 
     // ── Decision Intelligence console (reads existing response + matter fields only) ──
     private string _dfiTab = "Overview";
-    private static readonly string[] DfiTabs = ["Overview", "Decision Analysis", "Decision Contract", "Hierarchy", "Hierarchy Details", "Factor Matrix", "Evidence", "Document Intelligence", "Competition", "Readiness", "Decision Change Intelligence (DCI)", "Continuous Decision Calibration (CDC)", "Channel Scoring (LPI)", "Human Intelligence", "Investigation", "Audit"];
+    private static readonly string[] DfiTabs = ["Overview", "Decision Analysis", "Decision Contract", "Hierarchy", "Hierarchy Details", "Factor Matrix", "Evidence", "Document Intelligence", "Legal Authority", "Competition", "Readiness", "Decision Change Intelligence (DCI)", "Continuous Decision Calibration (CDC)", "Channel Scoring (LPI)", "Human Intelligence", "Investigation", "Audit"];
 
     private void SelectDfiTab(string tab)
     {
@@ -8141,10 +8564,14 @@
             _ = LoadEvidenceGraphAsync();
         if (tab == "Document Intelligence" && _uploadBatches.Count == 0 && _evidenceOccurrences.Count == 0 && !_provenanceLoading)
             _ = LoadProvenanceAsync();
+        if (tab == "Document Intelligence" && !_docReviewLoaded && !_docReviewLoading)
+            _ = LoadDocumentReviewWorkspaceAsync();
         if (tab == "Human Intelligence" && _humanIntel is null && !_humanIntelLoading)
             _ = LoadHumanIntelligenceAsync();
         if (tab == "Channel Scoring (LPI)" && !_channelScoringLoaded && !_channelScoringLoading)
             _ = LoadChannelScoringAsync();
+        if (tab == "Legal Authority" && !_legalAuthorityLoaded && !_legalAuthorityLoading)
+            _ = LoadLegalAuthorityWorkspaceAsync();
     }
 
     // ══ Continuous Decision Calibration (CDC) projections ═══════════════════════════════════════════

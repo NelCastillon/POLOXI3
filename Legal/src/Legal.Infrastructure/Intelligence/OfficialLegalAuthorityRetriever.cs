@@ -124,6 +124,50 @@ public sealed class OfficialLegalAuthorityRetriever(
         _=>0,
     };
 
+    // Tracks the last time a host session was warmed so repeated citations in one run do not re-navigate
+    // the site root on every fetch. The shared primary handler keeps a cookie jar alive across requests,
+    // so a warm-up is only needed once per host per short window (handler lifetime is ~2 minutes).
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string,DateTimeOffset> HostSessionWarmedUtc=new(StringComparer.OrdinalIgnoreCase);
+    private static readonly TimeSpan HostSessionTtl=TimeSpan.FromMinutes(1);
+
+    // Establishes a cookie-bearing session by navigating the host root before fetching a section page.
+    // Several official statutory hosts (e.g. California leginfo, a JSF app) now reject a cold section GET
+    // that lacks the JSESSIONID / WAF cookie a browser collects on its first page load. The response body
+    // is intentionally discarded; only the cookies it sets (captured by the shared CookieContainer) matter.
+    // Fail-soft: any warm-up error is swallowed so the real fetch still runs and reports its own outcome.
+    private async Task WarmUpHostSessionAsync(string baseUrl,CancellationToken cancellationToken)
+    {
+        if(!Uri.TryCreate(baseUrl,UriKind.Absolute,out var baseUri))return;
+        var hostKey=baseUri.Host;
+        if(HostSessionWarmedUtc.TryGetValue(hostKey,out var warmedAt)&&DateTimeOffset.UtcNow-warmedAt<HostSessionTtl)return;
+        try
+        {
+            using var warmUp=new HttpRequestMessage(HttpMethod.Get,baseUri.GetLeftPart(UriPartial.Authority)+"/");
+            warmUp.Headers.TryAddWithoutValidation("Accept","text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8");
+            warmUp.Headers.TryAddWithoutValidation("Accept-Language","en-US,en;q=0.9");
+            warmUp.Headers.TryAddWithoutValidation("Accept-Encoding","gzip, deflate, br");
+            warmUp.Headers.TryAddWithoutValidation("User-Agent","Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
+            warmUp.Headers.TryAddWithoutValidation("sec-ch-ua","\"Chromium\";v=\"124\", \"Google Chrome\";v=\"124\", \"Not-A.Brand\";v=\"99\"");
+            warmUp.Headers.TryAddWithoutValidation("sec-ch-ua-mobile","?0");
+            warmUp.Headers.TryAddWithoutValidation("sec-ch-ua-platform","\"Windows\"");
+            warmUp.Headers.TryAddWithoutValidation("Sec-Fetch-Site","none");
+            warmUp.Headers.TryAddWithoutValidation("Sec-Fetch-Mode","navigate");
+            warmUp.Headers.TryAddWithoutValidation("Sec-Fetch-User","?1");
+            warmUp.Headers.TryAddWithoutValidation("Sec-Fetch-Dest","document");
+            warmUp.Headers.TryAddWithoutValidation("Upgrade-Insecure-Requests","1");
+            using var response=await httpClient.SendAsync(warmUp,HttpCompletionOption.ResponseHeadersRead,cancellationToken);
+            HostSessionWarmedUtc[hostKey]=DateTimeOffset.UtcNow;
+            logger.LogInformation("LEGAL-TRACE stage=4-official-authority outcome=SESSION_WARMUP host={Host} status={Status}",hostKey,(int)response.StatusCode);
+        }
+        catch(Exception exception)when(exception is not OperationCanceledException)
+        {
+            // Record the attempt timestamp anyway so a persistently unreachable root does not make every
+            // citation pay for a doomed warm-up; the real fetch still proceeds and reports the true outcome.
+            HostSessionWarmedUtc[hostKey]=DateTimeOffset.UtcNow;
+            logger.LogWarning(exception,"LEGAL-TRACE stage=4-official-authority outcome=SESSION_WARMUP_FAILED host={Host}",hostKey);
+        }
+    }
+
     private List<(LegalAuthoritySourceDescriptor Descriptor,Match Citation)> MatchDescriptors(
         string query,IReadOnlyCollection<LegalAuthoritySourceDescriptor> descriptors)
     {
@@ -198,6 +242,8 @@ public sealed class OfficialLegalAuthorityRetriever(
         }
         try
         {
+            if(!isJsonApi)
+                await WarmUpHostSessionAsync(descriptor.BaseUrl,timeoutToken);
             using var request=new HttpRequestMessage(HttpMethod.Get,url);
             if(isJsonApi)
             {
@@ -226,6 +272,9 @@ public sealed class OfficialLegalAuthorityRetriever(
             request.Headers.TryAddWithoutValidation("Sec-Fetch-User","?1");
             request.Headers.TryAddWithoutValidation("Sec-Fetch-Dest","document");
             request.Headers.TryAddWithoutValidation("Upgrade-Insecure-Requests","1");
+            // A real navigation to a section page arrives from the site itself; presenting the host root as
+            // Referer matches the cookie established by the warm-up and satisfies session-origin WAF checks.
+            request.Headers.TryAddWithoutValidation("Referer",descriptor.BaseUrl);
             }
             using var response=await httpClient.SendAsync(request,timeoutToken);
             var status=(int)response.StatusCode;

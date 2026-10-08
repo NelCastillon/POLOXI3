@@ -17,7 +17,7 @@ namespace Legal.Api.Controllers;
 // (/legal/decision). Evolves independently from the Intelligence Wide (/legal/search) controller.
 [ApiController]
 [Route("api/legal_decision")]
-public sealed class LegalDecisionController(ILegalDecisionService service,IIntelligenceExecutionService executionService,ILegalDocumentCorpusRepository documentCorpusRepository,IAttorneyDecisionInputRepository attorneyDecisionInputRepository,IAttorneyDecisionInputService attorneyDecisionInputService,ILegalDecisionContractService decisionContractService,ILegalDocumentIntakeService documentIntakeService,ILegalMatterCorpusActivationService corpusActivationService,IDecisionIntegrityRepository integrityRepository,IMatterPropositionInformationValueService propositionInformationValueService,INextBestActionService nextBestActionService,IWhatToResolveNextService whatToResolveNextService,IPropositionIntegrationService propositionIntegrationService,IRetrievalPropositionReviewService retrievalReviewService,IRetrievalOrchestrationService retrievalOrchestrationService,IDecisionRevisionResolver decisionRevisionResolver,Legal.Application.Features.Intelligence.Decision.Channels.IChannelScoringLpiService channelScoringLpiService,IOptions<DocumentIntelligenceOptions> documentOptions) : ControllerBase
+public sealed class LegalDecisionController(ILegalDecisionService service,IIntelligenceExecutionService executionService,ILegalDocumentCorpusRepository documentCorpusRepository,IAttorneyDecisionInputRepository attorneyDecisionInputRepository,IAttorneyDecisionInputService attorneyDecisionInputService,ILegalDecisionContractService decisionContractService,ILegalDocumentIntakeService documentIntakeService,ILegalMatterCorpusActivationService corpusActivationService,IDecisionIntegrityRepository integrityRepository,IMatterPropositionInformationValueService propositionInformationValueService,INextBestActionService nextBestActionService,IWhatToResolveNextService whatToResolveNextService,IPropositionIntegrationService propositionIntegrationService,IRetrievalPropositionReviewService retrievalReviewService,IRetrievalOrchestrationService retrievalOrchestrationService,ILegalAuthorityOrchestrationService legalAuthorityOrchestrationService,IDecisionRevisionResolver decisionRevisionResolver,Legal.Application.Features.Intelligence.Decision.Channels.IChannelScoringLpiService channelScoringLpiService,IOptions<DocumentIntelligenceOptions> documentOptions) : ControllerBase
 {
     private const string CapabilityCode = JudzCapabilities.LegalDecision;
     private Guid TenantId => AuthenticatedRequestContext.GetTenantId(User) ?? throw new UnauthorizedAccessException("An authenticated tenant context is required.");
@@ -202,6 +202,29 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
             request.RetrievalQuery,
             request.DocumentVersionIds,
             request.MaxPassages), cancellationToken);
+        return Ok(result);
+    }
+
+    // Run ONE LegalAuthority pass for a matter: match every VERIFIED legal-authority evidence item to an
+    // authoritative hierarchy node and PARK each as a proposition for attorney review. Proposal-only — it
+    // never scores, applies, or ranks; acceptance flows through the SAME shared funnel as Document
+    // Retrieval and Media Evidence, and POLOXI Core remains the sole competition authority.
+    [HttpPost("matters/{matterId:guid}/propositions/authority/run")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> RunAuthorityPass(Guid matterId, CancellationToken cancellationToken)
+    {
+        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, CapabilityCode, matterId, null, cancellationToken);
+        if (denied is not null) return denied;
+
+        var revisions = await decisionRevisionResolver.ResolveAsync(TenantId, matterId, cancellationToken);
+        var result = await legalAuthorityOrchestrationService.RunAsync(new LegalAuthorityOrchestrationRequest(
+            TenantId,
+            ActorUserId,
+            matterId,
+            revisions.DecisionContractRevision,
+            revisions.CandidateSetRevision,
+            revisions.HierarchyRevision,
+            revisions.ScoringConfigurationVersion), cancellationToken);
         return Ok(result);
     }
 

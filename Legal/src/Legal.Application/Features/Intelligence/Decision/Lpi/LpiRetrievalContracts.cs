@@ -36,7 +36,12 @@ public enum LpiRetrievalMode
     MediaImageDirected,
     MediaAudioDirected,
     MediaVideoDirected,
-    MediaStructuredDirected
+    MediaStructuredDirected,
+
+    // Proposition originated from the LegalAuthority channel: a VERIFIED statute/regulation/case-law
+    // evidence item matched to an authoritative hierarchy node. Parked for attorney review like any other
+    // source; POLOXI Core still scores it only after acceptance through the shared integration funnel.
+    LegalAuthorityDirected
 }
 
 // Qualitative relationship a proposition bears to a hierarchy node. Never a score.

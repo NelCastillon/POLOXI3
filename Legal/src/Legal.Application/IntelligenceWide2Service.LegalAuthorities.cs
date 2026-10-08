@@ -11,6 +11,12 @@ namespace Legal.Application;
 // (NormalizeQuery, RetrievalQueryStopwords, LegalAuthorityKind, DTOs) resolve identically.
 public sealed partial class IntelligenceWide2Service
 {
+    // Maximum legal authorities a single branch resolves AND retrieves. The extractor, the concept-map
+    // resolver, and the retrieval dispatch loop MUST all honor this same cap so a resolved authority is
+    // never silently discarded before the mandatory identity gate. Keeping one shared constant prevents
+    // the producer/consumer drift that previously dropped a branch's third authority.
+    internal const int MaximumAuthoritiesPerBranch=3;
+
     // A specific legal authority parsed from branch text, with the source it should be routed to and
     // the distinctive tokens a retrieved source must contain to verify it is actually that authority.
     private readonly record struct LegalAuthorityReference(string Query,LegalAuthorityKind Kind,IReadOnlyList<string> VerificationTokens);
@@ -73,7 +79,7 @@ public sealed partial class IntelligenceWide2Service
             Add(match.Value,LegalAuthorityKind.Statute,CitationVerificationTokens(match.Value));
         foreach(System.Text.RegularExpressions.Match match in LegalRegulationCitationRegex.Matches(text))
             Add(match.Value,LegalAuthorityKind.Regulation,CitationVerificationTokens(match.Value));
-        return authorities.Take(3).ToArray();
+        return authorities.Take(MaximumAuthoritiesPerBranch).ToArray();
     }
 
     // Concept fallback bridge: when a legal branch names no explicit citation, map its decisive doctrine
@@ -120,7 +126,7 @@ public sealed partial class IntelligenceWide2Service
             if(tokens.Length==0)continue;
             var kind=Enum.TryParse<LegalAuthorityKind>(concept.AuthorityKindCode,ignoreCase:true,out var parsed)?parsed:LegalAuthorityKind.Statute;
             authorities.Add(new(citation,kind,tokens));
-            if(authorities.Count>=3)break;
+            if(authorities.Count>=MaximumAuthoritiesPerBranch)break;
         }
         return authorities;
     }
