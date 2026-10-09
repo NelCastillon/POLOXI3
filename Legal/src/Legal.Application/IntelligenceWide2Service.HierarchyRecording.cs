@@ -58,10 +58,30 @@ public sealed partial class IntelligenceWide2Service
         string inputSnapshotHash,
         CancellationToken cancellationToken)
     {
-        // Context-driven gate: only accepted runs inside a real Decision Contract context are recorded.
+        // Context-driven gate: only accepted runs inside a real Decision Matter context are recorded.
         if (hierarchyExecutionRepository is null
-            || decisionMatterId is not { } matterId || matterId == Guid.Empty
-            || decisionContractId is not { } contractId || contractId == Guid.Empty
+            || decisionMatterId is not { } matterId || matterId == Guid.Empty)
+            return null;
+
+        // Server-side contract resolution (UI sends MatterId but no explicit contract context): when the
+        // Decision Contract id/version are missing, resolve the matter's current authoritative contract
+        // (ACTIVE if present, else latest DRAFT) so an accepted Wide run inside a matter still persists an
+        // authoritative hierarchy execution. Explicitly-supplied contract context is always preserved.
+        if (decisionContractId is not { } suppliedContractId || suppliedContractId == Guid.Empty
+            || decisionContractVersion is not { } suppliedVersion || suppliedVersion < 1)
+        {
+            if (decisionContractRepository is null)
+                return null;
+
+            var current = await decisionContractRepository.GetCurrentContractAsync(tenantId, matterId, cancellationToken);
+            if (current is null || current.DecisionContractId == Guid.Empty || current.VersionNumber < 1)
+                return null;
+
+            decisionContractId = current.DecisionContractId;
+            decisionContractVersion = current.VersionNumber;
+        }
+
+        if (decisionContractId is not { } contractId || contractId == Guid.Empty
             || decisionContractVersion is not { } contractVersion || contractVersion < 1)
             return null;
 
@@ -110,6 +130,30 @@ public sealed partial class IntelligenceWide2Service
             }
 
             var summary = await hierarchyExecutionRepository.RecordExecutionAsync(tenantId, userId, record, cancellationToken);
+
+            // Auto-promote this accepted run to AUTHORITATIVE for its decision context so downstream readers
+            // (LegalAuthority pass, Media Evidence, revision resolver, retrieval) resolve a current authority
+            // immediately — recording a run alone never makes it authoritative. This mirrors the automatic
+            // "latest accepted decision is authoritative" flow the channels expect; POLOXI remains the sole
+            // evaluator. Promotion is fail-soft: a concurrency/state failure is logged and the recorded run id
+            // is still returned so the response and channel ingestion proceed.
+            try
+            {
+                await hierarchyExecutionRepository.PromoteAuthorityAsync(
+                    tenantId, userId,
+                    new PromoteHierarchyAuthorityCommand(
+                        HierarchyExecutionId: summary.HierarchyExecutionId,
+                        RowVersion: summary.RowVersion,
+                        AuthorityReasonCode: "AUTO_WIDE_ACCEPTED"),
+                    cancellationToken);
+            }
+            catch (Exception promoteEx) when (promoteEx is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+            {
+                logger.LogWarning(promoteEx,
+                    "Recorded hierarchy execution {ExecutionId} for matter {MatterId} but auto-promotion to authority failed.",
+                    summary.HierarchyExecutionId, matterId);
+            }
+
             return summary.HierarchyExecutionId;
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
@@ -118,6 +162,68 @@ public sealed partial class IntelligenceWide2Service
             await errorLog.LogAsync("IntelligenceWide2Service", ex, nameof(RecordAcceptedHierarchyCoreAsync),
                 cancellationToken: CancellationToken.None);
             return null;
+        }
+    }
+
+    // Runs the registered Decision Channels (Document Evidence, Legal Authority, Human Intelligence,
+    // Investigation, Decision Contract, External Research) against the freshly persisted hierarchy so their
+    // VERIFIED contributions are produced and persisted for the matter. Mirrors the Document-Retrieval channel
+    // flow: channels bind evidence to the authoritative hierarchy nodes; POLOXI Wide2 remains the sole scorer.
+    // Also drives the standalone LegalAuthority pass so the Authority workspace populates automatically
+    // (no manual "Run Authority Pass" button required). Both concerns are independent, context-gated, and
+    // fully fail-soft — a missing dependency / hierarchy / matter simply skips, and any failure is logged
+    // without ever affecting the primary search response.
+    private async Task IngestChannelContributionsAsync(
+        Guid tenantId,
+        Guid userId,
+        Guid? decisionMatterId,
+        Guid? hierarchyExecutionId,
+        CancellationToken cancellationToken)
+    {
+        if (decisionMatterId is not { } matterId || matterId == Guid.Empty
+            || hierarchyExecutionId is not { } executionId || executionId == Guid.Empty)
+            return;
+
+        // 1) Decision-channel ingestion (binds verified evidence to the authoritative hierarchy nodes).
+        if (channelOrchestrator is not null)
+        {
+            try
+            {
+                await channelOrchestrator.IngestContributionsAsync(tenantId, userId, matterId, executionId, cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+            {
+                // Fail-soft: channel ingestion must never break the primary search response.
+                await errorLog.LogAsync("IntelligenceWide2Service", ex, nameof(IngestChannelContributionsAsync),
+                    cancellationToken: CancellationToken.None);
+            }
+        }
+
+        // 2) Standalone LegalAuthority pass — same work the "Run Authority Pass" button performs, now run
+        // automatically after a hierarchy is persisted so the Authority workspace populates without manual
+        // action. Revisions are resolved server-side exactly like the controller endpoint.
+        if (legalAuthorityOrchestration is not null && decisionRevisionResolver is not null)
+        {
+            try
+            {
+                var revisions = await decisionRevisionResolver.ResolveAsync(tenantId, matterId, cancellationToken);
+                await legalAuthorityOrchestration.RunAsync(
+                    new Abstractions.Intelligence.LegalAuthorityOrchestrationRequest(
+                        tenantId,
+                        userId,
+                        matterId,
+                        revisions.DecisionContractRevision,
+                        revisions.CandidateSetRevision,
+                        revisions.HierarchyRevision,
+                        revisions.ScoringConfigurationVersion),
+                    cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+            {
+                // Fail-soft: the authority pass must never break the primary search response.
+                await errorLog.LogAsync("IntelligenceWide2Service", ex, nameof(IngestChannelContributionsAsync),
+                    cancellationToken: CancellationToken.None);
+            }
         }
     }
 

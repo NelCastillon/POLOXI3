@@ -208,6 +208,10 @@ public static class ServiceCollectionExtensions
         services.AddHttpClient<IGovInfoLegalSource, GovInfoLegalRetriever>();
         services.AddHttpClient<ICornellLiiLegalSource, CornellLiiLegalRetriever>();
         services.AddSingleton<ILegalJurisdictionDetector, LegalJurisdictionDetector>();
+        // Proxy-free curated statute store (POLOXI.Legal_AuthorityStatuteText): served by the official
+        // retriever for CURATED_STORE descriptors when a live web source is WAF-blocked / unreachable.
+        services.AddScoped<Legal.Application.Abstractions.Persistence.ILegalCuratedStatuteStore,
+            Legal.Infrastructure.Persistence.Repositories.LegalCuratedStatuteStore>();
         services.AddScoped<ILegalAuthoritySourceRegistry, LegalAuthoritySourceRegistry>();
         services.AddScoped<ILegalAuthorityDiscoveryConfiguration, LegalAuthorityDiscoveryConfiguration>();
         services.AddHttpClient<ILegalAuthoritySourceBootstrapper, LegalAuthoritySourceBootstrapper>();
@@ -349,6 +353,9 @@ public static class ServiceCollectionExtensions
         // Read-only Channel Scoring LPI trace: explains how each verified channel contribution's typed δ
         // affected the POLOXI candidate competition. Reuses the same contributions + lineage; no new scoring.
         services.AddScoped<Legal.Application.Features.Intelligence.Decision.Channels.IChannelScoringLpiService, Legal.Application.Features.Intelligence.Decision.Channels.ChannelScoringLpiService>();
+        // Read-only matter scoring trace: surfaces the matter's latest Wide execution hierarchy levels
+        // (L1..Ln), named branches/candidates and exact persisted scoring values for the LPI workspace.
+        services.AddScoped<Legal.Application.Features.Intelligence.Decision.Channels.IMatterScoringTraceReader, Legal.Infrastructure.Persistence.Repositories.MatterScoringTraceReader>();
         services.AddScoped<IDecisionReevaluationDispatcher, DecisionReevaluationDispatcher>();
         services.AddScoped<ILegalMatterContextRetriever, Legal.Application.Features.Intelligence.Decision.LegalMatterContextRetriever>();
         services.AddSingleton<IDecisionResearchSourceRouter, Legal.Application.Features.Intelligence.Decision.DecisionResearchSourceRouter>();

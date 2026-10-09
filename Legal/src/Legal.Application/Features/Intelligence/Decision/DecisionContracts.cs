@@ -710,7 +710,13 @@ public sealed record DecisionDomainPackOutcomeCandidateDto(
     string RoleCode,
     bool RequiresVerification,
     string? MatterTypeCode,
-    int SortOrder);
+    int SortOrder,
+    // Factual-predicate gate (migration 0398). When RequiresFactualPredicate is true the outcome is
+    // eligible to enter the candidate universe only when the matter context satisfies the predicate
+    // (at least one FactualPredicateKeywords entry is present in the matter facts). This keeps the
+    // eligibility rule data-driven per row; no outcome name is hardcoded in application code.
+    bool RequiresFactualPredicate = false,
+    string? FactualPredicateKeywords = null);
 
 public sealed record DecisionDomainConceptDto(
     Guid DecisionDomainConceptId,

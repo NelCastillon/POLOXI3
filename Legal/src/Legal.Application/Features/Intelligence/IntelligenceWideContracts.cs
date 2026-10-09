@@ -974,6 +974,10 @@ public sealed record WideInterpretiveResultDto(string BranchDisplayName,string I
     public string BranchStateCode{get;init;}=WideBranchStates.Active;
     // Hierarchy level of the source branch (0 when the branch could not be resolved).
     public int LevelNumber{get;init;}
+    // Origin of the Confidence value shown next to each L1/L2/L3 result:
+    //   POLOXI = resolved to a scored hierarchy branch (interpretation prior blended with evidence support).
+    //   LLM    = no branch matched; falls back to the raw single-shot LLM answer confidence.
+    public string ScoreSource{get;init;}="LLM";
 }
 
 public sealed record WideInterpretiveResultItemDto(int RankNumber,string Name,string Detail,decimal? Score=null);

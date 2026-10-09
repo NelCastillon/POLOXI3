@@ -92,7 +92,22 @@ app.MapPost("/auth/login", async (HttpContext http, ApiClient apiClient) =>
     var email = form["email"].ToString().Trim();
     var password = form["password"].ToString();
 
-    var login = await apiClient.LoginAsync(new Legal.Application.Features.Saas.LoginRequest(email, password));
+    AuthResult login;
+    try
+    {
+        login = await apiClient.LoginAsync(new Legal.Application.Features.Saas.LoginRequest(email, password));
+    }
+    catch (HttpRequestException)
+    {
+        // The API host is unreachable (e.g. still starting up or refusing connections).
+        // Surface a friendly "service warming up" state on the login page with a loading
+        // glass instead of crashing with an unhandled SocketException/HttpRequestException.
+        return Results.Redirect($"/login?warming=1&email={Uri.EscapeDataString(email)}");
+    }
+    catch (TaskCanceledException)
+    {
+        return Results.Redirect($"/login?warming=1&email={Uri.EscapeDataString(email)}");
+    }
 
     if (!login.Succeeded)
     {

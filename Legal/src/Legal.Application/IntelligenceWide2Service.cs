@@ -15,7 +15,7 @@ namespace Legal.Application;
 // Isolated clone of the POLOXI search orchestration used by /intelligence/search/poloxi_wide.
 // Intentionally duplicates IntelligenceService.SearchWithPoloxiAsync so this "Wide" path can be
 // tweaked freely without changing /intelligence/search/poloxi behavior.
-public sealed partial class IntelligenceWide2Service(IIntelligenceRepository repository,IIntelligenceWide2Repository wideRepository,IAiProviderRouter aiProviderRouter,IExternalKnowledgeProvider externalKnowledgeProvider,ILegalRetriever legalRetriever,IPromptCatalog promptCatalog,IAdaptiveRetriever adaptiveRetriever,IAbvResolutionEngine abvEngine,ILegalDecisionRepository legalDecisionRepository,IErrorLogService errorLog,ILogger<IntelligenceWide2Service> logger,IWide2ProgressPublisher? progressPublisher=null,ILegalHierarchyExecutionRepository? hierarchyExecutionRepository=null,Features.Intelligence.Decision.Channels.IChannelContributionProjectionService? channelProjectionService=null):IIntelligenceWide2Service
+public sealed partial class IntelligenceWide2Service(IIntelligenceRepository repository,IIntelligenceWide2Repository wideRepository,IAiProviderRouter aiProviderRouter,IExternalKnowledgeProvider externalKnowledgeProvider,ILegalRetriever legalRetriever,IPromptCatalog promptCatalog,IAdaptiveRetriever adaptiveRetriever,IAbvResolutionEngine abvEngine,ILegalDecisionRepository legalDecisionRepository,IErrorLogService errorLog,ILogger<IntelligenceWide2Service> logger,IWide2ProgressPublisher? progressPublisher=null,ILegalHierarchyExecutionRepository? hierarchyExecutionRepository=null,Features.Intelligence.Decision.Channels.IChannelContributionProjectionService? channelProjectionService=null,ILegalDecisionContractRepository? decisionContractRepository=null,Features.Intelligence.Decision.Channels.IDecisionChannelOrchestrator? channelOrchestrator=null,Abstractions.Intelligence.ILegalAuthorityOrchestrationService? legalAuthorityOrchestration=null,Abstractions.Intelligence.IDecisionRevisionResolver? decisionRevisionResolver=null):IIntelligenceWide2Service
 {
     // Real-time cockpit KPI feed. Optional so hosts without SignalR (or tests) run unchanged. Publishing
     // is fully fail-soft: a broken/absent transport must never affect grounding, scoring, or readiness.
@@ -1093,7 +1093,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             // (liability, causation, comparative fault, damages, statutory applicability) remain shared
             // evaluation-hierarchy nodes and are never injected here. Fail-soft: empty set changes nothing.
             if(IsLegalDecisionEvaluationRun&&_canonicalOutcomeCandidates is{Count:>0})
-                candidateUniverse.UnionWith(_canonicalOutcomeCandidates.Select(outcome=>outcome.Name));
+                candidateUniverse.UnionWith(_canonicalOutcomeCandidates.Where(IsCanonicalOutcomeEligible).Select(outcome=>outcome.Name));
             // query so the universe is never limited to the handful of names the initial snippets
             // happened to mention (nationwide search spaces were reaching competition with 3 names).
             // Seeds are UNTRUSTED (mini-tier model): each passes the deterministic validity filters
@@ -1879,7 +1879,11 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             // Authoritative hierarchy lineage: when this accepted run carries a Decision Contract context,
             // persist it as an immutable Legal_HierarchyExecution. Context-gated and fully fail-soft — a
             // standalone/diagnostic run records nothing and a recording failure never affects the response.
-            await RecordAcceptedHierarchyAsync(request.TenantId,request.UserId,request.DecisionMatterId,request.DecisionContractId,request.DecisionContractVersion,answerStatus,response.Branches,response.ModelCodeUsed,executionId.ToString("N"),cancellationToken);
+            var persistedHierarchyId=await RecordAcceptedHierarchyAsync(request.TenantId,request.UserId,request.DecisionMatterId??request.MatterId,request.DecisionContractId,request.DecisionContractVersion,answerStatus,response.Branches,response.ModelCodeUsed,executionId.ToString("N"),cancellationToken);
+            // Run the Decision Channels (Document Evidence, Legal Authority, …) against the freshly persisted
+            // hierarchy so their verified contributions exist for the matter. Fully fail-soft and context-gated:
+            // no hierarchy / no orchestrator / no matter simply skips, and any failure never affects the response.
+            await IngestChannelContributionsAsync(request.TenantId,request.UserId,request.DecisionMatterId??request.MatterId,persistedHierarchyId,cancellationToken);
             return response;
         }
         catch(Exception fault)
@@ -2734,8 +2738,11 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         // (e.g. PI C1-C5) are noun-form resolution/status labels ("Confidential negotiated settlement") that
         // the verb-based DispositionVerbs gate below does not match. Recognize them here so they are admitted
         // and treated as first-class outcome candidates (never echo-rejected or demoted to scoring branches).
+        // A canonical outcome that declares a factual predicate (migration 0398) is recognized only when that
+        // predicate is satisfied by the matter facts, so an unsupported outcome (e.g. Default judgment on a
+        // matter with no default) is never promoted to a first-class candidate.
         if(_canonicalOutcomeCandidates is{Count:>0}
-            &&_canonicalOutcomeCandidates.Any(outcome=>string.Equals(outcome.Name,trimmed,StringComparison.OrdinalIgnoreCase)))
+            &&_canonicalOutcomeCandidates.Any(outcome=>string.Equals(outcome.Name,trimmed,StringComparison.OrdinalIgnoreCase)&&IsCanonicalOutcomeEligible(outcome)))
             return true;
         if(trimmed.Length<3||trimmed.Length>120)return false;
         var words=trimmed.Split([' ','\t','-','—',',','/','(',')'],StringSplitOptions.RemoveEmptyEntries);
@@ -2750,6 +2757,43 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             if(DispositionVerbs.Contains(head))return true;
             return head[^1]=='s'&&head.Length>1&&head[^2]!='s'&&DispositionVerbs.Contains(head[..^1]);
         });
+    }
+
+    // Factual-predicate gate (migration 0398): a canonical outcome is eligible to enter the candidate
+    // universe only when its data-driven predicate is satisfied by the matter facts. An outcome that does
+    // not require a predicate (RequiresFactualPredicate = false) is always eligible, preserving the prior
+    // behavior for C1-C8. When a predicate IS required, the outcome is admitted only if at least one of its
+    // '|'-delimited FactualPredicateKeywords appears in the matter context text (material facts + original
+    // question). This keeps the eligibility rule generic and DB-backed; no outcome name is hardcoded here.
+    // Fail-soft: a required predicate with no configured keywords is treated as NOT satisfied (fail-closed)
+    // so an outcome that explicitly opted in cannot slip through unconfigured.
+    private bool IsCanonicalOutcomeEligible(DecisionDomainPackOutcomeCandidateDto outcome)
+    {
+        if(!outcome.RequiresFactualPredicate)return true;
+        var keywords=outcome.FactualPredicateKeywords;
+        if(string.IsNullOrWhiteSpace(keywords))return false;
+        var haystack=BuildMatterPredicateHaystack();
+        if(haystack.Length==0)return false;
+        foreach(var token in keywords.Split('|',StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries))
+            if(haystack.Contains(token,StringComparison.OrdinalIgnoreCase))
+                return true;
+        return false;
+    }
+
+    // Matter-fact text used to evaluate factual predicates: the serialized material facts (PI profile,
+    // fact/evidence status, available evidence) plus the original question. Routing metadata
+    // (Decision/LegalScope) is excluded so a predicate matches genuine case facts, not request plumbing.
+    private string BuildMatterPredicateHaystack()
+    {
+        if(_matterContext is null)return string.Empty;
+        var sb=new System.Text.StringBuilder();
+        foreach(var field in _matterContext.MaterialFacts())
+        {
+            if(!string.IsNullOrWhiteSpace(field.Label))sb.Append(field.Label).Append(' ');
+            if(!string.IsNullOrWhiteSpace(field.Value))sb.Append(field.Value).Append('\n');
+        }
+        if(!string.IsNullOrWhiteSpace(_matterContext.OriginalQuestion))sb.Append(_matterContext.OriginalQuestion);
+        return sb.ToString();
     }
 
     // Deterministic set of verbs/heads that identify a competing legal disposition.
@@ -4230,7 +4274,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         }
         var externallyGrounded=externalKnowledge.Count>0;
         return (answer.InterpretiveResults??[]).Where(result=>result.Items is{Count:>0})
-            .Select(result=>new WideInterpretiveResultDto(result.BranchDisplayName.Trim(),result.Interpretation.Trim(),Resolve(result.BranchDisplayName.Trim())?.Confidence??Math.Clamp(answer.Confidence,0,1),result.Items.OrderBy(item=>item.RankNumber).Select((item,index)=>new WideInterpretiveResultItemDto(item.RankNumber>0?item.RankNumber:index+1,item.Name.Trim(),item.Detail.Trim(),NormalizeScore(item.Score))).ToArray()){DataVolatility=result.DataVolatility?.Trim().ToUpperInvariant()=="TIME_SENSITIVE"?"TIME_SENSITIVE":"STABLE",IsExternallyGrounded=externallyGrounded,BranchStateCode=Resolve(result.BranchDisplayName.Trim())?.StateCode??WideBranchStates.Active,LevelNumber=Resolve(result.BranchDisplayName.Trim())?.Level??0})
+            .Select(result=>new WideInterpretiveResultDto(result.BranchDisplayName.Trim(),result.Interpretation.Trim(),Resolve(result.BranchDisplayName.Trim())?.Confidence??Math.Clamp(answer.Confidence,0,1),result.Items.OrderBy(item=>item.RankNumber).Select((item,index)=>new WideInterpretiveResultItemDto(item.RankNumber>0?item.RankNumber:index+1,item.Name.Trim(),item.Detail.Trim(),NormalizeScore(item.Score))).ToArray()){DataVolatility=result.DataVolatility?.Trim().ToUpperInvariant()=="TIME_SENSITIVE"?"TIME_SENSITIVE":"STABLE",IsExternallyGrounded=externallyGrounded,BranchStateCode=Resolve(result.BranchDisplayName.Trim())?.StateCode??WideBranchStates.Active,LevelNumber=Resolve(result.BranchDisplayName.Trim())?.Level??0,ScoreSource=Resolve(result.BranchDisplayName.Trim()) is null?"LLM":"POLOXI"})
             .OrderBy(result=>Resolve(result.BranchDisplayName)?.Level??int.MaxValue)
             .ThenByDescending(result=>result.Confidence).ToArray();
     }
@@ -6619,6 +6663,28 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             var admissionInfo=new Dictionary<string,(string Mode,int Interpretive,int Hosts,int Total)>(StringComparer.OrdinalIgnoreCase);
             // V2.9.4 support tier per candidate (STRONG/MODERATE/LIMITED) for transparent disclosure.
             var supportTiers=new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
+            // RELIABLE Cs SOURCE — interpretive-result linkage. The Candidate × Branch matrix pass resolves
+            // each returned cell back onto an axis via ResolveBranch (fuzzy display-name match), which returns
+            // null on any paraphrase/truncation and SILENTLY DROPS that dimension. The Interpretive Results,
+            // however, already carry the Cs STRUCTURALLY bound to its branch: each WideInterpretiveResultDto is
+            // one branch (with its resolved LevelNumber) and each Item is (candidate, Score=Cs). We build a
+            // deterministic (candidateName → branchId → Cs) lookup from that object graph so any dimension the
+            // matrix failed to resolve is recovered from the interpretive Cs that was never ambiguous. Nothing
+            // is fabricated: every value is the normalized Score the interpretive pass already produced.
+            var interpretiveCsByCandidate=new Dictionary<string,Dictionary<Guid,decimal>>(StringComparer.OrdinalIgnoreCase);
+            foreach(var result in interpretiveResults)
+            {
+                var resultBranch=ResolveBranch(result.BranchDisplayName);
+                if(resultBranch is null)continue;
+                foreach(var interpretiveItem in result.Items)
+                {
+                    if(interpretiveItem.Score is not { } itemScore)continue;
+                    var itemName=ResolveCandidateName(interpretiveItem.Name);
+                    if(itemName is null)continue;
+                    var byBranch=interpretiveCsByCandidate.TryGetValue(itemName,out var existing)?existing:interpretiveCsByCandidate[itemName]=new Dictionary<Guid,decimal>();
+                    if(!byBranch.ContainsKey(resultBranch.WideBranchId))byBranch[resultBranch.WideBranchId]=Math.Clamp(itemScore,0,1);
+                }
+            }
             // V3.6 pass 1: resolve each candidate's direct + child scores and rolled-up effective
             // dimension scores. Composites are computed in pass 2, AFTER cross-candidate contrast
             // normalization, because the confidence-weighted roll-up (a mean of sub-scores) compresses
@@ -6649,6 +6715,24 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                     }
                     if(!directScores.ContainsKey(branch.WideBranchId))directScores[branch.WideBranchId]=clamped;
                 }
+                // Interpretive-Cs gap fill: for every scoreable axis the matrix pass did NOT resolve a direct
+                // cell onto (ResolveBranch miss / omitted echo), recover the Cs from the interpretive-result
+                // linkage where the candidate's score for that exact branch is already structurally bound. This
+                // reliably ties the Cs to L1/L2/L3 by branch id instead of re-matching display names, so a
+                // paraphrased dimension no longer silently vanishes from the candidate's scored axes.
+                // Interpretive-Cs blend + gap fill: the interpretive-result linkage carries each candidate's
+                // Cs STRUCTURALLY bound to its branch id (never ambiguous). For an axis the matrix pass DID
+                // resolve a direct cell onto, the interpretive Cs is BLENDED 50/50 with that direct score so the
+                // structurally-bound interpretive signal reinforces (and stabilizes) the matrix judgment. For an
+                // axis the matrix pass did NOT resolve (ResolveBranch miss / omitted echo), the interpretive Cs
+                // recovers the dimension outright. Nothing is fabricated: every value is the normalized interpretive
+                // Score already produced, and the blend stays bounded in [0,1] and never lowers the admission gate.
+                if(interpretiveCsByCandidate.TryGetValue(resolvedName,out var interpretiveCs))
+                    foreach(var branch in branches)
+                        if(interpretiveCs.TryGetValue(branch.WideBranchId,out var cs))
+                            directScores[branch.WideBranchId]=directScores.TryGetValue(branch.WideBranchId,out var existingDirect)
+                                ?Math.Clamp(0.5m*existingDirect+0.5m*cs,0,1)
+                                :cs;
                 // V3.5 Hierarchical Roll-Up: each parent dimension's effective score blends the model's
                 // direct parent-level judgment with the confidence-weighted mean of its scored children
                 // (50/50). Children carry the narrowed specifics; the direct score keeps the holistic
@@ -6671,6 +6755,23 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                         foreach(var(child,childScore)in children)childRows.Add(new(Guid.NewGuid(),candidateId,child.WideBranchId,request.TenantId,child.DisplayName,childScore));
                     }
                     effectiveByBranch[branch.WideBranchId]=effective;
+                }
+                // Matrix-completion guard: an admitted candidate whose LLM-returned cells could NOT be
+                // resolved back onto ANY axis branch (echo-name mismatch, truncated/omitted response)
+                // previously produced an EMPTY Effective map, so the Overview showed "0 scored dimensions"
+                // and a 0% composite even though real scoring axes exist. Rather than drop the candidate to
+                // a false zero, deterministically score it against EVERY axis: use the candidate's evidence
+                // signal for that branch when present, otherwise the branch's own interpretation prior as a
+                // DISCLOSED neutral baseline. Nothing is fabricated - evidence confidence still derives from
+                // hosts/coverage separately, so a zero-evidence run stays UNVERIFIED.
+                if(effectiveByBranch.Count==0)
+                {
+                    foreach(var branch in branches)
+                    {
+                        var signal=ComputeCandidateBranchSignal(resolvedName,branch,externalKnowledge);
+                        var baseline=branch.InterpretationPrior>0?branch.InterpretationPrior:branch.PoloxiConfidence>0?branch.PoloxiConfidence:0.5m;
+                        effectiveByBranch[branch.WideBranchId]=Math.Clamp(signal>0m?signal:baseline,0,1);
+                    }
                 }
                 return new{Candidate=candidate,CandidateId=candidateId,ResolvedName=resolvedName,Effective=effectiveByBranch,ChildRows=childRows,Disclosure=childDisclosure};
             }).Where(item=>item is not null).Select(item=>item!).ToList();
@@ -6706,14 +6807,37 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                     if(!item.Effective.TryGetValue(branch.WideBranchId,out var effective))continue;
                     scores.Add(new(Guid.NewGuid(),candidateId,branch.WideBranchId,request.TenantId,branch.DisplayName,effective));
                 }
-                foreach(var weight in rfnBranchWeights)
-                    if(scoreByBranch.TryGetValue(weight.Key,out var weightedScore))composite+=weight.Value*weightedScore;
-                // V2.1 Candidate Evidence Coverage: a candidate scored on only a fraction of the surviving
-                // dimensions must not compete equally with fully-covered candidates — missing data is not
-                // strength. The weighted sum already scales by coverage implicitly (unscored dimensions
-                // contribute zero weight×score), so coverage is disclosed but NOT multiplied in again —
-                // the previous extra multiply applied a quadratic penalty that collapsed every composite
-                // toward 0 (e.g. 35% covered → 12% ceiling even with perfect dimension scores).
+                // POLOXI final-candidate formula — membership-renormalized weighted average (Option 1).
+                // The composite is a weighted MEAN over ONLY the dimensions this candidate was actually scored
+                // on (its membership set S_C), not a weighted SUM over the full branch universe. Formula:
+                //     composite(C) = Σ_{b∈S_C} w_b·s_{C,b}  /  Σ_{b∈S_C} w_b
+                // where w_b is the RFN global branch weight and s_{C,b} the candidate's effective score on b.
+                // Why a MEAN, not a SUM: the RFN weights normalize to 1 over the ENTIRE branch universe, but a
+                // candidate only covers a subset. Summing multiplies a full-coverage weight vector by a partial
+                // score vector, which (a) collapses to 0 when the scored ids miss the RFN keys, and (b) makes
+                // composites non-comparable — a candidate "present in 2 L1s" is penalized versus one "present in
+                // 4 L1s" purely for missing membership, not for being worse. Renormalizing over S_C makes every
+                // candidate a true 0..1 weighted average over its own dimensions, so candidates appearing under
+                // different numbers of L1s are directly comparable. When no RFN weight covers S_C (synthesized/
+                // recovered axes, degenerate weights), fall back to equal weights over S_C so real scored
+                // dimensions still produce a real score. Nothing is fabricated — every s_{C,b} is a per-dimension
+                // score the matrix or interpretive linkage already produced. Coverage weakness (how much of the
+                // full axis set the candidate covers) is DISCLOSED separately below, never folded into the score
+                // as a silent zero-pad. This realizes the roll-up rule all the way up: children → parent via the
+                // confidence-weighted mean in pass 1, then sibling L1s → candidate via this weighted mean.
+                var membership=item.Effective.ToArray();
+                if(membership.Length>0)
+                {
+                    var membershipWeight=membership.Sum(entry=>rfnBranchWeights.TryGetValue(entry.Key,out var w)&&w>0m?w:0m);
+                    composite=membershipWeight>0m
+                        ?membership.Sum(entry=>(rfnBranchWeights.TryGetValue(entry.Key,out var w)&&w>0m?w:0m)*entry.Value)/membershipWeight
+                        :membership.Average(entry=>entry.Value);
+                }
+                // V2.1 Candidate Evidence Coverage: the fraction of the full scoreable-axis weight this
+                // candidate was actually scored on. With the membership-renormalized composite above, coverage
+                // is NO LONGER implicitly folded into the score (the mean is over S_C only), so it is reported
+                // as an explicit, disclosed factor — thin coverage is surfaced transparently via Evidence
+                // confidence rather than silently penalizing the quality score with a zero-pad.
                 var coveredWeight=scoreByBranch.Where(entry=>rfnBranchWeights.ContainsKey(entry.Key)).Sum(entry=>rfnBranchWeights[entry.Key]);
                 var coverage=Math.Clamp(coveredWeight,0,1);
                 if(configuration.EnableGuardrailPenalty)

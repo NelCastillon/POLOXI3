@@ -35,8 +35,14 @@ public sealed class LegalDecisionCanonicalOutcomeCandidateTests
         "Default judgment",                             // C9 (0397)
     ];
 
-    private static DecisionDomainPackOutcomeCandidateDto Outcome(string code, string name, string role, bool requiresVerification, int sort)
-        => new(code, name, null, role, requiresVerification, "PERSONAL_INJURY", sort);
+    private static DecisionDomainPackOutcomeCandidateDto Outcome(string code, string name, string role, bool requiresVerification, int sort,
+        bool requiresFactualPredicate = false, string? factualPredicateKeywords = null)
+        => new(code, name, null, role, requiresVerification, "PERSONAL_INJURY", sort, requiresFactualPredicate, factualPredicateKeywords);
+
+    // C9 Default judgment opts into the factual-predicate gate (migration 0398): it is only eligible when
+    // the matter facts reference a default / failure to appear or defend.
+    private const string DefaultJudgmentPredicateKeywords =
+        "default judgment|default|failed to appear|failure to appear|failed to defend|failure to defend|did not appear|did not respond|no appearance|no response|non-appearance|defaulted";
 
     private static IReadOnlyList<DecisionDomainPackOutcomeCandidateDto> CanonicalPool() =>
     [
@@ -48,7 +54,7 @@ public sealed class LegalDecisionCanonicalOutcomeCandidateTests
         Outcome("C6", "Arbitration or ADR award", "PATHWAY", false, 60),
         Outcome("C7", "Procedural or jurisdictional bar", "PATHWAY", false, 70),
         Outcome("C8", "Voluntary dismissal or withdrawal", "PATHWAY", false, 80),
-        Outcome("C9", "Default judgment", "PATHWAY", false, 90),
+        Outcome("C9", "Default judgment", "PATHWAY", false, 90, requiresFactualPredicate: true, factualPredicateKeywords: DefaultJudgmentPredicateKeywords),
     ];
 
     private static IntelligenceWide2Service NewServiceWithCanonicalPool(
@@ -77,6 +83,14 @@ public sealed class LegalDecisionCanonicalOutcomeCandidateTests
         Decision = [new MatterContextField("Requested Disposition", "Resolve the personal-injury claim", MatterFieldProvenance.Supplied)],
     };
 
+    // A matter whose material facts reference a defendant default, satisfying the C9 predicate.
+    private static MatterContextSnapshot MatterWithDefaultContext() => MatterContextSnapshot.Empty with
+    {
+        MatterId = Guid.NewGuid(),
+        Decision = [new MatterContextField("Requested Disposition", "Resolve the personal-injury claim", MatterFieldProvenance.Supplied)],
+        Facts = [new MatterContextField("Procedural Status", "The defendant failed to appear and a default judgment was entered.", MatterFieldProvenance.Supplied)],
+    };
+
     [Theory]
     [InlineData("Confidential negotiated settlement")]       // C1
     [InlineData("Continued negotiation or mediation")]       // C2
@@ -86,12 +100,34 @@ public sealed class LegalDecisionCanonicalOutcomeCandidateTests
     [InlineData("Arbitration or ADR award")]                 // C6
     [InlineData("Procedural or jurisdictional bar")]         // C7
     [InlineData("Voluntary dismissal or withdrawal")]        // C8
-    [InlineData("Default judgment")]                         // C9
     public void CanonicalOutcomeName_OnLegalEvaluateRun_IsAdmittedAsCandidate(string canonicalName)
     {
+        // C1-C8 declare no factual predicate, so they are always admitted on a legal EVALUATE run.
         var service = NewServiceWithCanonicalPool(MatterWithContext(), new(DecisionIntent.Evaluate, "evaluate", false), CanonicalPool());
 
         Assert.True(InvokeIsDecisionOutcomeCandidate(service, canonicalName), $"'{canonicalName}' must be admitted as a Decision Outcome candidate.");
+    }
+
+    [Fact]
+    public void PredicateOutcome_IsNotAdmitted_WhenMatterFactsDoNotSatisfyPredicate()
+    {
+        // C9 Default judgment requires a factual predicate (migration 0398). A matter with no default /
+        // failure-to-appear fact must NOT admit it as a candidate, even though it is seeded and active.
+        var service = NewServiceWithCanonicalPool(MatterWithContext(), new(DecisionIntent.Evaluate, "evaluate", false), CanonicalPool());
+
+        Assert.False(InvokeIsDecisionOutcomeCandidate(service, "Default judgment"),
+            "'Default judgment' must not be admitted when the matter facts do not establish a default.");
+    }
+
+    [Fact]
+    public void PredicateOutcome_IsAdmitted_WhenMatterFactsSatisfyPredicate()
+    {
+        // When the matter facts reference a default / failure to appear, the C9 predicate is satisfied and
+        // Default judgment becomes an eligible competing candidate.
+        var service = NewServiceWithCanonicalPool(MatterWithDefaultContext(), new(DecisionIntent.Evaluate, "evaluate", false), CanonicalPool());
+
+        Assert.True(InvokeIsDecisionOutcomeCandidate(service, "Default judgment"),
+            "'Default judgment' must be admitted when the matter facts establish a default.");
     }
 
     [Theory]
@@ -107,9 +143,10 @@ public sealed class LegalDecisionCanonicalOutcomeCandidateTests
     [Fact]
     public void CanonicalNameMatch_IsCaseInsensitive()
     {
-        var service = NewServiceWithCanonicalPool(MatterWithContext(), new(DecisionIntent.Evaluate, "evaluate", false), CanonicalPool());
+        var service = NewServiceWithCanonicalPool(MatterWithDefaultContext(), new(DecisionIntent.Evaluate, "evaluate", false), CanonicalPool());
 
         Assert.True(InvokeIsDecisionOutcomeCandidate(service, "arbitration or adr award"));
+        // C9 is predicate-gated; MatterWithDefaultContext satisfies it, so case-insensitive match still holds.
         Assert.True(InvokeIsDecisionOutcomeCandidate(service, "DEFAULT JUDGMENT"));
     }
 
@@ -136,7 +173,8 @@ public sealed class LegalDecisionCanonicalOutcomeCandidateTests
         var admitted = CanonicalOutcomeNames.Count(name => InvokeIsDecisionOutcomeCandidate(service, name));
 
         Assert.True(admitted >= 2, "Canonical pool must deliver at least two competing candidates.");
-        Assert.Equal(CanonicalOutcomeNames.Length, admitted);
+        // C9 is predicate-gated and this matter does not satisfy it, so every name EXCEPT C9 is admitted.
+        Assert.Equal(CanonicalOutcomeNames.Length - 1, admitted);
     }
 
     [Fact]

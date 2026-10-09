@@ -199,10 +199,10 @@ public sealed class OfficialLegalAuthorityRetrieverTests
     }
 
     private static OfficialLegalAuthorityRetriever Create(LegalAuthoritySourceDescriptor descriptor,StubHandler handler) =>
-        new(new HttpClient(handler),new StubRegistry([descriptor]),new StubBootstrapper(),new StubDetector(),new StubTenantAccessor(),Legal.Application.Abstractions.Services.NullErrorLogService.Instance,new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build(),NullLogger<OfficialLegalAuthorityRetriever>.Instance);
+        new(new HttpClient(handler),new StubRegistry([descriptor]),new StubBootstrapper(),new StubDetector(),new StubTenantAccessor(),new StubCuratedStatuteStore(),Legal.Application.Abstractions.Services.NullErrorLogService.Instance,new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build(),NullLogger<OfficialLegalAuthorityRetriever>.Instance);
 
     private static OfficialLegalAuthorityRetriever Create(StubHandler handler,params LegalAuthoritySourceDescriptor[] descriptors) =>
-        new(new HttpClient(handler),new StubRegistry(descriptors),new StubBootstrapper(),new StubDetector(),new StubTenantAccessor(),Legal.Application.Abstractions.Services.NullErrorLogService.Instance,new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build(),NullLogger<OfficialLegalAuthorityRetriever>.Instance);
+        new(new HttpClient(handler),new StubRegistry(descriptors),new StubBootstrapper(),new StubDetector(),new StubTenantAccessor(),new StubCuratedStatuteStore(),Legal.Application.Abstractions.Services.NullErrorLogService.Instance,new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build(),NullLogger<OfficialLegalAuthorityRetriever>.Instance);
 
     private static LegalAuthoritySourceDescriptor Descriptor(string provider,string pattern,string baseUrl,string template) =>
         new(Guid.NewGuid(),provider,"TEST", "STATUTE",pattern,baseUrl,template,"{section}","HTML_ID_SECTION",10);
@@ -238,6 +238,11 @@ public sealed class OfficialLegalAuthorityRetrieverTests
     private sealed class StubTenantAccessor:IEpistemicTenantAccessor
     {
         public Guid? TenantId{get;}=Guid.NewGuid();
+    }
+
+    private sealed class StubCuratedStatuteStore:Legal.Application.Abstractions.Persistence.ILegalCuratedStatuteStore
+    {
+        public Task<Legal.Application.Abstractions.Persistence.CuratedStatuteText?> GetAsync(Guid tenantId,string providerCode,string jurisdictionCode,string sectionNumber,CancellationToken cancellationToken=default) => Task.FromResult<Legal.Application.Abstractions.Persistence.CuratedStatuteText?>(null);
     }
 
     private sealed class StubHandler(Func<HttpRequestMessage,HttpResponseMessage> response):HttpMessageHandler

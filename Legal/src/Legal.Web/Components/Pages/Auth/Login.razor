@@ -1,9 +1,24 @@
 @page "/login"
 @using Microsoft.AspNetCore.Components.Web
 @inject NavigationManager Navigation
+@inject ApiClient Api
+@implements IDisposable
 @attribute [AllowAnonymous]
+@rendermode @(new Microsoft.AspNetCore.Components.Web.InteractiveServerRenderMode(prerender: true))
 
 <PageTitle>Sign in to Judz.ai</PageTitle>
+
+@if (_warming)
+{
+    <div class="auth-glass" role="status" aria-live="polite">
+        <div class="auth-glass-card">
+            <i class="bi bi-hdd-network auth-glass-spinner" aria-hidden="true"></i>
+            <h2>Warming up Judz.ai</h2>
+            <p>The data service isn't ready yet. We'll take you back to sign in as soon as it's online.</p>
+            <span class="auth-glass-meta">Checking connection… attempt @_warmAttempt</span>
+        </div>
+    </div>
+}
 
 <div class="auth-shell">
     <div class="auth-card">
@@ -48,6 +63,9 @@
     private string _email = string.Empty;
     private bool _verifiedBanner;
     private string? _error;
+    private bool _warming;
+    private int _warmAttempt;
+    private CancellationTokenSource? _warmCts;
 
     protected override void OnInitialized()
     {
@@ -58,5 +76,51 @@
         _verifiedBanner = query.TryGetValue("verified", out var v) && v == "1";
         if (query.TryGetValue("error", out var err) && !string.IsNullOrWhiteSpace(err))
             _error = err!;
+        _warming = query.TryGetValue("warming", out var w) && w == "1";
+        if (!_warming)
+            _error ??= null;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && _warming)
+            await WaitForApiAsync();
+    }
+
+    private async Task WaitForApiAsync()
+    {
+        _warmCts = new CancellationTokenSource();
+        var token = _warmCts.Token;
+        var delay = TimeSpan.FromSeconds(2);
+        try
+        {
+            while (!token.IsCancellationRequested)
+            {
+                _warmAttempt++;
+                await InvokeAsync(StateHasChanged);
+                if (await Api.IsApiAvailableAsync(token))
+                    break;
+                await Task.Delay(delay, token);
+                if (delay < TimeSpan.FromSeconds(10))
+                    delay += TimeSpan.FromSeconds(1);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+
+        // API is back online — return to a clean sign-in form so the user can retry.
+        _warming = false;
+        var target = string.IsNullOrWhiteSpace(_email)
+            ? "/login"
+            : $"/login?email={Uri.EscapeDataString(_email)}";
+        Navigation.NavigateTo(target, forceLoad: true);
+    }
+
+    public void Dispose()
+    {
+        _warmCts?.Cancel();
+        _warmCts?.Dispose();
     }
 }

@@ -90,7 +90,7 @@ public sealed class LegalAuthorityBootstrapTests
         var bootstrapper=new StubBootstrapper([descriptor]);
         var detector=new StubDetector(new("NAME:EXAMPLELAND","STATUTE","Exampleland Code section 22"));
         var handler=new StubHandler(_=>Html("<main>Exampleland Code section 22 controlling text</main>"));
-        var sut=new OfficialLegalAuthorityRetriever(new HttpClient(handler),registry,bootstrapper,detector,new StubTenantAccessor(),Legal.Application.Abstractions.Services.NullErrorLogService.Instance,new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build(),NullLogger<OfficialLegalAuthorityRetriever>.Instance);
+        var sut=new OfficialLegalAuthorityRetriever(new HttpClient(handler),registry,bootstrapper,detector,new StubTenantAccessor(),new StubCuratedStatuteStore(),Legal.Application.Abstractions.Services.NullErrorLogService.Instance,new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build(),NullLogger<OfficialLegalAuthorityRetriever>.Instance);
 
         var result=await sut.SearchAsync("Apply Exampleland Code section 22",LegalConfiguration());
 
@@ -134,6 +134,7 @@ public sealed class LegalAuthorityBootstrapTests
         public bool TryDetect(string query,out LegalJurisdictionCitation citation){citation=result??new(string.Empty,string.Empty,string.Empty);return result is not null;}
     }
     private sealed class StubTenantAccessor:Legal.Application.Abstractions.Services.IEpistemicTenantAccessor{public Guid? TenantId{get;}=Guid.NewGuid();}
+    private sealed class StubCuratedStatuteStore:Legal.Application.Abstractions.Persistence.ILegalCuratedStatuteStore{public Task<Legal.Application.Abstractions.Persistence.CuratedStatuteText?> GetAsync(Guid tenantId,string providerCode,string jurisdictionCode,string sectionNumber,CancellationToken cancellationToken=default)=>Task.FromResult<Legal.Application.Abstractions.Persistence.CuratedStatuteText?>(null);}
     private sealed class StubHandler(Func<HttpRequestMessage,HttpResponseMessage> response):HttpMessageHandler
     {
         public int RequestCount{get;private set;}

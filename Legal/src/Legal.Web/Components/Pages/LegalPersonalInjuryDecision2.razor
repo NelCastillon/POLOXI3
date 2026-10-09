@@ -1745,14 +1745,21 @@
                                             {
                                                 <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenAddPropositionAsync" title="Add a candidate, factor or proposition to the decision model">
                                                     <i class="bi bi-plus-lg"></i><span>Add Proposition</span>
-                                                </button>
-                                            }
-                                        </div>
+                                                         </button>
+                                                     }
+                                                 </div>
 
-                                        @if (_humanIntelError is not null)
-                                        {
-                                            <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_humanIntelError</div>
-                                        }
+                                                <AttorneyPropositionWorkspace Candidates="ApwCandidates"
+                                                                              TreeColumnsOverride="ApwTreeColumns"
+                                                                              @bind-SelectedCandidateId="_apwSelectedCandidateId"
+                                                                              PreviewHandler="ApwPreviewAsync"
+                                                                              ApplyHandler="ApwApplyAsync"
+                                                                              UndoHandler="ApwUndoAsync" />
+
+                                                @if (_humanIntelError is not null)
+                                                {
+                                                    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_humanIntelError</div>
+                                                }
                                         else if (_humanIntelLoading && _humanIntel is null)
                                         {
                                             <div class="di-empty"><i class="bi bi-hourglass-split"></i><p>Loading human intelligence…</p></div>
@@ -3464,7 +3471,18 @@
                                     <small>@result.Interpretation</small>
                                     @foreach (var item in result.Items)
                                     {
-                                        <p><strong>@item.RankNumber. @item.Name</strong> &mdash; @item.Detail</p>
+                                        <p>
+                                            <strong>@item.RankNumber. @item.Name</strong>
+                                            @if (InterpretiveItemLlmScore(item) is { } llm)
+                                            {
+                                                <span class="um-badge um-badge-neutral" title="LLM-proposed score for this item.">@llm.ToString("P0") LLM</span>
+                                            }
+                                            @if (InterpretiveItemPoloxiScore(result, item) is { } pcs)
+                                            {
+                                                <span class="um-badge um-badge-info" title="POLOXI Candidate × Branch score (Cs) for this candidate under this dimension.">@pcs.ToString("P0") POLOXI</span>
+                                            }
+                                            &mdash; @item.Detail
+                                        </p>
                                     }
                                     <div>
                                         <span class="um-badge um-badge-neutral">INTERPRETIVE</span>
@@ -3502,7 +3520,18 @@
                                             <small>@result.Interpretation</small>
                                             @foreach (var item in result.Items)
                                             {
-                                                <p><strong>@item.RankNumber. @item.Name</strong> &mdash; @item.Detail</p>
+                                                <p>
+                                                    <strong>@item.RankNumber. @item.Name</strong>
+                                                    @if (InterpretiveItemLlmScore(item) is { } llm)
+                                                    {
+                                                        <span class="um-badge um-badge-neutral" title="LLM-proposed score for this item.">@llm.ToString("P0") LLM</span>
+                                                    }
+                                                    @if (InterpretiveItemPoloxiScore(result, item) is { } pcs)
+                                                    {
+                                                        <span class="um-badge um-badge-info" title="POLOXI Candidate × Branch score (Cs) for this candidate under this dimension.">@pcs.ToString("P0") POLOXI</span>
+                                                    }
+                                                    &mdash; @item.Detail
+                                                </p>
                                             }
                                             <div>
                                                 <span class="um-badge um-badge-neutral" title="This interpretation path was demoted to dormant/secondary — retained for completeness, not driving the primary answer.">NOT PRIORITIZED</span>
@@ -4291,6 +4320,11 @@
     private string? _channelScoringError;
     private bool _dciOnlyChangedNodes;
 
+    // Matter scoring trace — the matter's latest Wide execution hierarchy levels (L1..Ln), named
+    // branches/candidates and exact persisted scoring values. Surfaced alongside the channel trace so the
+    // workspace always shows the formulas, values, levels and names that produced the outcome. Fail-soft.
+    private Legal.Application.Features.Intelligence.Decision.Channels.MatterScoringTraceReadModel? _scoringTrace;
+
     // ── Legal Authority workspace ───────────────────────────────────────────────────────────────────
     // DB/API-backed read-only transparency for the grounded Legal Authority channel. It reuses the same
     // authoritative sources the rest of the page already trusts: the proposed/verified authorities from
@@ -4529,6 +4563,7 @@
         try
         {
             _channelScoring = await Api.GetChannelScoringLpiAsync(matterId);
+            _scoringTrace = await Api.GetMatterScoringTraceAsync(matterId);
             _channelScoringLoaded = true;
         }
         catch (Exception ex)
@@ -4538,6 +4573,31 @@
         finally
         {
             _channelScoringLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    // ── Document retrieval review workspace loader ──────────────────────────────────────────────────
+    // Loads the park-only Document-Directed review queue for the Document Intelligence tab. DB/API-backed
+    // and fail-soft; POLOXI Core owns the ranking.
+    private async Task LoadDocumentReviewWorkspaceAsync()
+    {
+        if (MatterId is not { } matterId || matterId == Guid.Empty || _docReviewLoading)
+            return;
+        _docReviewLoading = true;
+        _docReviewError = null;
+        try
+        {
+            _docReviewItems = await Api.GetRetrievedPropositionReviewAsync(matterId);
+            _docReviewLoaded = true;
+        }
+        catch (Exception ex)
+        {
+            _docReviewError = $"Failed to load the document review workspace: {ex.Message}";
+        }
+        finally
+        {
+            _docReviewLoading = false;
             StateHasChanged();
         }
     }
@@ -5223,6 +5283,235 @@
         {
             _adiBusy = false;
             StateHasChanged();
+        }
+    }
+
+    // Proposition workspace (drag/drop) wired to the real Human Intelligence LPI pipeline.
+    // The AttorneyPropositionWorkspace component is data-driven. It surfaces the live L1 candidate nodes,
+    // previews a dropped proposition through PreviewLegalAttorneyInputAsync (the authoritative POLOXI
+    // scoring path), and commits it through CommitLegalAttorneyInputAsync so the candidate's final
+    // decision outcome actually moves. No fabricated scores are presented as real outcomes.
+    private Guid? _apwSelectedCandidateId;
+    private Guid? _apwLastCommittedNodeId;
+
+    private IReadOnlyList<AttorneyPropositionWorkspace.WorkspaceCandidate> ApwCandidates
+    {
+        get
+        {
+            // Single source of truth: the workspace "FINAL OUTCOME OF CANDIDATE" cards must show the SAME
+            // candidates and support values as the Overview tab (FinalRankedCandidates / WideCandidateDto).
+            // Each Overview candidate is mapped to its matching DB-backed L1 decision node (by name) so the
+            // drag/drop Human-Intelligence LPI preview/commit still has a real DecisionNodeId to target.
+            // Fall back to the persisted L1 nodes only when no Overview candidates exist yet.
+            var overview = FinalRankedCandidates;
+            if (overview.Count == 0)
+            {
+                var nodes = AdiCandidates;
+                var fallback = new List<AttorneyPropositionWorkspace.WorkspaceCandidate>(nodes.Count);
+                for (var i = 0; i < nodes.Count; i++)
+                {
+                    var node = nodes[i];
+                    fallback.Add(new AttorneyPropositionWorkspace.WorkspaceCandidate(
+                        node.DecisionNodeId,
+                        $"C{i + 1}",
+                        string.IsNullOrWhiteSpace(node.NodeText) ? node.CanonicalKey : node.NodeText,
+                        AdiNodeScore(node)));
+                }
+                return fallback;
+            }
+
+            // Match percent rendered on the Overview cards: the raw CompositeScore as a percentage
+            // (the Overview renders @candidate.CompositeScore.ToString("P0")), so the workspace scores
+            // line up exactly with the Overview / Decision-hierarchy values.
+            var l1Nodes = AdiCandidates;
+            var result = new List<AttorneyPropositionWorkspace.WorkspaceCandidate>(overview.Count);
+            for (var i = 0; i < overview.Count; i++)
+            {
+                var c = overview[i];
+                var match = l1Nodes.FirstOrDefault(n =>
+                    string.Equals(string.IsNullOrWhiteSpace(n.NodeText) ? n.CanonicalKey : n.NodeText,
+                        c.DisplayName, StringComparison.OrdinalIgnoreCase));
+                // Keep a stable, candidate-specific id even when no persisted L1 node matches, so selection
+                // state stays consistent; drag/drop commit is only wired when a real node id is present.
+                var nodeId = match?.DecisionNodeId ?? c.WideCandidateId;
+                var matchPct = Math.Round(c.CompositeScore * 100m, 1);
+                result.Add(new AttorneyPropositionWorkspace.WorkspaceCandidate(
+                    nodeId,
+                    $"C{i + 1}",
+                    c.DisplayName,
+                    matchPct));
+            }
+            return result;
+        }
+    }
+
+    // Live Evaluation-tree columns built from the SAME DB-backed branch data as the "Decision hierarchy"
+    // tree (SurvivingBranches / WideBranch). L1 = decision dimensions, L2 = supporting factors, L3 =
+    // propositions. Returns null when no live hierarchy exists so the component keeps its sample columns.
+    private IReadOnlyList<AttorneyPropositionWorkspace.TreeColumn>? ApwTreeColumns
+    {
+        get
+        {
+            var branches = SurvivingBranches;
+            if (branches.Count == 0)
+            {
+                return null;
+            }
+
+            static string NodeClass(int level) => level switch
+            {
+                1 => "apw-node--muted",
+                2 => "apw-node--selected",
+                _ => "apw-node--prop",
+            };
+
+            AttorneyPropositionWorkspace.TreeNode ToNode(WideBranchDto b)
+            {
+                var lvl = b.LevelNumber == 1 ? "L1"
+                    : b.LevelNumber == 2 ? "L2"
+                    : $"L{b.LevelNumber}";
+                var sub = string.IsNullOrWhiteSpace(b.Interpretation)
+                    ? (HxComplete(b) ? "Complete" : "Incomplete")
+                    : b.Interpretation;
+                var score = Math.Round(b.Confidence * 100m, 0);
+                return new AttorneyPropositionWorkspace.TreeNode(lvl, b.DisplayName, sub, score, NodeClass(b.LevelNumber));
+            }
+
+            var columns = new List<AttorneyPropositionWorkspace.TreeColumn>();
+            foreach (var level in new[] { 1, 2, 3 })
+            {
+                var nodes = branches
+                    .Where(b => b.LevelNumber == level)
+                    .OrderBy(b => b.SortOrder)
+                    .Select(ToNode)
+                    .ToList();
+                if (nodes.Count == 0)
+                {
+                    continue;
+                }
+
+                var head = level switch
+                {
+                    1 => "L1 · Decision dimension",
+                    2 => "L2 · Supporting factor",
+                    _ => "L3 · Propositions",
+                };
+                columns.Add(new AttorneyPropositionWorkspace.TreeColumn(level, head, nodes));
+            }
+
+            return columns.Count > 0 ? columns : null;
+        }
+    }
+
+    private async Task ApwEnsureSessionAsync(Guid matterId)
+    {
+        if (_adiSessionId != Guid.Empty) return;
+        try
+        {
+            var sessions = await Api.GetLegalDecisionMatterSessionsAsync(matterId);
+            _adiSessionId = sessions
+                .OrderByDescending(s => s.CreatedDateUtc)
+                .Select(s => s.DecisionSessionId)
+                .FirstOrDefault();
+        }
+        catch
+        {
+            _adiSessionId = Guid.Empty;
+        }
+    }
+
+    private async Task<Legal.Application.Features.Intelligence.Decision.PlacementAnalysis?> ApwAnalyzePlacementAsync(
+        Guid matterId, Guid candidateNodeId, int level)
+    {
+        var siblings = HiNodes.Where(n => n.NodeLevel == level && n.ParentNodeId == candidateNodeId)
+            .OrderBy(n => n.PlacementKey).ToList();
+        Guid? prev = siblings.Count > 0 ? siblings[0].DecisionNodeId : null;
+        Guid? next = siblings.Count > 1 ? siblings[1].DecisionNodeId : null;
+
+        return await Api.AnalyzeLegalAttorneyPlacementAsync(matterId, new(
+            matterId, candidateNodeId, candidateNodeId, level, prev, next));
+    }
+
+    private async Task<AttorneyPropositionWorkspace.WorkspacePreviewResult?> ApwPreviewAsync(
+        AttorneyPropositionWorkspace.WorkspacePreviewRequest request)
+    {
+        if (MatterId is not { } matterId) return null;
+        await ApwEnsureSessionAsync(matterId);
+
+        var level = request.Level; // hierarchy level of the insertion slot the attorney selected
+        var placement = await ApwAnalyzePlacementAsync(matterId, request.CandidateId, level);
+        var confirmedValue = placement?.SuggestedMidpoint ?? 50m;
+
+        var preview = await Api.PreviewLegalAttorneyInputAsync(matterId, new(
+            matterId, _adiSessionId, request.CandidateId, request.CandidateId, level,
+            request.Text, confirmedValue, placement?.PreviousSiblingId, placement?.NextSiblingId, AdiBaseSnapshotId));
+
+        if (preview is null) return null;
+
+        return new AttorneyPropositionWorkspace.WorkspacePreviewResult(
+            preview.CurrentCandidateScore,
+            preview.ProjectedCandidateScore,
+            preview.CandidateScoreDelta,
+            preview.ExplanationSummary,
+            preview.ScoreProjectionAdvisory);
+    }
+
+    private async Task<AttorneyPropositionWorkspace.WorkspaceApplyResult?> ApwApplyAsync(
+        AttorneyPropositionWorkspace.WorkspaceApplyRequest request)
+    {
+        if (MatterId is not { } matterId) return null;
+        await ApwEnsureSessionAsync(matterId);
+
+        var level = request.Level; // hierarchy level of the insertion slot the attorney selected
+        var placement = await ApwAnalyzePlacementAsync(matterId, request.CandidateId, level);
+        var confirmedValue = placement?.SuggestedMidpoint ?? 50m;
+
+        var preview = await Api.PreviewLegalAttorneyInputAsync(matterId, new(
+            matterId, _adiSessionId, request.CandidateId, request.CandidateId, level,
+            request.Text, confirmedValue, placement?.PreviousSiblingId, placement?.NextSiblingId, AdiBaseSnapshotId));
+
+        var result = await Api.CommitLegalAttorneyInputAsync(matterId, new(
+            matterId, request.CandidateId, request.CandidateId, "Proposition", level, request.Text, null,
+            confirmedValue, placement?.SuggestedMidpoint,
+            placement?.PreviousSiblingId, placement?.PreviousSiblingValue,
+            placement?.NextSiblingId, placement?.NextSiblingValue,
+            placement?.MethodCode ?? "BoundedEntry",
+            preview?.PreviewToken ?? Guid.NewGuid(), AdiBaseSnapshotId,
+            ExpectedHierarchyVersion: 0, IdempotencyKey: Guid.NewGuid(),
+            GovernancePolicyCode: null, RequestApproval: false));
+
+        // Reload the authoritative Human Intelligence projection so candidate scores reflect the commit.
+        await LoadHumanIntelligenceAsync();
+        if (result is not null)
+            _hiSelectedNodeId = result.DecisionNodeId;
+        _apwLastCommittedNodeId = result?.DecisionNodeId;
+
+        var candidate = HiNodes.FirstOrDefault(n => n.DecisionNodeId == request.CandidateId);
+        var finalScore = (candidate is not null ? AdiNodeScore(candidate) : null)
+            ?? preview?.ProjectedCandidateScore
+            ?? confirmedValue;
+
+        return new AttorneyPropositionWorkspace.WorkspaceApplyResult(
+            finalScore,
+            preview?.CandidateScoreDelta ?? 0m,
+            preview?.ScoreProjectionAdvisory ?? true,
+            preview?.ExplanationSummary);
+    }
+
+    private async Task ApwUndoAsync()
+    {
+        // Real retract: soft-delete the committed attorney node so POLOXI recomputes the candidate outcome.
+        // The audit trail is preserved server-side (NodeRetracted audit + DecisionReevaluationRequested outbox).
+        if (MatterId is not { } matterId || _apwLastCommittedNodeId is not { } nodeId)
+            return;
+        try
+        {
+            await Api.RetractLegalAttorneyInputAsync(matterId, nodeId);
+        }
+        finally
+        {
+            _apwLastCommittedNodeId = null;
+            await LoadHumanIntelligenceAsync();
         }
     }
 
@@ -6317,9 +6606,103 @@
             }
             else if (model is null || model.TotalContributions == 0)
             {
-                <div class="dfi-panel-card">
-                    <p class="dfi-panel-sub">No channel contributions have been folded into this matter's latest decision session yet. When a channel (Document Evidence, Legal Authority, Human Intelligence, &hellip;) produces a verified contribution with authoritative lineage, its scoring trace appears here.</p>
-                </div>
+                var trace = _scoringTrace;
+                if (trace is null || !trace.HasTrace)
+                {
+                    <div class="dfi-panel-card">
+                        <p class="dfi-panel-sub">No channel contributions have been folded into this matter's latest decision session yet. When a channel (Document Evidence, Legal Authority, Human Intelligence, &hellip;) produces a verified contribution with authoritative lineage, its scoring trace appears here.</p>
+                    </div>
+                }
+                else
+                {
+                    <div class="dfi-panel-card" style="margin-bottom:14px;">
+                        <p class="dfi-panel-sub" style="margin-bottom:10px;">No per-channel &delta; has been folded into a decision session yet, so the trace below reflects POLOXI's latest full scoring run for this matter &mdash; the hierarchy levels, named branches/candidates and the exact persisted values that produced the outcome.</p>
+                        <div style="display:flex; gap:18px; flex-wrap:wrap;">
+                            <div><span class="dfi-panel-sub">Scored candidates</span><div style="font-size:1.25rem; font-weight:600;">@trace.CandidateCount</div></div>
+                            <div><span class="dfi-panel-sub">Levels reached</span><div style="font-size:1.25rem; font-weight:600;">@trace.Levels.Count (depth @trace.DepthReached)</div></div>
+                            <div><span class="dfi-panel-sub">Evidence coverage</span><div style="font-size:1.25rem; font-weight:600;">@trace.EvidenceCoverage.ToString("P0")</div></div>
+                            <div><span class="dfi-panel-sub">Final confidence</span><div style="font-size:1.25rem; font-weight:600; color:#198754;">@trace.FinalConfidence.ToString("0.###")</div></div>
+                        </div>
+                    </div>
+
+                    <div class="dfi-panel-card" style="margin-bottom:14px;">
+                        <h5 style="margin-bottom:8px;"><i class="bi bi-calculator" aria-hidden="true"></i> Scoring formula &amp; values</h5>
+                        <ul style="margin:0 0 10px 0; padding-left:18px;">
+                            <li><code>@trace.Formula.BranchConfidenceFormula</code></li>
+                            <li><code>@trace.Formula.CandidateBranchFormula</code></li>
+                            <li><code>@trace.Formula.CompositeFormula</code></li>
+                        </ul>
+                        <ul style="margin:0; padding-left:18px;" class="dfi-panel-sub">
+                            @foreach (var note in trace.Formula.Notes)
+                            {
+                                <li>@note</li>
+                            }
+                        </ul>
+                    </div>
+
+                    @foreach (var level in trace.Levels)
+                    {
+                        <div class="dfi-panel-card" style="margin-bottom:14px;">
+                            <h5 style="margin-bottom:8px;"><i class="bi bi-diagram-3" aria-hidden="true"></i> L@(level.LevelNumber) &mdash; @level.Branches.Count branch(es)</h5>
+                            <table class="table table-sm" style="margin:0;">
+                                <thead>
+                                    <tr>
+                                        <th>Branch (name)</th>
+                                        <th>Role</th>
+                                        <th style="text-align:right;">Evidence support</th>
+                                        <th style="text-align:right;">POLOXI confidence</th>
+                                        <th style="text-align:right;">Confidence</th>
+                                        <th style="text-align:right;">Evidence</th>
+                                        <th>State</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var b in level.Branches)
+                                    {
+                                        <tr style="@(b.IsEliminated ? "opacity:0.55;" : "")">
+                                            <td>@b.DisplayName</td>
+                                            <td>@b.BranchRoleCode</td>
+                                            <td style="text-align:right;">@b.EvidenceSupport.ToString("0.###")</td>
+                                            <td style="text-align:right; font-weight:600;">@b.PoloxiConfidence.ToString("0.###")</td>
+                                            <td style="text-align:right;">@b.Confidence.ToString("0.###")</td>
+                                            <td style="text-align:right;">@b.EvidenceCount</td>
+                                            <td>@(b.IsEliminated ? $"Eliminated{(string.IsNullOrWhiteSpace(b.EliminationReason) ? "" : $": {b.EliminationReason}")}" : b.GroundingStatusCode)</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+
+                    @if (trace.Candidates.Count > 0)
+                    {
+                        <div class="dfi-panel-card">
+                            <h5 style="margin-bottom:8px;"><i class="bi bi-trophy" aria-hidden="true"></i> Competed candidates (names &amp; composite values)</h5>
+                            <table class="table table-sm" style="margin:0;">
+                                <thead>
+                                    <tr>
+                                        <th style="text-align:right;">Rank</th>
+                                        <th>Candidate (name)</th>
+                                        <th style="text-align:right;">Composite</th>
+                                        <th>Competes on (branch = evidence score)</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var cand in trace.Candidates.Take(12))
+                                    {
+                                        <tr>
+                                            <td style="text-align:right;">@cand.RankNumber</td>
+                                            <td>@cand.DisplayName @if (cand.IsConstraintViolation) {<span class="dci-badge" style="color:#dc3545;">constraint</span>}</td>
+                                            <td style="text-align:right; font-weight:600;">@cand.CompositeScore.ToString("0.###")</td>
+                                            <td class="dfi-panel-sub">@string.Join(" · ", cand.BranchScores.Take(4).Select(s => $"{s.BranchDisplayName} = {s.EvidenceScore:0.###}"))</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                            <p class="dfi-panel-sub" style="margin-top:6px;">POLOXI Core alone owns the composite score, margin and winner. Values above are read directly from the persisted Wide execution @(trace.WideExecutionId.ToString()[..8]).</p>
+                        </div>
+                    }
+                }
             }
             else
             {
@@ -9253,6 +9636,13 @@
             }
             var top = ranked.ToList();
             var scoreSum = ranked.Sum(c => c.CompositeScore);
+            // Absolute-support floor: supportPct is a RELATIVE share (CompositeScore / scoreSum), so a lone
+            // survivor with a negligible composite would otherwise render as 100% even though no candidate
+            // earned credible support. When the total composite support across the field is below a small
+            // floor, report 0% ("No credible support") instead of a misleading relative winner. The floor is
+            // deliberately small so a genuinely-supported field is never suppressed.
+            const decimal OvCredibleSupportFloor = 0.05m;
+            var hasCredibleSupport = scoreSum >= OvCredibleSupportFloor;
             var summaries = DfiCandidateDependencySummaries
                 .ToDictionary(s => s.CandidateTitle, s => s, StringComparer.OrdinalIgnoreCase);
             var outcomes = new List<OvOutcome>();
@@ -9264,7 +9654,7 @@
                 var established = sum?.Established ?? 0;
                 var missing = total - established;
                 var vulns = sum?.Required.Count(d => string.Equals(d.Tone, "danger", StringComparison.OrdinalIgnoreCase)) ?? 0;
-                var supportPct = scoreSum > 0 ? (int)Math.Round((double)(c.CompositeScore / scoreSum) * 100) : 0;
+                var supportPct = (hasCredibleSupport && scoreSum > 0) ? (int)Math.Round((double)(c.CompositeScore / scoreSum) * 100) : 0;
 
                 var tier = c.SupportTierCode;
                 var viabilityLabel = tier switch
@@ -10092,6 +10482,28 @@
     private IReadOnlyCollection<WideBranchDto> SurvivingBranches => _response?.Branches.Where(x => !x.IsEliminated).ToArray() ?? [];
     private IReadOnlyCollection<WideInterpretiveResultDto> PrioritizedInterpretiveResults => _response?.InterpretiveResults.Where(x => x.BranchStateCode != "DORMANT").ToArray() ?? [];
     private IReadOnlyCollection<WideInterpretiveResultDto> SecondaryInterpretiveResults => _response?.InterpretiveResults.Where(x => x.BranchStateCode == "DORMANT").ToArray() ?? [];
+
+    // The interpretive answer LLM usually returns a null per-item Score, so the real Cs must be sourced
+    // from the computed Candidate × Branch competition (_response.Candidates). We join item (candidate) ×
+    // result (branch) back onto WideCandidateDto.BranchScores by display name; the candidate's CompositeScore
+    // is the reliable fallback when the exact branch cell is absent, then the item's own LLM score last.
+    // LLM score: the model's own per-item score returned in the interpretive result.
+    private decimal? InterpretiveItemLlmScore(WideInterpretiveResultItemDto item)
+        => item.Score is { } llm ? Math.Clamp(llm, 0m, 1m) : null;
+
+    // POLOXI score: the computed Candidate × Branch Cs for this item (cell, else candidate composite).
+    private decimal? InterpretiveItemPoloxiScore(WideInterpretiveResultDto result, WideInterpretiveResultItemDto item)
+    {
+        var candidate = _response?.Candidates
+            .FirstOrDefault(c => string.Equals(c.DisplayName?.Trim(), item.Name?.Trim(), StringComparison.OrdinalIgnoreCase));
+        if (candidate is null)
+            return null;
+        var cell = candidate.BranchScores
+            .FirstOrDefault(b => string.Equals(b.BranchDisplayName?.Trim(), result.BranchDisplayName?.Trim(), StringComparison.OrdinalIgnoreCase));
+        return cell is not null
+            ? Math.Clamp(cell.EvidenceScore, 0m, 1m)
+            : Math.Clamp(candidate.CompositeScore, 0m, 1m);
+    }
     private IReadOnlyCollection<WideBranchDto> EliminatedBranches => _response?.Branches.Where(x => x.IsEliminated).ToArray() ?? [];
     private IEnumerable<IGrouping<int, WideBranchDto>> BranchLevels => (_response?.Branches ?? []).OrderBy(x => x.SortOrder).GroupBy(x => x.LevelNumber).OrderBy(group => group.Key);
     private IEnumerable<IGrouping<int, WideBranchDto>> UsedBranchLevels => SurvivingBranches.OrderBy(x => x.SortOrder).GroupBy(x => x.LevelNumber).OrderBy(group => group.Key);

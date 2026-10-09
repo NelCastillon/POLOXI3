@@ -46,6 +46,7 @@ public sealed class OfficialLegalAuthorityRetriever(
     ILegalAuthoritySourceBootstrapper bootstrapper,
     ILegalJurisdictionDetector jurisdictionDetector,
     IEpistemicTenantAccessor tenantAccessor,
+    ILegalCuratedStatuteStore curatedStatuteStore,
     IErrorLogService errorLog,
     Microsoft.Extensions.Configuration.IConfiguration configuration,
     ILogger<OfficialLegalAuthorityRetriever> logger):IOfficialLegalAuthoritySource
@@ -222,6 +223,12 @@ public sealed class OfficialLegalAuthorityRetriever(
 
     private async Task<(WideExternalKnowledgeSnippet? Snippet,string? FailureOutcome,string? FailureDetail,string? Url,int? HttpStatus)> FetchAsync(string query,LegalAuthoritySourceDescriptor descriptor,Match citation,CancellationToken timeoutToken,CancellationToken cancellationToken)
     {
+        // CURATED_STORE descriptors carry no live host: statute text is served from the proxy-free DB
+        // store (POLOXI.Legal_AuthorityStatuteText). These rows are seeded WEB-FIRST (higher Priority
+        // number) so a live source is always attempted before this fallback. Resolve the section from the
+        // citation's named group and return a verified snippet with the stored provenance.
+        if(descriptor.ExtractionStrategyCode.Equals("CURATED_STORE",StringComparison.OrdinalIgnoreCase))
+            return await FetchCuratedAsync(query,descriptor,citation,cancellationToken);
         var relativeUrl=ExpandTemplate(descriptor.DocumentUrlTemplate,citation);
         if(relativeUrl is null)return (null,"EXTRACTION_EMPTY",null,null,null);
         var url=$"{descriptor.BaseUrl.TrimEnd('/')}/{relativeUrl.TrimStart('/')}";
@@ -317,6 +324,44 @@ public sealed class OfficialLegalAuthorityRetriever(
             logger.LogWarning(exception,"LEGAL-TRACE stage=4-official-authority provider={Provider} outcome=PROVIDER_FAILURE",descriptor.ProviderCode);
             await errorLog.LogAsync("OfficialLegalAuthorityRetriever",exception,$"Fetch/{descriptor.ProviderCode}",severityCode:"Warning",contextJson:$"{{\"outcome\":\"PROVIDER_FAILURE\",\"provider\":\"{descriptor.ProviderCode}\"}}",cancellationToken:cancellationToken);
             return (null,"PROVIDER_FAILURE",exception.Message,url,null);
+        }
+    }
+
+    // Serve statute text from the proxy-free curated store for a CURATED_STORE descriptor. The section is
+    // the citation's named "section" group (normalized the same way the descriptor patterns capture it).
+    // A hit yields a verified snippet whose identity/provenance mirror live-retrieved evidence: canonical
+    // title from the descriptor, the stored authoritative SourceUrl, VerifiedDateUtc, and SourceLabel. A
+    // miss returns EXTRACTION_EMPTY so the aggregator reports no result rather than fabricating one.
+    private async Task<(WideExternalKnowledgeSnippet? Snippet,string? FailureOutcome,string? FailureDetail,string? Url,int? HttpStatus)> FetchCuratedAsync(string query,LegalAuthoritySourceDescriptor descriptor,Match citation,CancellationToken cancellationToken)
+    {
+        var section=citation.Groups["section"].Success?citation.Groups["section"].Value.Trim():string.Empty;
+        if(section.Length==0)return (null,"EXTRACTION_EMPTY",null,null,null);
+        var tenantId=tenantAccessor.TenantId;
+        if(tenantId is null||tenantId==Guid.Empty)return (null,"EXTRACTION_EMPTY",null,null,null);
+        try
+        {
+            var curated=await curatedStatuteStore.GetAsync(tenantId.Value,descriptor.ProviderCode,descriptor.JurisdictionCode,section,cancellationToken);
+            if(curated is null)
+            {
+                logger.LogInformation("LEGAL-TRACE stage=4-official-authority provider={Provider} outcome=CURATED_MISS section={Section}",descriptor.ProviderCode,section);
+                return (null,"EXTRACTION_EMPTY",null,curated?.SourceUrl,null);
+            }
+            var canonicalTitle=BuildCanonicalAuthorityTitle(descriptor,citation);
+            logger.LogInformation("LEGAL-TRACE stage=4-official-authority provider={Provider} outcome=CURATED_HIT section={Section}",descriptor.ProviderCode,section);
+            return (new(query,canonicalTitle,curated.SourceUrl,curated.StatuteText,0m,curated.VerifiedDateUtc)
+            {
+                AuthorityKind=descriptor.AuthorityKindCode,
+                SourceProvider="OFFICIAL_AUTHORITY",
+                SourceVersion=$"{descriptor.ProviderCode}:CURATED_STORE",
+                Jurisdiction=NormalizeJurisdictionLabel(descriptor.JurisdictionCode),
+                ProviderIdentityVerified=true,
+            },null,null,curated.SourceUrl,null);
+        }
+        catch(Exception exception)when(exception is not OperationCanceledException||!cancellationToken.IsCancellationRequested)
+        {
+            logger.LogWarning(exception,"LEGAL-TRACE stage=4-official-authority provider={Provider} outcome=PROVIDER_FAILURE detail=CURATED_STORE",descriptor.ProviderCode);
+            await errorLog.LogAsync("OfficialLegalAuthorityRetriever",exception,$"FetchCurated/{descriptor.ProviderCode}",severityCode:"Warning",contextJson:$"{{\"outcome\":\"PROVIDER_FAILURE\",\"provider\":\"{descriptor.ProviderCode}\"}}",cancellationToken:cancellationToken);
+            return (null,"PROVIDER_FAILURE",exception.Message,null,null);
         }
     }
 

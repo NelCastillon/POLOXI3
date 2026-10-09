@@ -132,6 +132,9 @@ public sealed class AttorneyDecisionInputService(
         return repository.RepositionAsync(tenantId, actorUserId, command with { ConfirmedValue = value }, cancellationToken);
     }
 
+    public Task<RetractResult> RetractAsync(Guid tenantId, Guid actorUserId, RetractAttorneyInputCommand command, CancellationToken cancellationToken = default)
+        => repository.RetractAttorneyInputAsync(tenantId, actorUserId, command, cancellationToken);
+
     public Task<ResolvedBranchNode> ResolveBranchNodeAsync(Guid tenantId, Guid actorUserId, ResolveBranchNodeCommand command, CancellationToken cancellationToken = default)
         => repository.ResolveBranchNodeAsync(tenantId, actorUserId, command, cancellationToken);
 

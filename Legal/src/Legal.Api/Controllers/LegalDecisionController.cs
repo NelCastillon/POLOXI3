@@ -17,7 +17,7 @@ namespace Legal.Api.Controllers;
 // (/legal/decision). Evolves independently from the Intelligence Wide (/legal/search) controller.
 [ApiController]
 [Route("api/legal_decision")]
-public sealed class LegalDecisionController(ILegalDecisionService service,IIntelligenceExecutionService executionService,ILegalDocumentCorpusRepository documentCorpusRepository,IAttorneyDecisionInputRepository attorneyDecisionInputRepository,IAttorneyDecisionInputService attorneyDecisionInputService,ILegalDecisionContractService decisionContractService,ILegalDocumentIntakeService documentIntakeService,ILegalMatterCorpusActivationService corpusActivationService,IDecisionIntegrityRepository integrityRepository,IMatterPropositionInformationValueService propositionInformationValueService,INextBestActionService nextBestActionService,IWhatToResolveNextService whatToResolveNextService,IPropositionIntegrationService propositionIntegrationService,IRetrievalPropositionReviewService retrievalReviewService,IRetrievalOrchestrationService retrievalOrchestrationService,ILegalAuthorityOrchestrationService legalAuthorityOrchestrationService,IDecisionRevisionResolver decisionRevisionResolver,Legal.Application.Features.Intelligence.Decision.Channels.IChannelScoringLpiService channelScoringLpiService,IOptions<DocumentIntelligenceOptions> documentOptions) : ControllerBase
+public sealed class LegalDecisionController(ILegalDecisionService service,IIntelligenceExecutionService executionService,ILegalDocumentCorpusRepository documentCorpusRepository,IAttorneyDecisionInputRepository attorneyDecisionInputRepository,IAttorneyDecisionInputService attorneyDecisionInputService,ILegalDecisionContractService decisionContractService,ILegalDocumentIntakeService documentIntakeService,ILegalMatterCorpusActivationService corpusActivationService,IDecisionIntegrityRepository integrityRepository,IMatterPropositionInformationValueService propositionInformationValueService,INextBestActionService nextBestActionService,IWhatToResolveNextService whatToResolveNextService,IPropositionIntegrationService propositionIntegrationService,IRetrievalPropositionReviewService retrievalReviewService,IRetrievalOrchestrationService retrievalOrchestrationService,ILegalAuthorityOrchestrationService legalAuthorityOrchestrationService,IDecisionRevisionResolver decisionRevisionResolver,Legal.Application.Features.Intelligence.Decision.Channels.IChannelScoringLpiService channelScoringLpiService,Legal.Application.Features.Intelligence.Decision.Channels.IMatterScoringTraceReader matterScoringTraceReader,IOptions<DocumentIntelligenceOptions> documentOptions) : ControllerBase
 {
     private const string CapabilityCode = JudzCapabilities.LegalDecision;
     private Guid TenantId => AuthenticatedRequestContext.GetTenantId(User) ?? throw new UnauthorizedAccessException("An authenticated tenant context is required.");
@@ -341,6 +341,21 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
         return Ok(trace);
     }
 
+    // Read-only matter scoring trace: the hierarchy levels (L1..Ln), named branches/candidates and exact
+    // persisted scoring values from the matter's latest Wide execution. Explains the formulas, values,
+    // levels and names that produced the outcome when there is no DecisionSession channel contribution yet.
+    [HttpGet("matters/{matterId:guid}/scoring-trace")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> MatterScoringTrace(Guid matterId, CancellationToken cancellationToken)
+    {
+        var matter = await service.GetMatterAsync(TenantId, matterId, cancellationToken);
+        if (matter is null)
+            return NotFound();
+
+        var trace = await matterScoringTraceReader.GetLatestForMatterAsync(TenantId, matterId, cancellationToken);
+        return Ok(trace);
+    }
+
     [HttpGet("matters/{matterId:guid}/documents")]
     [Authorize(Policy = IntelligencePolicies.Search)]
     public async Task<IActionResult> MatterDocuments(Guid matterId, CancellationToken cancellationToken)
@@ -509,6 +524,17 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
         {
             return Conflict(new { message = ex.Message });
         }
+    }
+
+    // Retract/Undo — soft-delete a committed attorney-supplied node and queue POLOXI recompute (§16/§23).
+    [HttpDelete("matters/{matterId:guid}/decision-input/nodes/{nodeId:guid}")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> RetractAttorneyInput(Guid matterId, Guid nodeId, CancellationToken cancellationToken)
+    {
+        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, CapabilityCode, matterId, null, cancellationToken);
+        if (denied is not null) return denied;
+        var command = new RetractAttorneyInputCommand(matterId, nodeId, Guid.NewGuid());
+        return Ok(await attorneyDecisionInputService.RetractAsync(TenantId, ActorUserId, command, cancellationToken));
     }
 
     // Submit a node-scoped relative assessment (multi-attorney; never auto-averaged) (§5).

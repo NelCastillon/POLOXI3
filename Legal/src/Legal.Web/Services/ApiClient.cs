@@ -16,9 +16,7 @@ public sealed class ApiClient(HttpClient httpClient)
     // ── POLOXI Wide search (start+poll transport) ─────────────────────────────
     public async Task<WideSearchResponse?> IntelligentSearchWideDynamicAsync(WideSearchRequest request,CancellationToken token=default)
     {
-        using var startResponse=await _httpClient.PostAsJsonAsync("api/intelligence_wide/search/dynamic/start",request,token);
-        startResponse.EnsureSuccessStatusCode();
-        var start=await startResponse.Content.ReadFromJsonAsync<WideSearchOperationStartResponse>(cancellationToken:token)??throw new InvalidOperationException("The wide search operation could not be started.");
+        var start=await PostJsonWithTransientThrottleRetryAsync<WideSearchOperationStartResponse>("api/intelligence_wide/search/dynamic/start",request,token)??throw new InvalidOperationException("The wide search operation could not be started.");
         try
         {
             while(true)
@@ -56,9 +54,7 @@ public sealed class ApiClient(HttpClient httpClient)
     // controller/service so changes to /legal/search never affect /legal/personalinjury_decision2.
     public async Task<WideSearchResponse?> IntelligentSearchWide2DynamicAsync(WideSearchRequest request,CancellationToken token=default)
     {
-        using var startResponse=await _httpClient.PostAsJsonAsync("api/intelligence_wide2/search/dynamic/start",request,token);
-        startResponse.EnsureSuccessStatusCode();
-        var start=await startResponse.Content.ReadFromJsonAsync<WideSearchOperationStartResponse>(cancellationToken:token)??throw new InvalidOperationException("The wide search operation could not be started.");
+        var start=await PostJsonWithTransientThrottleRetryAsync<WideSearchOperationStartResponse>("api/intelligence_wide2/search/dynamic/start",request,token)??throw new InvalidOperationException("The wide search operation could not be started.");
         try
         {
             while(true)
@@ -164,6 +160,7 @@ public sealed class ApiClient(HttpClient httpClient)
         public async Task<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.DecisionSessionSummaryDto>> GetLegalDecisionMatterSessionsAsync(Guid matterId,CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.DecisionSessionSummaryDto>>($"api/legal_decision/matters/{matterId}/sessions",token)??[];
         public async Task<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.LegalDocumentDto>> GetLegalMatterDocumentsAsync(Guid matterId,CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.LegalDocumentDto>>($"api/legal_decision/matters/{matterId}/documents",token)??[];
         public async Task<Legal.Application.Features.Intelligence.Decision.Channels.ChannelScoringLpiReadModel> GetChannelScoringLpiAsync(Guid matterId,CancellationToken token=default)=>await GetFromJsonWithTransientThrottleRetryAsync<Legal.Application.Features.Intelligence.Decision.Channels.ChannelScoringLpiReadModel>($"api/legal_decision/matters/{matterId}/channel-scoring",token)??Legal.Application.Features.Intelligence.Decision.Channels.ChannelScoringLpiReadModel.Empty(matterId);
+        public async Task<Legal.Application.Features.Intelligence.Decision.Channels.MatterScoringTraceReadModel> GetMatterScoringTraceAsync(Guid matterId,CancellationToken token=default)=>await GetFromJsonWithTransientThrottleRetryAsync<Legal.Application.Features.Intelligence.Decision.Channels.MatterScoringTraceReadModel>($"api/legal_decision/matters/{matterId}/scoring-trace",token)??Legal.Application.Features.Intelligence.Decision.Channels.MatterScoringTraceReadModel.Empty(matterId);
         public async Task<Legal.Application.Features.Intelligence.Decision.LegalMatterEvidenceGraphDto?> GetLegalMatterEvidenceGraphAsync(Guid matterId,CancellationToken token=default)=>await GetFromJsonWithTransientThrottleRetryAsync<Legal.Application.Features.Intelligence.Decision.LegalMatterEvidenceGraphDto>($"api/legal_decision/matters/{matterId}/evidence-graph",token);
         public async Task<Legal.Application.Features.Intelligence.Decision.CandidateFullAnalysisDto?> GetLegalCandidateFullAnalysisAsync(Guid matterId,int candidateIndex,CancellationToken token=default)=>await GetFromJsonWithTransientThrottleRetryAsync<Legal.Application.Features.Intelligence.Decision.CandidateFullAnalysisDto>($"api/legal_decision/matters/{matterId}/candidate-analysis/{candidateIndex}",token);
         public async Task<Legal.Application.Features.Intelligence.Decision.MatterHumanIntelligenceDto?> GetLegalMatterHumanIntelligenceAsync(Guid matterId,CancellationToken token=default)=>await GetFromJsonWithTransientThrottleRetryAsync<Legal.Application.Features.Intelligence.Decision.MatterHumanIntelligenceDto>($"api/legal_decision/matters/{matterId}/human-intelligence",token);
@@ -172,6 +169,7 @@ public sealed class ApiClient(HttpClient httpClient)
         public async Task<Legal.Application.Features.Intelligence.Decision.PlacementAnalysis?> AnalyzeLegalAttorneyPlacementAsync(Guid matterId,Legal.Application.Features.Intelligence.Decision.AnalyzePlacementCommand command,CancellationToken token=default){using var response=await _httpClient.PostAsJsonAsync($"api/legal_decision/matters/{matterId}/decision-input/placement-analysis",command,token);await EnsureSuccessWithDetailAsync(response,token);return await response.Content.ReadFromJsonAsync<Legal.Application.Features.Intelligence.Decision.PlacementAnalysis>(cancellationToken:token);}
         public async Task<Legal.Application.Features.Intelligence.Decision.DecisionMutationPreview?> PreviewLegalAttorneyInputAsync(Guid matterId,Legal.Application.Features.Intelligence.Decision.PreviewAttorneyInputCommand command,CancellationToken token=default){using var response=await _httpClient.PostAsJsonAsync($"api/legal_decision/matters/{matterId}/decision-input/preview",command,token);await EnsureSuccessWithDetailAsync(response,token);return await response.Content.ReadFromJsonAsync<Legal.Application.Features.Intelligence.Decision.DecisionMutationPreview>(cancellationToken:token);}
         public async Task<Legal.Application.Features.Intelligence.Decision.CommitResult?> CommitLegalAttorneyInputAsync(Guid matterId,Legal.Application.Features.Intelligence.Decision.CommitAttorneyInputCommand command,CancellationToken token=default){using var response=await _httpClient.PostAsJsonAsync($"api/legal_decision/matters/{matterId}/decision-input/commit",command,token);await EnsureSuccessWithDetailAsync(response,token);return await response.Content.ReadFromJsonAsync<Legal.Application.Features.Intelligence.Decision.CommitResult>(cancellationToken:token);}
+        public async Task<Legal.Application.Features.Intelligence.Decision.RetractResult?> RetractLegalAttorneyInputAsync(Guid matterId,Guid nodeId,CancellationToken token=default){using var response=await _httpClient.DeleteAsync($"api/legal_decision/matters/{matterId}/decision-input/nodes/{nodeId}",token);await EnsureSuccessWithDetailAsync(response,token);return await response.Content.ReadFromJsonAsync<Legal.Application.Features.Intelligence.Decision.RetractResult>(cancellationToken:token);}
         public async Task<Legal.Application.Features.Intelligence.Decision.ResolvedBranchNode?> ResolveLegalBranchNodeAsync(Guid matterId,Legal.Application.Features.Intelligence.Decision.ResolveBranchNodeCommand command,CancellationToken token=default){using var response=await _httpClient.PostAsJsonAsync($"api/legal_decision/matters/{matterId}/decision-input/resolve-branch-node",command,token);await EnsureSuccessWithDetailAsync(response,token);return await response.Content.ReadFromJsonAsync<Legal.Application.Features.Intelligence.Decision.ResolvedBranchNode>(cancellationToken:token);}
         public async Task<Legal.Application.Features.Intelligence.Decision.AttorneyRelativeAssessmentDto?> SubmitLegalAttorneyAssessmentAsync(Guid matterId,Guid nodeId,Legal.Application.Features.Intelligence.Decision.SubmitAttorneyAssessmentCommand command,CancellationToken token=default){using var response=await _httpClient.PostAsJsonAsync($"api/legal_decision/matters/{matterId}/nodes/{nodeId}/attorney-assessments",command,token);await EnsureSuccessWithDetailAsync(response,token);return await response.Content.ReadFromJsonAsync<Legal.Application.Features.Intelligence.Decision.AttorneyRelativeAssessmentDto>(cancellationToken:token);}
         public async Task<Legal.Application.Features.Intelligence.Decision.ApprovedMatterAssessmentDto?> ApproveLegalMatterAssessmentAsync(Guid matterId,Guid nodeId,Legal.Application.Features.Intelligence.Decision.ApproveMatterAssessmentCommand command,CancellationToken token=default){using var response=await _httpClient.PostAsJsonAsync($"api/legal_decision/matters/{matterId}/nodes/{nodeId}/assessment-approval",command,token);await EnsureSuccessWithDetailAsync(response,token);return await response.Content.ReadFromJsonAsync<Legal.Application.Features.Intelligence.Decision.ApprovedMatterAssessmentDto>(cancellationToken:token);}
@@ -797,6 +795,41 @@ public sealed class ApiClient(HttpClient httpClient)
         return default;
     }
 
+    // ── Throttle-aware POST helper ───────────────────────────────────────────────
+    // Posts JSON and, on HTTP 429 (Too Many Requests), honors the Retry-After header (falling back to
+    // exponential backoff) and retries a bounded number of times before surfacing a clear error. Used
+    // for operation-start calls so a transient rate-limit on the API does not immediately fail the UI.
+    private async Task<TResult?> PostJsonWithTransientThrottleRetryAsync<TResult>(string uri,object request,CancellationToken token)
+    {
+        const int maximumAttempts=4;
+        for(var attempt=1;attempt<=maximumAttempts;attempt++)
+        {
+            using var response=await _httpClient.PostAsJsonAsync(uri,request,token);
+            if(response.StatusCode!=HttpStatusCode.TooManyRequests||attempt==maximumAttempts)
+            {
+                if(response.StatusCode==HttpStatusCode.TooManyRequests)
+                {
+                    var detail=await response.Content.ReadAsStringAsync(token);
+                    throw new InvalidOperationException(string.IsNullOrWhiteSpace(detail)
+                        ? $"The API throttled POST {uri} after {maximumAttempts} attempts. Please wait a moment and try again."
+                        : $"The API throttled POST {uri} after {maximumAttempts} attempts: {detail}");
+                }
+                await EnsureSuccessWithDetailAsync(response,token);
+                if(response.StatusCode==HttpStatusCode.NoContent||response.Content.Headers.ContentLength==0)return default;
+                var payload=await response.Content.ReadAsStringAsync(token);
+                if(string.IsNullOrWhiteSpace(payload))return default;
+                return System.Text.Json.JsonSerializer.Deserialize<TResult>(payload,new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+            }
+
+            var retryAfter=response.Headers.RetryAfter;
+            var delay=retryAfter?.Delta
+                ?? (retryAfter?.Date-DateTimeOffset.UtcNow)
+                ?? TimeSpan.FromMilliseconds(500*Math.Pow(2,attempt-1));
+            await Task.Delay(TimeSpan.FromMilliseconds(Math.Clamp(delay.TotalMilliseconds,200,8000)),token);
+        }
+        return default;
+    }
+
     private static async Task EnsureSuccessWithDetailAsync(HttpResponseMessage response,CancellationToken token){if(response.IsSuccessStatusCode)return;var detail=await response.Content.ReadAsStringAsync(token);throw new InvalidOperationException(string.IsNullOrWhiteSpace(detail)?$"Request failed with status {(int)response.StatusCode}.":detail);}
 
     // ── Provider portal: sharing policy, firm→provider requests, review state ──
@@ -862,6 +895,27 @@ public sealed class ApiClient(HttpClient httpClient)
     {
         using var response=await _httpClient.PostAsJsonAsync($"api/legal_media/matters/{matterId}/evidence-links/{linkId}/review",new{Status=status},token);
         await EnsureSuccessWithDetailAsync(response,token);
+    }
+
+    // Lightweight readiness probe used by the post-login loading glass to wait for the API host to
+    // come online. Hits the API /health endpoint and treats any successful connection as available;
+    // transient connection/timeout failures return false so the caller can keep polling without error.
+    public async Task<bool> IsApiAvailableAsync(CancellationToken token=default)
+    {
+        try
+        {
+            using var request=new HttpRequestMessage(HttpMethod.Get,"health");
+            using var response=await _httpClient.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,token);
+            return response.IsSuccessStatusCode;
+        }
+        catch(OperationCanceledException)when(token.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            return false;
+        }
     }
 }
 

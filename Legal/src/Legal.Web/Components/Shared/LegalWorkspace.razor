@@ -1,3 +1,4 @@
+@implements IDisposable
 <div class="intel-shell @ExtraClass">
     <section class="intel-workspace-nav" aria-label="Workspace navigation">
         <div class="intel-workspace-top">
@@ -87,13 +88,68 @@
         </nav>
     </section>
     <main class="intel-content">@ChildContent</main>
+    @if (_apiUnavailable)
+    {
+        <div class="intel-api-glass" role="status" aria-live="polite">
+            <div class="intel-api-glass-card">
+                <i class="bi bi-hdd-network intel-api-glass-spinner" aria-hidden="true"></i>
+                <h2>Connecting to Judz.ai</h2>
+                <p>We're waiting for the data service to come online. This can take a few moments right after sign in.</p>
+                <span class="intel-api-glass-meta">Attempt @_apiAttempt</span>
+            </div>
+        </div>
+    }
 </div>
 @code {
     private bool _menuOpen;
     private bool _adminOpen;
+    private bool _apiUnavailable;
+    private int _apiAttempt;
+    private CancellationTokenSource? _apiProbeCts;
+
+    [Inject] private ApiClient Api { get; set; } = default!;
 
     [Parameter] public RenderFragment? ChildContent { get; set; }
     [Parameter] public string? ExtraClass { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        _apiProbeCts = new CancellationTokenSource();
+        var token = _apiProbeCts.Token;
+
+        // Probe the API host before showing a transient glass so a healthy host never flashes an overlay.
+        if (await Api.IsApiAvailableAsync(token))
+            return;
+
+        _apiUnavailable = true;
+        var delay = TimeSpan.FromSeconds(2);
+        try
+        {
+            while (!token.IsCancellationRequested)
+            {
+                _apiAttempt++;
+                await InvokeAsync(StateHasChanged);
+                if (await Api.IsApiAvailableAsync(token))
+                    break;
+                await Task.Delay(delay, token);
+                if (delay < TimeSpan.FromSeconds(10))
+                    delay += TimeSpan.FromSeconds(1);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+
+        _apiUnavailable = false;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        _apiProbeCts?.Cancel();
+        _apiProbeCts?.Dispose();
+    }
 
     private void ToggleMenu() => _menuOpen = !_menuOpen;
     private void ToggleAdmin() => _adminOpen = !_adminOpen;

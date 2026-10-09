@@ -1559,6 +1559,7 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
             WITH RankedOutcome AS
             (
                 SELECT OutcomeCode, Name, Description, RoleCode, RequiresVerification, MatterTypeCode, SortOrder,
+                       RequiresFactualPredicate, FactualPredicateKeywords,
                        ROW_NUMBER() OVER
                        (
                            PARTITION BY OutcomeCode
@@ -1568,7 +1569,8 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
                 WHERE IsDeleted = 0 AND IsActive = 1 AND DecisionDomainPackId = @PackId
                   AND (TenantId = @TenantId OR TenantId IS NULL)
             )
-            SELECT OutcomeCode, Name, Description, RoleCode, RequiresVerification, MatterTypeCode, SortOrder
+            SELECT OutcomeCode, Name, Description, RoleCode, RequiresVerification, MatterTypeCode, SortOrder,
+                   RequiresFactualPredicate, FactualPredicateKeywords
             FROM RankedOutcome WHERE ScopeRank = 1 ORDER BY SortOrder, OutcomeCode;
             """, new { PackId = pack.DecisionDomainPackId, TenantId = tenantId }, cancellationToken: cancellationToken))).ToArray();
 

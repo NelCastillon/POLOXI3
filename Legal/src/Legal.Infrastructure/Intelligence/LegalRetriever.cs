@@ -28,17 +28,21 @@ public sealed class LegalRetriever(ICourtListenerLegalSource courtListener,IGovI
         if(!configuration.Enabled||string.IsNullOrWhiteSpace(query))
             return new([], [new("LEGAL_GROUNDING", false, configuration.Enabled ? "EMPTY_QUERY" : "DISABLED", 0, 0)]);
 
-        var queryCourtListener=kind is LegalAuthorityKind.Any or LegalAuthorityKind.Case;
+        // CourtListener is the DEFAULT legal-authority source: it is queried first for EVERY authority
+        // kind (cases, statutes, regulations, and concept/Any searches). GovInfo/eCFR and Cornell LII are
+        // only consulted as a fallback when CourtListener returns nothing, so the primary source always
+        // wins when it has coverage.
+        var queryCourtListener=true;
         var federalCoverage=scope is null
             ||scope.AuthorityRoleCode==LegalAuthorityRoles.FederalApplyingStateLaw
             ||scope.CourtSystem?.Contains("Federal",StringComparison.OrdinalIgnoreCase)==true
             ||scope.GoverningLaw?.Contains("Federal",StringComparison.OrdinalIgnoreCase)==true
             ||scope.GoverningLaw?.Contains("United States",StringComparison.OrdinalIgnoreCase)==true;
         var stateSettlement=scope?.IssueScopeCode==LegalAuthorityIssueScopes.SettlementEnforcement&&!federalCoverage;
-        var queryGovInfo=!stateSettlement&&federalCoverage
-            &&kind is LegalAuthorityKind.Any or LegalAuthorityKind.Statute or LegalAuthorityKind.Regulation;
-        // Cornell LII hosts the UCC (state statutory law), the U.S. Code, and the CFR, so it serves
-        // the same statute/regulation routing as GovInfo/eCFR (and Any concept searches).
+        // Cornell LII (law.cornell.edu) is the SOLE secondary fallback for statute/regulation/Any searches:
+        // it hosts the UCC (state statutory law), the U.S. Code, and the CFR, so it covers the same routing
+        // GovInfo/eCFR previously served. GovInfo/eCFR is intentionally retired from the fallback fan-out.
+        var queryGovInfo=false;
         var queryCornellLii=!stateSettlement&&kind is LegalAuthorityKind.Any or LegalAuthorityKind.Statute or LegalAuthorityKind.Regulation;
         var queryOfficialAuthority=kind is LegalAuthorityKind.Any or LegalAuthorityKind.Statute or LegalAuthorityKind.Regulation;
         // STAGE 2 (provider routing): record which sources this authority kind is routed to so a
@@ -67,12 +71,32 @@ public sealed class LegalRetriever(ICourtListenerLegalSource courtListener,IGovI
             logger.LogInformation("LEGAL-TRACE stage=2-exact-authority-empty provider={Provider} selected={Selected} outcome={Outcome} normalizedCitation={Citation} endpoint={Endpoint} httpStatus={Status} detail={Detail} query=\"{Query}\"",
                 officialAuthorityResult.Diagnostic.ProviderCode,officialAuthorityResult.Diagnostic.Selected,officialAuthorityResult.Diagnostic.OutcomeCode,officialAuthorityResult.Diagnostic.NormalizedCitation,officialAuthorityResult.Diagnostic.EndpointUrl,officialAuthorityResult.Diagnostic.HttpStatus,officialAuthorityResult.Diagnostic.Detail,query);
 
-        var courtListenerTask=queryCourtListener?courtListener.SearchAsync(new LegalProviderSearchRequest(query,kind,scope),configuration,cancellationToken):Task.FromResult(Skipped("COURTLISTENER"));
+        // DEFAULT-SOURCE ROUTING: query CourtListener first. Only when it returns no snippets do we fall
+        // back to the secondary federal/statutory sources (GovInfo/eCFR + Cornell LII). This keeps
+        // CourtListener authoritative for every authority kind while preserving fail-soft fallback coverage.
+        var courtListenerResult=queryCourtListener
+            ?await SafeSearchAsync(() =>courtListener.SearchAsync(new LegalProviderSearchRequest(query,kind,scope),configuration,cancellationToken),"COURTLISTENER",kind,cancellationToken)
+            :Skipped("COURTLISTENER");
+
+        if(courtListenerResult.Snippets.Count>0)
+        {
+            logger.LogInformation("LEGAL-TRACE stage=2-courtlistener-default provider=COURTLISTENER outcome={Outcome} results={Count} kind={Kind}",courtListenerResult.Diagnostic.OutcomeCode,courtListenerResult.Snippets.Count,kind);
+            return new(courtListenerResult.Snippets,
+            [
+                courtListenerResult.Diagnostic,
+                new("GOVINFO_ECFR",false,"SKIPPED_COURTLISTENER_DEFAULT_RESOLVED",0,0),
+                new("CORNELL_LII",false,"SKIPPED_COURTLISTENER_DEFAULT_RESOLVED",0,0),
+                officialAuthorityResult.Diagnostic,
+            ]);
+        }
+
+        logger.LogInformation("LEGAL-TRACE stage=2-courtlistener-empty provider=COURTLISTENER outcome={Outcome} kind={Kind} query=\"{Query}\" — falling back to secondary sources",courtListenerResult.Diagnostic.OutcomeCode,kind,query);
+
         var govInfoTask=queryGovInfo?govInfo.SearchAsync(query,configuration,cancellationToken):Task.FromResult(CoverageSkipped("GOVINFO_ECFR",scope));
         var cornellLiiTask=queryCornellLii?cornellLii.SearchAsync(query,configuration,cancellationToken):Task.FromResult(CoverageSkipped("CORNELL_LII",scope));
         try
         {
-            await Task.WhenAll(courtListenerTask,govInfoTask,cornellLiiTask);
+            await Task.WhenAll(govInfoTask,cornellLiiTask);
         }
         catch(Exception exception)when(exception is not OperationCanceledException||!cancellationToken.IsCancellationRequested)
         {
@@ -80,20 +104,36 @@ public sealed class LegalRetriever(ICourtListenerLegalSource courtListener,IGovI
             await errorLog.LogAsync("LegalRetriever",exception,"SearchWithDiagnostics/ProviderFanout",severityCode:"Warning",contextJson:$"{{\"kind\":\"{kind}\"}}",cancellationToken:cancellationToken);
         }
 
-        var merged=courtListenerTask.Result.Snippets
+        var merged=courtListenerResult.Snippets
             .Concat(govInfoTask.Result.Snippets)
             .Concat(cornellLiiTask.Result.Snippets)
             .DistinctBy(snippet=>$"{snippet.Query}\u0001{snippet.Url}",StringComparer.OrdinalIgnoreCase)
             .ToList();
-        logger.LogInformation("LEGAL-TRACE stage=2-routing-result kind={Kind} courtListenerResults={CourtListenerCount} govInfoResults={GovInfoCount} cornellLiiResults={CornellLiiCount} merged={MergedCount}",kind,courtListenerTask.Result.Snippets.Count,govInfoTask.Result.Snippets.Count,cornellLiiTask.Result.Snippets.Count,merged.Count);
+        logger.LogInformation("LEGAL-TRACE stage=2-routing-result kind={Kind} courtListenerResults={CourtListenerCount} govInfoResults={GovInfoCount} cornellLiiResults={CornellLiiCount} merged={MergedCount}",kind,courtListenerResult.Snippets.Count,govInfoTask.Result.Snippets.Count,cornellLiiTask.Result.Snippets.Count,merged.Count);
         var providers = new[]
         {
-            courtListenerTask.Result.Diagnostic,
+            courtListenerResult.Diagnostic,
             govInfoTask.Result.Diagnostic,
             cornellLiiTask.Result.Diagnostic,
             officialAuthorityResult.Diagnostic,
         };
         return new(merged, providers);
+    }
+
+    // Executes a single provider search behind fail-soft handling so a fallback decision is never skewed
+    // by an unhandled provider exception; a failing source yields an empty PROVIDER_FAILURE result.
+    private async Task<LegalProviderRetrievalResult> SafeSearchAsync(Func<Task<LegalProviderRetrievalResult>> search,string provider,LegalAuthorityKind kind,CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await search();
+        }
+        catch(Exception exception)when(exception is not OperationCanceledException||!cancellationToken.IsCancellationRequested)
+        {
+            logger.LogWarning(exception,"LEGAL-TRACE stage=2-routing outcome=PROVIDER_FAILURE provider={Provider} kind={Kind}",provider,kind);
+            await errorLog.LogAsync("LegalRetriever",exception,$"SearchWithDiagnostics/{provider}",severityCode:"Warning",contextJson:$"{{\"kind\":\"{kind}\"}}",cancellationToken:cancellationToken);
+            return new([],new(provider,false,"PROVIDER_FAILURE",0,0));
+        }
     }
 
     private static LegalProviderRetrievalResult Skipped(string provider) =>

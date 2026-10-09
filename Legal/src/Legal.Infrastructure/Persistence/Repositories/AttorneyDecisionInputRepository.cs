@@ -591,6 +591,97 @@ public sealed class AttorneyDecisionInputRepository(ISqlConnectionFactory connec
         catch { tx.Rollback(); throw; }
     }
 
+    // §16/§23 retract (soft-delete) a committed attorney-supplied node and reverse its contribution.
+    // Node + assessment + approval + structural edges are marked IsDeleted; an immutable NodeRetracted
+    // audit row and a DecisionReevaluationRequested outbox event let POLOXI recompute the candidate.
+    // Idempotent: a second retract of an already-retracted node is a no-op that reports AlreadyRetracted.
+    public async Task<RetractResult> RetractAttorneyInputAsync(
+        Guid tenantId, Guid actorUserId, RetractAttorneyInputCommand command, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        using var tx = connection.BeginTransaction(IsolationLevel.Serializable);
+        try
+        {
+            // Resolve the owning L1 candidate scope by walking the ParentNodeId chain (nearest L1 ancestor,
+            // falling back to the node itself when it is already an L1 candidate).
+            var candidateNodeId = await connection.ExecuteScalarAsync<Guid?>(new CommandDefinition(
+                """
+                WITH chain AS (
+                    SELECT DecisionNodeId, ParentNodeId, NodeLevel, 0 AS Depth
+                    FROM POLOXI.Legal_DecisionNode
+                    WHERE TenantId = @TenantId AND MatterId = @MatterId AND DecisionNodeId = @DecisionNodeId
+                    UNION ALL
+                    SELECT p.DecisionNodeId, p.ParentNodeId, p.NodeLevel, c.Depth + 1
+                    FROM POLOXI.Legal_DecisionNode p
+                    INNER JOIN chain c ON p.DecisionNodeId = c.ParentNodeId
+                    WHERE p.TenantId = @TenantId AND p.MatterId = @MatterId
+                )
+                SELECT TOP 1 DecisionNodeId FROM chain WHERE NodeLevel = 1 ORDER BY Depth DESC;
+                """,
+                new { TenantId = tenantId, command.MatterId, command.DecisionNodeId },
+                transaction: tx, cancellationToken: cancellationToken));
+
+            // Only attorney-supplied, not-yet-deleted nodes are retractable (origin alone never scores, §13).
+            var affected = await connection.ExecuteAsync(new CommandDefinition(
+                """
+                UPDATE POLOXI.Legal_DecisionNode
+                SET IsDeleted = 1, NodeVersion = NodeVersion + 1,
+                    ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @Actor
+                WHERE TenantId = @TenantId AND MatterId = @MatterId AND DecisionNodeId = @DecisionNodeId
+                  AND OriginCode = N'AttorneySupplied' AND IsDeleted = 0;
+                """,
+                new { TenantId = tenantId, command.MatterId, command.DecisionNodeId, Actor = actorUserId },
+                transaction: tx, cancellationToken: cancellationToken));
+
+            if (affected == 0)
+            {
+                tx.Commit();
+                return new RetractResult(command.DecisionNodeId, candidateNodeId ?? command.DecisionNodeId,
+                    Guid.Empty, AlreadyRetracted: true, ReevaluationQueued: false);
+            }
+
+            // Soft-delete the node's assessments, any active approval, and its structural edges.
+            await connection.ExecuteAsync(new CommandDefinition(
+                """
+                UPDATE POLOXI.Legal_AttorneyRelativeAssessment
+                SET IsDeleted = 1, StatusCode = N'Retracted', ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @Actor
+                WHERE TenantId = @TenantId AND MatterId = @MatterId AND DecisionNodeId = @DecisionNodeId AND IsDeleted = 0;
+
+                UPDATE POLOXI.Legal_ApprovedMatterAssessment
+                SET IsActive = 0, IsDeleted = 1, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @Actor
+                WHERE TenantId = @TenantId AND MatterId = @MatterId AND DecisionNodeId = @DecisionNodeId AND IsDeleted = 0;
+
+                UPDATE POLOXI.Legal_DecisionNodeEdge
+                SET IsDeleted = 1, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @Actor
+                WHERE TenantId = @TenantId AND MatterId = @MatterId
+                  AND (FromNodeId = @DecisionNodeId OR ToNodeId = @DecisionNodeId) AND IsDeleted = 0;
+                """,
+                new { TenantId = tenantId, command.MatterId, command.DecisionNodeId, Actor = actorUserId },
+                transaction: tx, cancellationToken: cancellationToken));
+
+            var changeEventId = Guid.NewGuid();
+            await connection.ExecuteAsync(new CommandDefinition(
+                """
+                INSERT INTO POLOXI.Legal_DecisionNodeAudit
+                    (NodeAuditId, MatterId, DecisionNodeId, ActionCode, CorrelationId, CausationId, TenantId, CreatedByUserId)
+                VALUES (NEWID(), @MatterId, @DecisionNodeId, N'NodeRetracted', @ChangeEventId, @Key, @TenantId, @Actor);
+                """,
+                new { command.MatterId, command.DecisionNodeId, ChangeEventId = changeEventId, Key = command.IdempotencyKey, TenantId = tenantId, Actor = actorUserId },
+                transaction: tx, cancellationToken: cancellationToken));
+
+            await EnqueueOutboxAsync(connection, tx, "DecisionReevaluationRequested", JsonSerializer.Serialize(new
+            {
+                tenantId, command.MatterId, command.DecisionNodeId, candidateNodeId,
+                changeEventId, reason = "PropositionRetracted", actorUserId, correlationId = changeEventId
+            }), cancellationToken);
+
+            tx.Commit();
+            return new RetractResult(command.DecisionNodeId, candidateNodeId ?? command.DecisionNodeId,
+                changeEventId, AlreadyRetracted: false, ReevaluationQueued: true);
+        }
+        catch { tx.Rollback(); throw; }
+    }
+
     // ── §2/§7 resolve-or-create the decision node for a selected Wide branch (and its ancestor chain) ──
     // The chain is ordered root (L1) → selected branch. Each branch is materialized once per matter,
     // keyed on SourceWideBranchId, so repeated "Add proposition from this branch" actions reuse nodes.

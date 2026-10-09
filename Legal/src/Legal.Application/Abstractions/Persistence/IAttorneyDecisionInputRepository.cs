@@ -52,6 +52,11 @@ public interface IAttorneyDecisionInputRepository
     Task<CommitResult> RepositionAsync(
         Guid tenantId, Guid actorUserId, RepositionNodeCommand command, CancellationToken cancellationToken = default);
 
+    // §16/§23 retract (soft-delete) a committed attorney-supplied node transactionally:
+    // node + assessment + approval + edges marked IsDeleted, plus audit + outbox. Idempotent on node id.
+    Task<RetractResult> RetractAttorneyInputAsync(
+        Guid tenantId, Guid actorUserId, RetractAttorneyInputCommand command, CancellationToken cancellationToken = default);
+
     // §2/§7 resolve-or-create the decision node (and its ancestor chain) for a selected Wide branch.
     // Idempotent on (TenantId, MatterId, SourceWideBranchId); returns the resolved/created node + L1 scope.
     Task<ResolvedBranchNode> ResolveBranchNodeAsync(

@@ -246,6 +246,22 @@ public sealed record RaiseChallengeCommand(
     string ChallengeText,
     Guid IdempotencyKey);
 
+// §16/§23 retract (soft-delete) a previously committed attorney-supplied node. Reverses the attorney
+// input the same way it was committed — node + assessment + approval + structural edges are marked
+// IsDeleted, an immutable NodeRetracted audit row is written, and a DecisionNodeRetracted outbox event
+// lets POLOXI recompute the candidate outcome. Nothing is physically deleted (the audit trail survives).
+public sealed record RetractAttorneyInputCommand(
+    Guid MatterId,
+    Guid DecisionNodeId,
+    Guid IdempotencyKey);
+
+public sealed record RetractResult(
+    Guid DecisionNodeId,
+    Guid CandidateNodeId,
+    Guid ChangeEventId,
+    bool AlreadyRetracted,
+    bool ReevaluationQueued);
+
 // ── Wide-branch → decision-node materialization ───────────────────────────────────────────────────
 // When an attorney adds a proposition from the live POLOXI hierarchy (the Hierarchy tab's surviving
 // Wide branches), the chosen branch and its ancestor chain are materialized once into canonical
