@@ -1,0 +1,573 @@
+@* ────────────────────────────────────────────────────────────────────────────
+   AttorneyPropositionWorkspace — interactive "Proposition workspace".
+
+   The attorney drags the draft proposition into the blue insertion zone (or
+   clicks the zone) to PREVIEW placement against the real Human Intelligence /
+   Attorney Decision Input (LPI) pipeline, then APPLIES it to commit the input
+   and move the selected candidate's Final Decision Outcome.
+
+   Data + behavior are supplied by the host page through parameters/callbacks:
+     • Candidates            — real L1 candidate nodes (id, code, label, score)
+     • PreviewHandler        — runs AnalyzePlacement + Preview and returns the
+                               current/projected candidate score + delta
+     • ApplyHandler          — commits the attorney input and returns the final
+                               (recomputed) candidate score
+     • UndoHandler           — reverts the last applied placement
+
+   When no handlers are provided the component renders a labelled sample preview
+   so the layout is still demonstrable, but it never presents a fabricated score
+   as a real outcome.
+   ──────────────────────────────────────────────────────────────────────────── *@
+
+<div class="apw">
+
+    <div class="apw-header">
+        <div class="apw-header-icon"><i class="bi bi-diagram-3"></i></div>
+        <div class="apw-header-text">
+            <div class="apw-eyebrow">ATTORNEY DECISION INPUT · HUMAN INTELLIGENCE (LPI)</div>
+            <h3 class="apw-title">Proposition workspace</h3>
+        </div>
+        <span class="apw-live-badge @(_appliedProposition is not null ? "apw-live-badge--committed" : (_dropPreview ? "apw-live-badge--preview" : ""))">
+            <span class="apw-live-dot"></span>
+            @(_appliedProposition is not null ? "Committed" : (_dropPreview ? "Previewing" : "Ready"))
+        </span>
+    </div>
+
+    <div class="apw-steps">
+        <span class="apw-step apw-step--done"><span class="apw-step-dot"><i class="bi bi-check-lg"></i></span>Define</span>
+        <span class="apw-step @(_appliedProposition is null ? "apw-step--active" : "apw-step--done")"><span class="apw-step-dot">@(_appliedProposition is null ? (MarkupString)"2" : (MarkupString)"<i class=\"bi bi-check-lg\"></i>")</span>Place in hierarchy</span>
+        <span class="apw-step @(_appliedProposition is not null ? "apw-step--active" : "")"><span class="apw-step-dot">3</span>Review impact</span>
+    </div>
+
+    @* ── Decision + candidate outcomes (stay above the evaluation tree) ── *@
+    <section class="apw-card apw-decision">
+        <div class="apw-card-label">DECISION · FINAL OUTCOME OF CANDIDATE</div>
+        <h4 class="apw-decision-q">How could this personal-injury matter be resolved?</h4>
+        <div class="apw-candidates">
+            @foreach (var c in Workspace)
+            {
+                var score = CandidateScore(c);
+                var isLeader = LeadingCandidateId == c.NodeId;
+                <button type="button"
+                        class="apw-candidate @(c.NodeId == _selectedCandidateId ? "apw-candidate--active" : "") @(isLeader ? "apw-candidate--leader" : "")"
+                        @onclick="() => SelectCandidateAsync(c.NodeId)">
+                    @if (isLeader)
+                    {
+                        <span class="apw-candidate-crown" title="Highest current outcome"><i class="bi bi-trophy-fill"></i></span>
+                    }
+                    <div class="apw-candidate-row">
+                        <span class="apw-candidate-code">@c.Code</span>
+                        <span class="apw-candidate-label">@c.Label</span>
+                        <span class="apw-candidate-score">@FormatScore(score)</span>
+                    </div>
+                    <div class="apw-candidate-bar">
+                        <div class="apw-candidate-bar-fill" style="width:@ScorePercent(score)%"></div>
+                    </div>
+                </button>
+            }
+        </div>
+    </section>
+
+    @* ── Evaluation tree ── *@
+    <section class="apw-card apw-tree">
+        <div class="apw-tree-head">
+            <span class="apw-card-label">Evaluation tree</span>
+            <div class="apw-tree-head-right">
+                <span class="apw-tree-context">@SelectedCode CONTEXT</span>
+                <button type="button" class="apw-btn apw-btn-ghost">Expand causation</button>
+            </div>
+        </div>
+
+        <div class="apw-tree-grid">
+            @foreach (var col in EffectiveTreeColumns)
+            {
+                <div class="apw-tree-col">
+                    <div class="apw-col-head">@col.Head</div>
+
+                    @for (var i = 0; i <= col.Nodes.Count; i++)
+                    {
+                        var slotId = $"{col.Level}:{i}";
+                        var level = col.Level;
+
+                        @* Insertion slot BETWEEN nodes — repeated at every position in every column *@
+                        @if (_appliedSlot == slotId && _appliedProposition is { } appliedHere)
+                        {
+                            <div class="apw-node apw-node--prop apw-node--applied">
+                                <div class="apw-applied-glow"></div>
+                                <div class="apw-node-top">
+                                    <span class="apw-node-lvl">L@(level)</span>
+                                    <span class="apw-applied-badge"><i class="bi bi-stars"></i> Placed</span>
+                                </div>
+
+                                <div class="apw-bigscore" title="Final decision outcome of the selected candidate after this input">
+                                    <div class="apw-bigscore-ring">
+                                        <span class="apw-bigscore-val">@FormatScore(_appliedFinalScore)</span>
+                                        <span class="apw-bigscore-unit">LPI</span>
+                                    </div>
+                                    <span class="apw-bigscore-tag">@(_appliedAdvisory ? "Advisory" : "Committed")</span>
+                                </div>
+
+                                @if (_appliedDelta is { } d)
+                                {
+                                    <div class="apw-impact-line @(d >= 0 ? "apw-impact--up" : "apw-impact--down")">
+                                        <i class="bi @(d >= 0 ? "bi-arrow-up-right" : "bi-arrow-down-right")"></i>
+                                        Candidate outcome @(d >= 0 ? "+" : "")@d.ToString("0.#") LPI
+                                    </div>
+                                }
+
+                                @if (_editing)
+                                {
+                                    <textarea class="apw-textarea apw-applied-edit" rows="2" @bind="_draftText"
+                                              placeholder="State the proposition as a single, independently evaluable assertion."></textarea>
+                                    <div class="apw-applied-actions">
+                                        <button type="button" class="apw-btn apw-btn-primary apw-btn-sm" @onclick="SaveEditAsync">
+                                            <i class="bi bi-check-lg"></i> Save
+                                        </button>
+                                        <button type="button" class="apw-btn apw-btn-ghost apw-btn-sm" @onclick="CancelEdit">Cancel</button>
+                                    </div>
+                                }
+                                else
+                                {
+                                    <div class="apw-node-name">@appliedHere</div>
+                                    <div class="apw-node-sub">@_appliedSub</div>
+                                    <div class="apw-applied-actions">
+                                        <button type="button" class="apw-btn apw-btn-primary apw-btn-sm" @onclick="StartEdit">
+                                            <i class="bi bi-pencil-square"></i> Edit
+                                        </button>
+                                        <button type="button" class="apw-undo" @onclick="UndoPlacementAsync">
+                                            <i class="bi bi-arrow-counterclockwise"></i> Undo
+                                        </button>
+                                    </div>
+                                }
+                            </div>
+                        }
+                        else if (_appliedProposition is null)
+                        {
+                            var isActive = _activeSlot == slotId;
+                            <div class="apw-rail @(_hoverSlot == slotId ? "apw-rail--hover" : "") @(isActive && _dropPreview ? "apw-rail--preview" : "")"
+                                 @ondragover:preventDefault="true"
+                                 @ondragover="() => _hoverSlot = slotId"
+                                 @ondragleave="() => _hoverSlot = null"
+                                 @ondrop="() => OnDropSlotAsync(slotId, level)"
+                                 @onclick="() => PreviewSlotAsync(slotId, level)"
+                                 role="button"
+                                 title="Insert a proposition here (L@(level))">
+                                @if (isActive && _busy)
+                                {
+                                    <i class="bi bi-arrow-repeat apw-spin"></i>
+                                    <span>Evaluating placement…</span>
+                                }
+                                else if (isActive && _dropPreview)
+                                {
+                                    <div class="apw-drop-preview-body">
+                                        <i class="bi bi-eye"></i>
+                                        <span>Preview at L@(level): @_draftText</span>
+                                        @if (_previewResult is { } pr)
+                                        {
+                                            <div class="apw-drop-impact">
+                                                <span class="apw-drop-impact-num">@FormatScore(pr.CurrentScore)</span>
+                                                <i class="bi bi-arrow-right"></i>
+                                                <span class="apw-drop-impact-num apw-drop-impact-num--proj">@FormatScore(pr.ProjectedScore)</span>
+                                                <span class="apw-drop-impact-delta @(pr.Delta >= 0 ? "up" : "down")">
+                                                    (@(pr.Delta >= 0 ? "+" : "")@pr.Delta.ToString("0.#"))
+                                                </span>
+                                            </div>
+                                            @if (!string.IsNullOrWhiteSpace(pr.Explanation))
+                                            {
+                                                <div class="apw-drop-why">@pr.Explanation</div>
+                                            }
+                                        }
+                                        else
+                                        {
+                                            <div class="apw-drop-why">Preview only — connect a matter to evaluate impact.</div>
+                                        }
+                                        <div class="apw-drop-actions">
+                                            <button type="button" class="apw-btn apw-btn-primary apw-btn-sm" @onclick:stopPropagation="true" @onclick="() => ApplyPlacementAsync(slotId)">Apply placement</button>
+                                            <button type="button" class="apw-btn apw-btn-ghost apw-btn-sm" @onclick:stopPropagation="true" @onclick="CancelPreview">Cancel</button>
+                                        </div>
+                                    </div>
+                                }
+                                else
+                                {
+                                    <span class="apw-rail-plus"><i class="bi bi-plus-lg"></i> Insert here</span>
+                                }
+                            </div>
+                        }
+
+                        @* The node that follows this slot (if any) *@
+                        @if (i < col.Nodes.Count)
+                        {
+                            var n = col.Nodes[i];
+                            <div class="apw-node @n.Cls">
+                                <div class="apw-node-top">
+                                    <span class="apw-node-lvl">@n.Lvl</span>
+                                    @if (n.Score is { } sc)
+                                    {
+                                        <span class="apw-node-score">@FormatScore(sc)</span>
+                                    }
+                                </div>
+                                <div class="apw-node-name">@n.Name</div>
+                                <div class="apw-node-sub">@n.Sub</div>
+                            </div>
+                        }
+                    }
+                </div>
+            }
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(_error))
+        {
+            <div class="apw-error"><i class="bi bi-exclamation-triangle"></i> @_error</div>
+        }
+
+        <div class="apw-tree-foot">
+            <i class="bi bi-arrows-move"></i>
+            Drag from the proposition tray, or select the insertion zone, to evaluate the Human Intelligence (LPI) impact on the selected candidate.
+        </div>
+    </section>
+
+    @* ── New proposition tray ── *@
+    <section class="apw-card apw-tray">
+        <div class="apw-tray-head">
+            <strong>New proposition</strong>
+            <span class="apw-tray-hint">Drag into the tree, or select a drop zone, to preview placement.</span>
+        </div>
+
+        <label class="apw-field-label">Atomic statement</label>
+        <textarea class="apw-textarea" rows="2" @bind="_draftText"
+                  placeholder="State the proposition as a single, independently evaluable assertion."></textarea>
+
+        <div class="apw-draggable @(_appliedProposition is not null ? "apw-draggable--placed" : "")"
+             draggable="@(_appliedProposition is null ? "true" : "false")"
+             @ondragstart="OnDragStart"
+             @ondragend="() => _hoverSlot = null">
+            <i class="bi bi-grip-vertical"></i>
+            <div class="apw-draggable-body">
+                <span class="apw-draggable-title">
+                    @(_appliedProposition is null ? "Drag into the tree" : "Placed in tree")
+                </span>
+                <span class="apw-draggable-text">@_draftText</span>
+            </div>
+        </div>
+
+        <div class="apw-tray-meta">
+            <div class="apw-tray-meta-row">
+                <strong>Attorney input · @(_appliedProposition is null ? "Draft" : (_appliedAdvisory ? "Committed (advisory recompute)" : "Committed"))</strong>
+                <span class="apw-tray-meta-sub">Human Intelligence (LPI) node under the selected candidate.</span>
+            </div>
+            <hr class="apw-divider" />
+            <div class="apw-tray-meta-row">
+                <strong>Selected: @SelectedLabel</strong>
+                <span class="apw-tray-meta-sub">The applied proposition moves this candidate's final decision outcome.</span>
+            </div>
+            <div class="apw-tray-meta-row">
+                <span class="apw-tray-meta-sub">Outcome impact:
+                    <strong>
+                        @if (_appliedFinalScore is { } fs)
+                        {
+                            @($"{fs:0.#} LPI")
+                            @if (_appliedDelta is { } ad)
+                            {
+                                <span> (@(ad >= 0 ? "+" : "")@ad.ToString("0.#"))</span>
+                            }
+                        }
+                        else if (_previewResult is { } pr)
+                        {
+                            @($"projected {pr.ProjectedScore:0.#} LPI ({(pr.Delta >= 0 ? "+" : "")}{pr.Delta:0.#})")
+                        }
+                        else
+                        {
+                            @("Not calculated.")
+                        }
+                    </strong>
+                </span>
+            </div>
+        </div>
+    </section>
+
+    @if (!HasHandlers)
+    {
+        <div class="apw-concept-note">
+            <i class="bi bi-info-circle"></i>
+            No matter connected — preview and apply run in local demo mode until a matter with a decision session is loaded.
+        </div>
+    }
+</div>
+
+@code {
+    // ── Public view-model + callback contract ─────────────────────────────────
+    public sealed record WorkspaceCandidate(Guid NodeId, string Code, string Label, decimal? Score);
+    public sealed record WorkspacePreviewRequest(Guid CandidateId, string Text, int Level);
+    public sealed record WorkspacePreviewResult(decimal CurrentScore, decimal ProjectedScore, decimal Delta, string? Explanation, bool Advisory);
+    public sealed record WorkspaceApplyRequest(Guid CandidateId, string Text, int Level);
+    public sealed record WorkspaceApplyResult(decimal FinalScore, decimal Delta, bool Advisory, string? Summary);
+
+    // Tree view-models — each column renders nodes interleaved with insertion rails.
+    public sealed record TreeNode(string Lvl, string Name, string Sub, decimal? Score, string Cls);
+    public sealed record TreeColumn(int Level, string Head, IReadOnlyList<TreeNode> Nodes);
+
+    // When the host page supplies live decision-hierarchy columns, render those instead of the
+    // static sample. This lets the Evaluation tree share the exact same DB-backed data source as
+    // the "Decision hierarchy" tree (SurvivingBranches / WideBranch).
+    [Parameter] public IReadOnlyList<TreeColumn>? TreeColumnsOverride { get; set; }
+
+    private IReadOnlyList<TreeColumn> EffectiveTreeColumns =>
+        TreeColumnsOverride is { Count: > 0 } ? TreeColumnsOverride : TreeColumns;
+
+    private static readonly IReadOnlyList<TreeColumn> TreeColumns =
+    [
+        new(1, "L1 · Decision dimension",
+        [
+            new("L1", "Liability", "Shared factor · 2 supporting dimensions", 55m, "apw-node--muted"),
+            new("L1", "Injury & loss", "Collapsed · 3 supporting dimensions", 48m, "apw-node--collapsed"),
+        ]),
+        new(2, "L2 · Supporting factor",
+        [
+            new("L2", "Negligent vehicle operation", "Selected branch · 2 propositions", 72m, "apw-node--selected"),
+            new("L2", "Causal link to injury", "Shared factor · Expand to inspect", 64m, "apw-node--muted"),
+        ]),
+        new(3, "L3 · Propositions",
+        [
+            new("L3.1", "Witness reports unsafe vehicle operation", "Witness statement · ¶ 4", 60m, "apw-node--prop"),
+            new("L3.2", "Incident recording shows vehicle movement", "Video V12 · 00:34–00:41", 80m, "apw-node--prop"),
+        ]),
+    ];
+
+    [Parameter] public IReadOnlyList<WorkspaceCandidate>? Candidates { get; set; }
+    [Parameter] public Guid? SelectedCandidateId { get; set; }
+    [Parameter] public EventCallback<Guid?> SelectedCandidateIdChanged { get; set; }
+    [Parameter] public Func<WorkspacePreviewRequest, Task<WorkspacePreviewResult?>>? PreviewHandler { get; set; }
+    [Parameter] public Func<WorkspaceApplyRequest, Task<WorkspaceApplyResult?>>? ApplyHandler { get; set; }
+    [Parameter] public Func<Task>? UndoHandler { get; set; }
+
+    private bool HasHandlers => PreviewHandler is not null && ApplyHandler is not null;
+
+    // Sample candidates used only when the host page has not supplied real nodes.
+    private readonly List<WorkspaceCandidate> _sampleCandidates =
+    [
+        new(Guid.NewGuid(), "C1", "Negotiated settlement", 68m),
+        new(Guid.NewGuid(), "C2", "Further negotiation", 54m),
+        new(Guid.NewGuid(), "C3", "Plaintiff-favorable verdict", 61m),
+        new(Guid.NewGuid(), "C4", "Defense-favorable judgment", 39m),
+    ];
+
+    private IReadOnlyList<WorkspaceCandidate> Workspace
+        => Candidates is { Count: > 0 } ? Candidates : _sampleCandidates;
+
+    private Guid? _selectedCandidateId;
+
+    private WorkspaceCandidate? SelectedCandidate
+        => Workspace.FirstOrDefault(c => c.NodeId == _selectedCandidateId) ?? Workspace.FirstOrDefault();
+
+    private string SelectedCode => SelectedCandidate?.Code ?? "C?";
+    private string SelectedLabel => SelectedCandidate?.Label ?? "—";
+
+    // ── Draft + placement state ───────────────────────────────────────────────
+    private string _draftText = "The vehicle crossed the stop line while the signal was red.";
+    private string? _hoverSlot;
+    private string? _activeSlot;   // slot currently being previewed
+    private string? _appliedSlot;  // slot where the proposition was placed
+    private int _activeLevel = 3;  // hierarchy level of the active/applied slot
+    private bool _dropPreview;
+    private bool _busy;
+    private string? _error;
+
+    private WorkspacePreviewResult? _previewResult;
+
+    private string? _appliedProposition;
+    private string _appliedSub = "Attorney input · committed";
+    private decimal? _appliedFinalScore;
+    private decimal? _appliedDelta;
+    private bool _appliedAdvisory;
+
+    private bool _editing;
+    private string _editBackup = string.Empty;
+
+    protected override void OnParametersSet()
+    {
+        if (SelectedCandidateId is { } sid && Workspace.Any(c => c.NodeId == sid))
+            _selectedCandidateId = sid;
+        else if (_selectedCandidateId is null || Workspace.All(c => c.NodeId != _selectedCandidateId))
+            _selectedCandidateId = Workspace.FirstOrDefault()?.NodeId;
+    }
+
+    private static string FormatScore(decimal? score)
+        => score is { } s ? s.ToString("0.#") : "—";
+
+    // Percentage width (0–100) for the candidate score bar; scores are treated as 0–100 LPI.
+    private int ScorePercent(decimal? score)
+        => score is { } s ? (int)Math.Clamp(s, 0m, 100m) : 0;
+
+    // The candidate with the highest current outcome — surfaced with a trophy affordance.
+    private Guid? LeadingCandidateId
+        => Workspace
+            .Where(c => CandidateScore(c) is not null)
+            .OrderByDescending(c => CandidateScore(c))
+            .Select(c => (Guid?)c.NodeId)
+            .FirstOrDefault();
+
+    private decimal? CandidateScore(WorkspaceCandidate c)
+        => _appliedFinalScore is { } fs && c.NodeId == _selectedCandidateId ? fs : c.Score;
+
+    private async Task SelectCandidateAsync(Guid nodeId)
+    {
+        if (_selectedCandidateId == nodeId) return;
+        _selectedCandidateId = nodeId;
+        // Changing the candidate invalidates a pending preview/placement.
+        _previewResult = null;
+        _dropPreview = false;
+        _activeSlot = null;
+        if (SelectedCandidateIdChanged.HasDelegate)
+            await SelectedCandidateIdChanged.InvokeAsync(nodeId);
+    }
+
+    private void OnDragStart()
+    {
+        if (_appliedProposition is not null) return;
+        _hoverSlot = null;
+    }
+
+    private Task OnDropSlotAsync(string slotId, int level)
+    {
+        _hoverSlot = null;
+        return PreviewSlotAsync(slotId, level);
+    }
+
+    // Click or drop on a specific rail previews placement at that level against the real LPI pipeline.
+    private async Task PreviewSlotAsync(string slotId, int level)
+    {
+        if (_appliedProposition is not null) return;
+        if (string.IsNullOrWhiteSpace(_draftText)) return;
+
+        _error = null;
+        _activeSlot = slotId;
+        _activeLevel = level;
+        _dropPreview = true;
+        _previewResult = null;
+
+        if (PreviewHandler is null || _selectedCandidateId is not { } cid)
+            return; // local demo mode: show the preview panel without a score
+
+        _busy = true;
+        try
+        {
+            _previewResult = await PreviewHandler(new WorkspacePreviewRequest(cid, _draftText.Trim(), level));
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void CancelPreview()
+    {
+        _dropPreview = false;
+        _activeSlot = null;
+        _previewResult = null;
+    }
+
+    private async Task ApplyPlacementAsync(string slotId)
+    {
+        if (string.IsNullOrWhiteSpace(_draftText)) return;
+
+        _error = null;
+        _appliedProposition = _draftText.Trim();
+        _appliedSlot = slotId;
+        _dropPreview = false;
+
+        if (ApplyHandler is null || _selectedCandidateId is not { } cid)
+        {
+            // Local demo mode — reflect the projected preview if we have one.
+            _appliedFinalScore = _previewResult?.ProjectedScore;
+            _appliedDelta = _previewResult?.Delta;
+            _appliedAdvisory = true;
+            _appliedSub = "Attorney input · local preview (no matter connected)";
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            var result = await ApplyHandler(new WorkspaceApplyRequest(cid, _appliedProposition, _activeLevel));
+            if (result is not null)
+            {
+                _appliedFinalScore = result.FinalScore;
+                _appliedDelta = result.Delta;
+                _appliedAdvisory = result.Advisory;
+                _appliedSub = string.IsNullOrWhiteSpace(result.Summary)
+                    ? (result.Advisory ? "Attorney input · committed (advisory recompute)" : "Attorney input · committed")
+                    : result.Summary!;
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            // Roll the UI back so the attorney can retry.
+            _appliedProposition = null;
+            _appliedSlot = null;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task UndoPlacementAsync()
+    {
+        _appliedProposition = null;
+        _appliedSlot = null;
+        _activeSlot = null;
+        _dropPreview = false;
+        _editing = false;
+        _appliedFinalScore = null;
+        _appliedDelta = null;
+        _previewResult = null;
+        if (UndoHandler is not null)
+        {
+            try { await UndoHandler(); }
+            catch (Exception ex) { _error = ex.Message; }
+        }
+    }
+
+    private void StartEdit()
+    {
+        _editBackup = _draftText;
+        _editing = true;
+    }
+
+    private async Task SaveEditAsync()
+    {
+        if (!string.IsNullOrWhiteSpace(_draftText))
+        {
+            _appliedProposition = _draftText.Trim();
+            // Re-evaluate impact for the edited text.
+            if (ApplyHandler is not null && _selectedCandidateId is { } cid)
+            {
+                _busy = true;
+                try
+                {
+                    var result = await ApplyHandler(new WorkspaceApplyRequest(cid, _appliedProposition, _activeLevel));
+                    if (result is not null)
+                    {
+                        _appliedFinalScore = result.FinalScore;
+                        _appliedDelta = result.Delta;
+                        _appliedAdvisory = result.Advisory;
+                    }
+                }
+                catch (Exception ex) { _error = ex.Message; }
+                finally { _busy = false; }
+            }
+        }
+        _editing = false;
+    }
+
+    private void CancelEdit()
+    {
+        _draftText = _editBackup;
+        _editing = false;
+    }
+}
