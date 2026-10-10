@@ -73,6 +73,14 @@ public sealed record DecisionSearchRequest(
     // to the decision. Advisory only: POLOXI Core reasoning is unchanged. Null = no domain pack.
     [StringLength(60)] public string? DomainPackCode { get; init; }
 
+    // Discovery-prompt assembly mode. Original (default) keeps the existing discovery behavior byte-for-byte.
+    // DomainPack assembles a separate discovery prompt from the exact stored original prompt plus the Domain
+    // Pack mode instructions and the selected pack's structured configuration. In DomainPack mode the selected
+    // DomainPackCode MUST resolve to a valid authorized pack; otherwise the decision fails with a clear
+    // validation error (no silent fallback). POLOXI Core, output schema, normalization, and canonical outcome
+    // injection are unchanged in both modes.
+    public DecisionDiscoveryMode DiscoveryMode { get; init; } = DecisionDiscoveryMode.Original;
+
     // First-class, immutable Personal Injury Profile projection. When present it is projected into the
     // discovery proposal as a distinct STRUCTURED context section (not buried in free text) so Astra can
     // identify incident-specific legal/factual dependencies. Supplied allegations, NOT verified evidence.
@@ -692,9 +700,11 @@ public sealed record DecisionDomainPackDto(
     public IReadOnlyCollection<DecisionDomainPackOutcomeCandidateDto> OutcomeCandidates { get; init; } = [];
 }
 
-public sealed record DecisionDomainPackDimensionDto(string DimensionCode, string Name, string? Description);
+// PoloxiImportanceScore (0.0–1.0) is an advisory DB-backed importance prior (migration 0407) expressing
+// how decisive the node is to the decision. POLOXI Core owns authoritative scoring; this is configuration only.
+public sealed record DecisionDomainPackDimensionDto(string DimensionCode, string Name, string? Description, decimal? PoloxiImportanceScore = null);
 
-public sealed record DecisionDomainPackEvidenceTypeDto(string EvidenceTypeCode, string Name, string? DimensionCode, string? Description);
+public sealed record DecisionDomainPackEvidenceTypeDto(string EvidenceTypeCode, string Name, string? DimensionCode, string? Description, decimal? PoloxiImportanceScore = null);
 
 public sealed record DecisionDomainPackVerificationProfileDto(string ProfileCode, string Name, string? EvidenceTypeCode, string? Description);
 

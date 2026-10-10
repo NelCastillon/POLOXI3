@@ -115,6 +115,39 @@ public sealed class ApiClient(HttpClient httpClient)
         public async Task<Legal.Application.Features.Intelligence.Decision.DecisionMatterFacetsDto> GetLegalDecisionMatterFacetsAsync(CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<Legal.Application.Features.Intelligence.Decision.DecisionMatterFacetsDto>("api/legal_decision/matters/facets",token)??new([],[],[]);
         public Task<Legal.Application.Features.Intelligence.Decision.DecisionDomainPackDto?> GetLegalDecisionDomainPackAsync(string packCode,CancellationToken token=default)=>_httpClient.GetFromJsonAsync<Legal.Application.Features.Intelligence.Decision.DecisionDomainPackDto>($"api/legal_decision/domainpacks/{packCode}",token);
         public async Task<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.DecisionDomainPackDto>> GetLegalDecisionDomainPacksAsync(CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.DecisionDomainPackDto>>("api/legal_decision/domainpacks",token)??[];
+        // Domain Pack CRUD (tenant-scoped writes).
+        public async Task SaveLegalDecisionDomainPackAsync(Legal.Application.Features.Intelligence.Decision.SaveDomainPackRequest request,CancellationToken token=default)
+        { using var r=await _httpClient.PutAsJsonAsync("api/legal_decision/domainpacks",request,token); await EnsureSuccessWithDetailAsync(r,token); }
+        public async Task DeleteLegalDecisionDomainPackAsync(string packCode,CancellationToken token=default)
+        { using var r=await _httpClient.DeleteAsync($"api/legal_decision/domainpacks/{Uri.EscapeDataString(packCode)}",token); await EnsureSuccessWithDetailAsync(r,token); }
+        public async Task SaveLegalDecisionDomainPackDimensionAsync(string packCode,Legal.Application.Features.Intelligence.Decision.SaveDomainPackDimensionRequest request,CancellationToken token=default)
+        { using var r=await _httpClient.PutAsJsonAsync($"api/legal_decision/domainpacks/{Uri.EscapeDataString(packCode)}/dimensions",request,token); await EnsureSuccessWithDetailAsync(r,token); }
+        public async Task DeleteLegalDecisionDomainPackDimensionAsync(string packCode,string dimensionCode,CancellationToken token=default)
+        { using var r=await _httpClient.DeleteAsync($"api/legal_decision/domainpacks/{Uri.EscapeDataString(packCode)}/dimensions/{Uri.EscapeDataString(dimensionCode)}",token); await EnsureSuccessWithDetailAsync(r,token); }
+        public async Task SaveLegalDecisionDomainPackEvidenceTypeAsync(string packCode,Legal.Application.Features.Intelligence.Decision.SaveDomainPackEvidenceTypeRequest request,CancellationToken token=default)
+        { using var r=await _httpClient.PutAsJsonAsync($"api/legal_decision/domainpacks/{Uri.EscapeDataString(packCode)}/evidencetypes",request,token); await EnsureSuccessWithDetailAsync(r,token); }
+        public async Task DeleteLegalDecisionDomainPackEvidenceTypeAsync(string packCode,string evidenceTypeCode,CancellationToken token=default)
+        { using var r=await _httpClient.DeleteAsync($"api/legal_decision/domainpacks/{Uri.EscapeDataString(packCode)}/evidencetypes/{Uri.EscapeDataString(evidenceTypeCode)}",token); await EnsureSuccessWithDetailAsync(r,token); }
+        public async Task SaveLegalDecisionDomainPackVerificationProfileAsync(string packCode,Legal.Application.Features.Intelligence.Decision.SaveDomainPackVerificationProfileRequest request,CancellationToken token=default)
+        { using var r=await _httpClient.PutAsJsonAsync($"api/legal_decision/domainpacks/{Uri.EscapeDataString(packCode)}/verificationprofiles",request,token); await EnsureSuccessWithDetailAsync(r,token); }
+        public async Task DeleteLegalDecisionDomainPackVerificationProfileAsync(string packCode,string profileCode,CancellationToken token=default)
+        { using var r=await _httpClient.DeleteAsync($"api/legal_decision/domainpacks/{Uri.EscapeDataString(packCode)}/verificationprofiles/{Uri.EscapeDataString(profileCode)}",token); await EnsureSuccessWithDetailAsync(r,token); }
+        public async Task SaveLegalDecisionDomainPackMatterTypeAsync(string packCode,Legal.Application.Features.Intelligence.Decision.SaveDomainPackMatterTypeRequest request,CancellationToken token=default)
+        { using var r=await _httpClient.PutAsJsonAsync($"api/legal_decision/domainpacks/{Uri.EscapeDataString(packCode)}/mattertypes",request,token); await EnsureSuccessWithDetailAsync(r,token); }
+        public async Task DeleteLegalDecisionDomainPackMatterTypeAsync(string packCode,string matterTypeCode,CancellationToken token=default)
+        { using var r=await _httpClient.DeleteAsync($"api/legal_decision/domainpacks/{Uri.EscapeDataString(packCode)}/mattertypes/{Uri.EscapeDataString(matterTypeCode)}",token); await EnsureSuccessWithDetailAsync(r,token); }
+        public async Task SaveLegalDecisionDomainPackConceptAsync(string packCode,Legal.Application.Features.Intelligence.Decision.SaveDomainPackConceptRequest request,CancellationToken token=default)
+        { using var r=await _httpClient.PutAsJsonAsync($"api/legal_decision/domainpacks/{Uri.EscapeDataString(packCode)}/concepts",request,token); await EnsureSuccessWithDetailAsync(r,token); }
+        public async Task DeleteLegalDecisionDomainPackConceptAsync(string packCode,string conceptCode,CancellationToken token=default)
+        { using var r=await _httpClient.DeleteAsync($"api/legal_decision/domainpacks/{Uri.EscapeDataString(packCode)}/concepts/{Uri.EscapeDataString(conceptCode)}",token); await EnsureSuccessWithDetailAsync(r,token); }
+        public async Task SaveLegalDecisionDomainPackConceptRelationAsync(string packCode,Legal.Application.Features.Intelligence.Decision.SaveDomainPackConceptRelationRequest request,CancellationToken token=default)
+        { using var r=await _httpClient.PutAsJsonAsync($"api/legal_decision/domainpacks/{Uri.EscapeDataString(packCode)}/conceptrelations",request,token); await EnsureSuccessWithDetailAsync(r,token); }
+        public async Task DeleteLegalDecisionDomainPackConceptRelationAsync(string packCode,string sourceConceptCode,string targetConceptCode,string relationTypeCode,CancellationToken token=default)
+        { using var r=await _httpClient.DeleteAsync($"api/legal_decision/domainpacks/{Uri.EscapeDataString(packCode)}/conceptrelations/{Uri.EscapeDataString(sourceConceptCode)}/{Uri.EscapeDataString(targetConceptCode)}/{Uri.EscapeDataString(relationTypeCode)}",token); await EnsureSuccessWithDetailAsync(r,token); }
+        public async Task SaveLegalDecisionDomainPackOutcomeCandidateAsync(string packCode,Legal.Application.Features.Intelligence.Decision.SaveDomainPackOutcomeCandidateRequest request,CancellationToken token=default)
+        { using var r=await _httpClient.PutAsJsonAsync($"api/legal_decision/domainpacks/{Uri.EscapeDataString(packCode)}/outcomecandidates",request,token); await EnsureSuccessWithDetailAsync(r,token); }
+        public async Task DeleteLegalDecisionDomainPackOutcomeCandidateAsync(string packCode,string outcomeCode,CancellationToken token=default)
+        { using var r=await _httpClient.DeleteAsync($"api/legal_decision/domainpacks/{Uri.EscapeDataString(packCode)}/outcomecandidates/{Uri.EscapeDataString(outcomeCode)}",token); await EnsureSuccessWithDetailAsync(r,token); }
         public Task<Legal.Application.Features.Intelligence.Decision.DecisionMatterDto?> GetLegalDecisionMatterAsync(Guid matterId,CancellationToken token=default)=>GetFromJsonWithTransientThrottleRetryAsync<Legal.Application.Features.Intelligence.Decision.DecisionMatterDto>($"api/legal_decision/matters/{matterId}",token);
 
         // ── Judz Matter Lifecycle (operational stage context) ──────────────────

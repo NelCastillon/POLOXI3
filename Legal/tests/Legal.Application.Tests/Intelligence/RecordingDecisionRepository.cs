@@ -432,4 +432,16 @@ internal sealed class RecordingDecisionRepository : ILegalDecisionRepository
 
     public Task DeleteDomainPackConceptRelationAsync(Guid tenantId, Guid actorUserId, string packCode, string sourceConceptCode, string targetConceptCode, string relationTypeCode, CancellationToken cancellationToken = default)
         => Task.CompletedTask;
+
+    public Task SaveDomainPackOutcomeCandidateAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackOutcomeCandidateRequest request, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
+
+    public Task DeleteDomainPackOutcomeCandidateAsync(Guid tenantId, Guid actorUserId, string packCode, string outcomeCode, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
+
+    public Task SaveDomainPackAsync(Guid tenantId, Guid actorUserId, SaveDomainPackRequest request, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
+
+    public Task DeleteDomainPackAsync(Guid tenantId, Guid actorUserId, string packCode, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
 }

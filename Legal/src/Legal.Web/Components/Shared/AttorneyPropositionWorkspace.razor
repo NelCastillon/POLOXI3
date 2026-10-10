@@ -198,7 +198,9 @@
                         @if (i < col.Nodes.Count)
                         {
                             var n = col.Nodes[i];
-                            <div class="apw-node @n.Cls">
+                            <div class="apw-node @NodeCssFor(n)"
+                                 @onmouseover="() => OnNodeHover(n.NodeId)"
+                                 @onmouseout="() => OnNodeHover(null)">
                                 <div class="apw-node-top">
                                     <span class="apw-node-lvl">@n.Lvl</span>
                                     @if (n.Score is { } sc)
@@ -207,6 +209,14 @@
                                     }
                                 </div>
                                 <div class="apw-node-name">@n.Name</div>
+                                @if (!string.IsNullOrWhiteSpace(n.ParentName))
+                                {
+                                    <div class="apw-node-parent" title="This @n.Lvl belongs to its parent in the level to the left">
+                                        <i class="bi bi-arrow-return-right"></i>
+                                        <span class="apw-node-parent-lbl">under</span>
+                                        <span class="apw-node-parent-name">@n.ParentName</span>
+                                    </div>
+                                }
                                 <div class="apw-node-sub">@n.Sub</div>
                             </div>
                         }
@@ -303,7 +313,19 @@
     public sealed record WorkspaceApplyResult(decimal FinalScore, decimal Delta, bool Advisory, string? Summary);
 
     // Tree view-models — each column renders nodes interleaved with insertion rails.
-    public sealed record TreeNode(string Lvl, string Name, string Sub, decimal? Score, string Cls);
+    // NodeId/ParentId/ParentName/LineageIndex are additive and optional: they let the three columns
+    // (L1/L2/L3) be visually linked — a parent reference label on each child, a shared lineage color per
+    // L1 family, and hover highlighting of a node's ancestor + descendant chain. They default to no-link
+    // values so the static sample columns keep rendering unchanged.
+    public sealed record TreeNode(string Lvl, string Name, string Sub, decimal? Score, string Cls)
+    {
+        public Guid? NodeId { get; init; }
+        public Guid? ParentId { get; init; }
+        public string? ParentName { get; init; }
+        // Stable 0-based index of this node's root L1 family, used to pick a shared lineage accent color.
+        // -1 when unknown (sample data) so no accent is applied.
+        public int LineageIndex { get; init; } = -1;
+    }
     public sealed record TreeColumn(int Level, string Head, IReadOnlyList<TreeNode> Nodes);
 
     // When the host page supplies live decision-hierarchy columns, render those instead of the
@@ -313,6 +335,82 @@
 
     private IReadOnlyList<TreeColumn> EffectiveTreeColumns =>
         TreeColumnsOverride is { Count: > 0 } ? TreeColumnsOverride : TreeColumns;
+
+    // ── Lineage linking (hover highlight of a node's ancestor + descendant chain) ──────────────────
+    // The node the user is hovering. While set, every node computes whether it is on that node's lineage
+    // (itself, its ancestors, or its descendants) so related nodes stay bright and unrelated ones dim.
+    private Guid? _hoverNodeId;
+
+    // Flat index of every tree node by id, so ancestor/descendant walks are O(depth) without re-scanning.
+    private Dictionary<Guid, TreeNode> AllTreeNodesById
+    {
+        get
+        {
+            var map = new Dictionary<Guid, TreeNode>();
+            foreach (var col in EffectiveTreeColumns)
+                foreach (var n in col.Nodes)
+                    if (n.NodeId is { } id) map[id] = n;
+            return map;
+        }
+    }
+
+    private void OnNodeHover(Guid? nodeId) => _hoverNodeId = nodeId;
+
+    // True when no node is hovered (neutral state) OR the given node is on the hovered node's lineage
+    // (the node itself, one of its ancestors, or one of its descendants). Drives the dim/bright classes.
+    private bool IsOnHoveredLineage(TreeNode node)
+    {
+        if (_hoverNodeId is not { } hoverId || node.NodeId is null) return true;
+        if (node.NodeId == hoverId) return true;
+        var byId = AllTreeNodesById;
+        if (!byId.TryGetValue(hoverId, out var hovered)) return true;
+        // Ancestor chain of the hovered node (does the hovered node descend from this node?).
+        for (var cur = hovered; cur?.ParentId is { } pid; )
+        {
+            if (pid == node.NodeId) return true;
+            if (!byId.TryGetValue(pid, out cur)) break;
+        }
+        // Ancestor chain of THIS node (is the hovered node one of this node's ancestors?).
+        for (var cur = node; cur?.ParentId is { } pid; )
+        {
+            if (pid == hoverId) return true;
+            if (!byId.TryGetValue(pid, out cur)) break;
+        }
+        return false;
+    }
+
+    // True only for the exact ancestor chain of the hovered node (used for a stronger "lineage link" ring).
+    private bool IsHoverAncestor(TreeNode node)
+    {
+        if (_hoverNodeId is not { } hoverId || node.NodeId is null || node.NodeId == hoverId) return false;
+        var byId = AllTreeNodesById;
+        if (!byId.TryGetValue(hoverId, out var hovered)) return false;
+        for (var cur = hovered; cur?.ParentId is { } pid; )
+        {
+            if (pid == node.NodeId) return true;
+            if (!byId.TryGetValue(pid, out cur)) break;
+        }
+        return false;
+    }
+
+    // CSS class bundle for a tree node combining its base class, the shared lineage-color accent, and the
+    // hover dim/highlight state. Scoped CSS consumes apw-lin-<n>, apw-node--dim, apw-node--lit, apw-node--anc.
+    private string NodeCssFor(TreeNode node)
+    {
+        var cls = node.Cls;
+        if (node.LineageIndex >= 0) cls += $" apw-lin-{node.LineageIndex % 6}";
+        if (_hoverNodeId is not null && node.NodeId is not null)
+        {
+            if (IsOnHoveredLineage(node))
+            {
+                cls += node.NodeId == _hoverNodeId ? " apw-node--lit apw-node--hoversrc"
+                     : IsHoverAncestor(node) ? " apw-node--lit apw-node--anc"
+                     : " apw-node--lit";
+            }
+            else cls += " apw-node--dim";
+        }
+        return cls;
+    }
 
     private static readonly IReadOnlyList<TreeColumn> TreeColumns =
     [

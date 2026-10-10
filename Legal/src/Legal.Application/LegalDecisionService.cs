@@ -47,6 +47,12 @@ public sealed partial class LegalDecisionService(
     // universe + a candidate×branch competition matrix, matching the Wide/semantic pipeline. Selected
     // only when the Decision.Discovery.BranchFirst.Enabled feature flag is on; v1 stays the default.
     private const string DiscoveryPromptCodeV2 = "DECISION_DISCOVERY_V2";
+    // Domain Pack mode discovery template (migration 0406 → V2 in migration 0408). Stores ONLY the Domain
+    // Pack mode instructions; the exact original discovery prompt (DECISION_DISCOVERY / DECISION_DISCOVERY_V2)
+    // is loaded at runtime and referenced unchanged, so the two copies never diverge. V2 adds the inline,
+    // advisory-only semantic outcome-to-canonical (mappedOutcomeCodes[]) mapping instruction. Used only when
+    // DiscoveryMode == DomainPack.
+    private const string DiscoveryPromptCodeDomainPack = "DECISION_DISCOVERY_DOMAIN_PACK_V2";
     private const string AnswerPromptCode = "DECISION_ANSWER";
     private const string GraphPromptCode = "DECISION_GRAPH";
     private const string VerifyPromptCode = "DECISION_VERIFY";
@@ -364,6 +370,160 @@ public sealed partial class LegalDecisionService(
             + "when it is decision-material, not that every concept must become a branch.";
     }
 
+    // Domain Pack MODE ONLY (DiscoveryMode == DomainPack). Serializes the COMPLETE active Domain Pack
+    // configuration — Dimensions, EvidenceTypes, VerificationProfiles, MatterTypes, OutcomeCandidates, and
+    // the applicable Concepts/Relations — as the SELECTED_DOMAIN_PACK block referenced by the overlay. This
+    // is additive and never used by the original (unchecked) discovery path, so the original prompt contract
+    // is untouched. The block is advisory configuration: numeric/scoring interpretation and candidate
+    // competition remain owned by POLOXI Core, and a hard constraint is a configured dependency for
+    // validation/engine evaluation — NOT an instruction for the model to exclude a candidate.
+    internal static string BuildDomainPackModeConfiguration(
+        DecisionDomainPackDto domainPack,
+        IReadOnlyCollection<DecisionDomainConceptDto> concepts,
+        IReadOnlyCollection<DecisionDomainConceptRelationDto> relations,
+        string? matterTypeCode)
+    {
+        var snapshot = JsonSerializer.Serialize(new
+        {
+            domainPack.PackCode,
+            domainPack.PracticeAreaCode,
+            domainPack.Name,
+            Policy = "ADVISORY_CONFIGURATION_NOT_EVIDENCE_DYNAMIC_HIERARCHY_PRIMARY",
+            ResolvedMatterTypeCode = matterTypeCode,
+            Dimensions = domainPack.Dimensions.Select(dimension => new
+            {
+                dimension.DimensionCode,
+                dimension.Name,
+                dimension.Description,
+            }),
+            EvidenceTypes = domainPack.EvidenceTypes.Select(evidenceType => new
+            {
+                evidenceType.EvidenceTypeCode,
+                evidenceType.Name,
+                evidenceType.DimensionCode,
+                evidenceType.Description,
+            }),
+            VerificationProfiles = domainPack.VerificationProfiles.Select(profile => new
+            {
+                profile.ProfileCode,
+                profile.Name,
+                profile.EvidenceTypeCode,
+                profile.Description,
+            }),
+            MatterTypes = domainPack.MatterTypes.Select(matterType => new
+            {
+                matterType.MatterTypeCode,
+                matterType.Name,
+                matterType.Description,
+            }),
+            OutcomeCandidates = domainPack.OutcomeCandidates
+                .OrderBy(candidate => candidate.SortOrder)
+                .Select(candidate => new
+                {
+                    candidate.OutcomeCode,
+                    candidate.Name,
+                    candidate.Description,
+                    candidate.RoleCode,
+                    candidate.RequiresVerification,
+                    candidate.MatterTypeCode,
+                }),
+            Concepts = concepts.Select(concept => new
+            {
+                concept.ConceptCode,
+                concept.DimensionCode,
+                concept.Name,
+                concept.Description,
+                concept.ConceptKindCode,
+                concept.SourceClassCode,
+                concept.VerificationProfileCode,
+                concept.IsRequiredCoverage,
+                concept.IsFallbackEligible,
+            }),
+            Relations = relations.Select(relation => new
+            {
+                relation.SourceConceptCode,
+                relation.TargetConceptCode,
+                relation.RelationTypeCode,
+                relation.ConstraintCode,
+                relation.Description,
+                relation.IsHardConstraint,
+            }),
+        });
+
+        return "\n\n──────── SELECTED_DOMAIN_PACK (database-backed active configuration, advisory) ────────\n"
+            + snapshot
+            + "\n\nInterpretation rules for SELECTED_DOMAIN_PACK:\n"
+            + "- This is configuration, NOT evidence about this matter and NOT a fixed hierarchy to copy. "
+            + "Use Dimensions as coverage guidance for independent evaluation roots, decomposing each relevant "
+            + "root into L2, L3, and deeper levels (L1 → L2 → L3 → … → Ln) whenever a child materially changes "
+            + "interpretation, a candidate assessment, a discriminator, an evidence need, a verification "
+            + "obligation, a decision dependency, or a material uncertainty.\n"
+            + "- Preserve the supplied OutcomeCandidates' identities, names, roles, and verification requirements; "
+            + "do not remove a configured candidate because support is incomplete, and do not treat preservation "
+            + "as eligibility, support, probability, or selection.\n"
+            + "- EvidenceTypes are DEFAULT L2 children of their parent Dimension's L1 root (each EvidenceType.DimensionCode "
+            + "names the L1 root it hangs under: e.g. MEDICAL_RECORDS \u2192 L1 Injury, PHOTOS_VIDEO \u2192 L1 Liability, "
+            + "EXPERT_REPORTS \u2192 L1 Causation). Seed them as the default L2 evidence nodes under their own dimension, "
+            + "not under a single flat Evidence root. These seeds are advisory: keep them, but still attach any "
+            + "matter-specific evidence that is not in this list, and decompose each into L3+ when a child materially "
+            + "changes interpretation, verification, or a decision dependency.\n"
+            + "- Concepts are DEFAULT factor nodes under their parent Dimension's L1 root (each Concept.DimensionCode "
+            + "names the L1 root; a FACTOR-kind concept such as COMPARATIVE_FAULT under LIABILITY is an L2 scoring "
+            + "sub-issue, a sibling LAYER to the evidence L2s but a distinct ROLE: Concepts are the determining "
+            + "factors, EvidenceTypes are what proves them). Seed them as advisory factor L2s; the dynamic "
+            + "hierarchy stays primary, so still add matter-specific factors and deeper L3+ levels. A Concept is "
+            + "never an OutcomeCandidate.\n"
+            + "- Relations are dependency EDGES, not tree nodes: SourceConceptCode \u2192 TargetConceptCode with "
+            + "RelationTypeCode wire a factor to the evidence/other factor it depends on (e.g. COMPARATIVE_FAULT "
+            + "REQUIRES FAULT_EVIDENCE). Use them to connect the L1/L2 nodes and drive which evidence a factor "
+            + "needs; do not place them at any level.\n"
+            + "- VerificationProfiles are node METADATA, not a level: each ProfileCode keyed by EvidenceTypeCode "
+            + "(or a Concept's VerificationProfileCode) is the verification obligation/requirement attached to that "
+            + "evidence or factor node, not a sibling node.\n"
+            + "- ResolvedMatterTypeCode is the RUN SCOPE selector (above the tree): it scopes which OutcomeCandidates "
+            + "and configuration apply for this matter; it is not a hierarchy node.\n"
+            + "- Any numeric support values required by the original schema are advisory model proposals. POLOXI "
+            + "Core owns their authoritative interpretation, aggregation, competition, and runtime state.\n"
+            + "- L3+ MATERIALITY GATE (deeper levels are LLM-generated, not DB-seeded): create a child L(n+1) ONLY "
+            + "when it materially changes at least one of \u2014 an interpretation, a candidate assessment, a "
+            + "discriminator between candidates, an evidence need, a verification obligation, a decision "
+            + "dependency, or a material uncertainty. If a proposed child does none of these, do NOT add it: "
+            + "fold it into its parent instead. Prefer the shallowest tree that still captures every material "
+            + "distinction \u2014 depth and breadth are costs, not goals. Do not restate a parent, split a node merely "
+            + "for symmetry, mirror the same sub-structure under unrelated branches, or expand a branch that the "
+            + "matter facts do not activate. Every node must be reconstructable from its parent plus the matter "
+            + "facts so the same matter yields a stable hierarchy.\n"
+            + "- IsHardConstraint describes a configured dependency for validation and engine evaluation. It is "
+            + "NOT a conclusion that a candidate is excluded; do not exclude or eliminate a candidate from it.";
+    }
+
+    // Deterministic snapshot hash of the EXACT Domain Pack configuration that was assembled into the
+    // discovery prompt (pack code + applicable concepts + applicable relations). Recorded with the
+    // execution so a Domain Pack run is fully reproducible/auditable. Advisory metadata only.
+    private static string ComputeDomainPackConfigHash(
+        DecisionDomainPackDto domainPack,
+        IReadOnlyCollection<DecisionDomainConceptDto> concepts,
+        IReadOnlyCollection<DecisionDomainConceptRelationDto> relations)
+    {
+        var snapshot = JsonSerializer.Serialize(new
+        {
+            domainPack.PackCode,
+            domainPack.DecisionDomainPackId,
+            Concepts = concepts
+                .OrderBy(concept => concept.ConceptCode, StringComparer.Ordinal)
+                .Select(concept => new { concept.ConceptCode, concept.DimensionCode, concept.ConceptKindCode, concept.VerificationProfileCode, concept.IsRequiredCoverage, concept.IsFallbackEligible, concept.VersionNumber }),
+            Relations = relations
+                .OrderBy(relation => relation.SourceConceptCode, StringComparer.Ordinal)
+                .ThenBy(relation => relation.TargetConceptCode, StringComparer.Ordinal)
+                .Select(relation => new { relation.SourceConceptCode, relation.TargetConceptCode, relation.RelationTypeCode, relation.ConstraintCode, relation.IsHardConstraint }),
+            OutcomeCandidates = domainPack.OutcomeCandidates
+                .OrderBy(candidate => candidate.SortOrder)
+                .Select(candidate => new { candidate.OutcomeCode, candidate.RoleCode, candidate.RequiresVerification, candidate.RequiresFactualPredicate }),
+        });
+        var bytes = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(snapshot));
+        return Convert.ToHexString(bytes);
+    }
+
     private static string BuildMatterContextProposalContext(LegalMatterContextResult context)
     {
         var snapshot = JsonSerializer.Serialize(new
@@ -512,6 +672,40 @@ public sealed partial class LegalDecisionService(
     public Task<IReadOnlyCollection<DecisionDomainPackDto>> GetDomainPacksAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => repository.GetDomainPacksAsync(tenantId, cancellationToken);
 
+    // ── Domain Pack CRUD passthroughs (tenant-scoped; global seed rows immutable) ──
+    public Task SaveDomainPackAsync(Guid tenantId, Guid actorUserId, SaveDomainPackRequest request, CancellationToken cancellationToken = default)
+        => repository.SaveDomainPackAsync(tenantId, actorUserId, request, cancellationToken);
+    public Task DeleteDomainPackAsync(Guid tenantId, Guid actorUserId, string packCode, CancellationToken cancellationToken = default)
+        => repository.DeleteDomainPackAsync(tenantId, actorUserId, packCode, cancellationToken);
+    public Task SaveDomainPackDimensionAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackDimensionRequest request, CancellationToken cancellationToken = default)
+        => repository.SaveDomainPackDimensionAsync(tenantId, actorUserId, packCode, request, cancellationToken);
+    public Task DeleteDomainPackDimensionAsync(Guid tenantId, Guid actorUserId, string packCode, string dimensionCode, CancellationToken cancellationToken = default)
+        => repository.DeleteDomainPackDimensionAsync(tenantId, actorUserId, packCode, dimensionCode, cancellationToken);
+    public Task SaveDomainPackEvidenceTypeAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackEvidenceTypeRequest request, CancellationToken cancellationToken = default)
+        => repository.SaveDomainPackEvidenceTypeAsync(tenantId, actorUserId, packCode, request, cancellationToken);
+    public Task DeleteDomainPackEvidenceTypeAsync(Guid tenantId, Guid actorUserId, string packCode, string evidenceTypeCode, CancellationToken cancellationToken = default)
+        => repository.DeleteDomainPackEvidenceTypeAsync(tenantId, actorUserId, packCode, evidenceTypeCode, cancellationToken);
+    public Task SaveDomainPackVerificationProfileAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackVerificationProfileRequest request, CancellationToken cancellationToken = default)
+        => repository.SaveDomainPackVerificationProfileAsync(tenantId, actorUserId, packCode, request, cancellationToken);
+    public Task DeleteDomainPackVerificationProfileAsync(Guid tenantId, Guid actorUserId, string packCode, string profileCode, CancellationToken cancellationToken = default)
+        => repository.DeleteDomainPackVerificationProfileAsync(tenantId, actorUserId, packCode, profileCode, cancellationToken);
+    public Task SaveDomainPackMatterTypeAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackMatterTypeRequest request, CancellationToken cancellationToken = default)
+        => repository.SaveDomainPackMatterTypeAsync(tenantId, actorUserId, packCode, request, cancellationToken);
+    public Task DeleteDomainPackMatterTypeAsync(Guid tenantId, Guid actorUserId, string packCode, string matterTypeCode, CancellationToken cancellationToken = default)
+        => repository.DeleteDomainPackMatterTypeAsync(tenantId, actorUserId, packCode, matterTypeCode, cancellationToken);
+    public Task SaveDomainPackConceptAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackConceptRequest request, CancellationToken cancellationToken = default)
+        => repository.SaveDomainPackConceptAsync(tenantId, actorUserId, packCode, request, cancellationToken);
+    public Task DeleteDomainPackConceptAsync(Guid tenantId, Guid actorUserId, string packCode, string conceptCode, CancellationToken cancellationToken = default)
+        => repository.DeleteDomainPackConceptAsync(tenantId, actorUserId, packCode, conceptCode, cancellationToken);
+    public Task SaveDomainPackConceptRelationAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackConceptRelationRequest request, CancellationToken cancellationToken = default)
+        => repository.SaveDomainPackConceptRelationAsync(tenantId, actorUserId, packCode, request, cancellationToken);
+    public Task DeleteDomainPackConceptRelationAsync(Guid tenantId, Guid actorUserId, string packCode, string sourceConceptCode, string targetConceptCode, string relationTypeCode, CancellationToken cancellationToken = default)
+        => repository.DeleteDomainPackConceptRelationAsync(tenantId, actorUserId, packCode, sourceConceptCode, targetConceptCode, relationTypeCode, cancellationToken);
+    public Task SaveDomainPackOutcomeCandidateAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackOutcomeCandidateRequest request, CancellationToken cancellationToken = default)
+        => repository.SaveDomainPackOutcomeCandidateAsync(tenantId, actorUserId, packCode, request, cancellationToken);
+    public Task DeleteDomainPackOutcomeCandidateAsync(Guid tenantId, Guid actorUserId, string packCode, string outcomeCode, CancellationToken cancellationToken = default)
+        => repository.DeleteDomainPackOutcomeCandidateAsync(tenantId, actorUserId, packCode, outcomeCode, cancellationToken);
+
     // ── Personal Injury (Domain Pack: PERSONAL_INJURY) support ──
     public Task<PersonalInjuryOptionsDto> GetPersonalInjuryOptionsAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => repository.GetPersonalInjuryOptionsAsync(tenantId, cancellationToken);
@@ -569,6 +763,9 @@ public sealed partial class LegalDecisionService(
             DomainPackCode = string.IsNullOrWhiteSpace(matter.DomainPackCode)
                 ? DecisionDomainPackCodes.PersonalInjury
                 : matter.DomainPackCode,
+            DiscoveryMode = context.UseDomainPack
+                ? DecisionDiscoveryMode.DomainPack
+                : DecisionDiscoveryMode.Original,
             PersonalInjuryProfile = BuildPersonalInjuryProfileSnapshot(profile)
         };
 
@@ -857,12 +1054,14 @@ public sealed partial class LegalDecisionService(
         DecisionDomainPackDto? domainPack = null;
         IReadOnlyList<DecisionDomainConceptDto> applicableDomainConcepts = [];
         IReadOnlyList<DecisionDomainConceptRelationDto> applicableDomainRelations = [];
+        string? domainMatterTypeCode = null;
         if (!string.IsNullOrWhiteSpace(request.DomainPackCode))
         {
             domainPack = await repository.GetDomainPackAsync(request.TenantId, request.DomainPackCode, cancellationToken);
             DecisionMatterDto? domainMatter = null;
             if (request.MatterId is { } domainMatterId)
                 domainMatter = await repository.GetMatterAsync(request.TenantId, domainMatterId, cancellationToken);
+            domainMatterTypeCode = domainMatter?.MatterTypeCode;
 
             applicableDomainConcepts = (domainPack?.Concepts ?? [])
                 .Where(concept => DomainApplicabilityMatches(concept.JurisdictionCode, request.Jurisdiction)
@@ -965,17 +1164,61 @@ public sealed partial class LegalDecisionService(
         var discoveryUser = discoveryPrompt.UserPromptTemplate
             .Replace("{{QUERY}}", effectiveQuery)
             .Replace("{{CONTEXT}}", contextCode);
+        // Domain Pack mode: assemble a SEPARATE discovery prompt from the Domain Pack mode instructions
+        // PLUS the exact stored original prompt text (referenced above, never duplicated). The selected pack
+        // must resolve to a valid authorized record — otherwise fail clearly, no silent fallback. The
+        // platform authority + output schema (SystemPrompt / OutputSchemaJson) and the whole downstream
+        // proposal-validation / POLOXI path stay unchanged.
+        string? domainPackTemplateCode = null;
+        string? domainPackConfigHash = null;
+        if (request.DiscoveryMode == DecisionDiscoveryMode.DomainPack)
+        {
+            if (domainPack is null)
+                throw new InvalidOperationException(
+                    $"Domain Pack discovery mode was requested but no valid Domain Pack could be resolved for code '{request.DomainPackCode}'. Select an authorized Domain Pack or use the original discovery mode.");
+
+            var domainPackPrompt = await repository.GetPromptAsync(DiscoveryPromptCodeDomainPack, cancellationToken)
+                ?? throw new InvalidOperationException($"The '{DiscoveryPromptCodeDomainPack}' decision prompt is not configured in POLOXI.Legal_DecisionPrompt.");
+            domainPackTemplateCode = domainPackPrompt.PromptCode;
+
+            // Order: Domain Pack mode instructions → exact original prompt text (already substituted above).
+            // The selected pack's structured configuration is appended below via the existing guardrail builder.
+            discoveryUser = domainPackPrompt.UserPromptTemplate
+                    .Replace("{{QUERY}}", effectiveQuery)
+                    .Replace("{{CONTEXT}}", contextCode)
+                + "\n\n──────── ORIGINAL_PROMPT (exact stored text, unchanged) ────────\n"
+                + discoveryUser
+                // Domain Pack mode ONLY: serialize the COMPLETE active pack configuration (Dimensions,
+                // EvidenceTypes, VerificationProfiles, MatterTypes, OutcomeCandidates, Concepts, Relations)
+                // as SELECTED_DOMAIN_PACK. This never runs in the original (unchecked) path.
+                + BuildDomainPackModeConfiguration(domainPack, applicableDomainConcepts, applicableDomainRelations, domainMatterTypeCode);
+        }
         if (domainPack is not null && applicableDomainConcepts.Count > 0)
             discoveryUser += BuildDomainGuardrailProposalContext(domainPack, applicableDomainConcepts, applicableDomainRelations);
         if (matterContext.Items.Count > 0)
             discoveryUser += BuildMatterContextProposalContext(matterContext);
         if (request.PersonalInjuryProfile is { } piProfile)
             discoveryUser += BuildPersonalInjuryProfileProposalContext(piProfile);
+        if (request.DiscoveryMode == DecisionDiscoveryMode.DomainPack)
+            domainPackConfigHash = ComputeDomainPackConfigHash(domainPack!, applicableDomainConcepts, applicableDomainRelations);
         var discovery = await aiProvider.GenerateAsync(
             new DecisionAiRequest(route, discoveryPromptCode, discoveryPrompt.SystemPrompt, discoveryUser, discoveryPrompt.OutputSchemaJson, request.CorrelationId),
             cancellationToken);
         var llmCalls = 1;
-        Record("CANDIDATES_PROPOSED", "DISCOVERY", new { discovery.InputTokenCount, discovery.OutputTokenCount, branchFirst = branchFirstDiscovery, promptCode = discoveryPromptCode, stageCode = discoveryPrompt.StageCode });
+        Record("CANDIDATES_PROPOSED", "DISCOVERY", new
+        {
+            discovery.InputTokenCount,
+            discovery.OutputTokenCount,
+            branchFirst = branchFirstDiscovery,
+            promptCode = discoveryPromptCode,
+            stageCode = discoveryPrompt.StageCode,
+            discoveryMode = request.DiscoveryMode.ToString(),
+            originalPromptCode = discoveryPromptCode,
+            domainPackTemplateCode,
+            domainPackCode = domainPack?.PackCode,
+            domainPackId = request.DiscoveryMode == DecisionDiscoveryMode.DomainPack ? domainPack?.DecisionDomainPackId : null,
+            domainPackConfigHash,
+        });
 
         // Branch-first (v2) emits the /legal/search Wide semantic shape (semanticRoots + scoreless global
         // candidates) and is adapted into the same ProposedCandidate shape so everything downstream is
@@ -990,6 +1233,41 @@ public sealed partial class LegalDecisionService(
         var proposalEnrichment = branchFirstDiscovery
             ? AdaptSemanticEnrichment(discovery.StructuredOutputJson ?? discovery.Content)
             : SemanticProposalEnrichment.Empty;
+
+        // ── Advisory outcome→canonical mapping reconciliation (Domain Pack mode only) ──────────────
+        // DECISION_DISCOVERY_DOMAIN_PACK_V2 (migration 0408) asks the LLM to tag each proposed outcome
+        // with mappedOutcomeCodes[] drawn from the resolved pack's canonical OutcomeCandidates. Here we
+        // deterministically RECONCILE those tags against the pack vocabulary: keep only codes that exist
+        // in the pack (dropping any invented/unknown/abbreviated code the model may have emitted), and
+        // record which outcomes stayed unmapped. This is ADVISORY / presentation + routing ONLY — it does
+        // not eliminate, select, score, rank, re-order, or gate any candidate, and POLOXI Core still owns
+        // all competition, normalization, and the canonical verification gates. Fail-soft: when not in
+        // Domain Pack mode, no pack resolved, or no codes mapped, every candidate is preserved unchanged.
+        if (request.DiscoveryMode == DecisionDiscoveryMode.DomainPack && domainPack is not null
+            && domainPack.OutcomeCandidates.Count > 0 && proposal.Count > 0)
+        {
+            var reconciliation = ReconcileAdvisoryOutcomeMapping(proposal, domainPack.OutcomeCandidates);
+            proposal = reconciliation.Proposal;
+            // DEFERRED EMBEDDING FALLBACK (future work): today mapping is produced solely by the inline LLM
+            // semantic tagging in DECISION_DISCOVERY_DOMAIN_PACK_V2. If telemetry shows a sustained, material
+            // share of unmappedCandidateCount (outcomes the model leaves unmapped despite a plausible canonical
+            // fit), introduce an advisory embedding-similarity fallback here: embed each unmapped outcome's
+            // DisplayName/Description and the pack OutcomeCandidate Name/Description, and attach the nearest
+            // canonical code above a tuned cosine threshold — still advisory-only, never gating/scoring. Not
+            // built yet because measured unmapped volume does not justify the added cost/latency.
+            //
+            // Telemetry only: surface unmapped outcomes (first-class candidates that no canonical code fit,
+            // i.e. candidates for a future pack OutcomeCandidate) and any model-invented codes we dropped.
+            Record("OUTCOME_CANONICAL_MAPPING", "DISCOVERY", new
+            {
+                domainPackCode = domainPack.PackCode,
+                mappedCandidateCount = proposal.Count(candidate => candidate.MappedOutcomeCodes.Count > 0),
+                unmappedCandidateCount = reconciliation.UnmappedOutcomes.Count,
+                unmappedOutcomes = reconciliation.UnmappedOutcomes.Take(25).ToArray(),
+                droppedInvalidCodeCount = reconciliation.DroppedInvalidCodes.Count,
+                droppedInvalidCodes = reconciliation.DroppedInvalidCodes.Distinct(StringComparer.OrdinalIgnoreCase).Take(25).ToArray(),
+            });
+        }
 
         // ── Proposal Integrity Gate V2 (shadow-default, disposition-driven targeted recovery) ──────
         // The LLM only PROPOSES a semantic representation; POLOXI decides whether that representation is
@@ -4400,7 +4678,10 @@ public sealed partial class LegalDecisionService(
                     GetString(c, "displayName"), GetString(c, "outcome"),
                     GetNumber(c, "legalSupport"), GetNumber(c, "factSupport"), GetNumber(c, "evidenceSupport"),
                     GetNumber(c, "authoritySupport"), GetNumber(c, "verification"),
-                    GetNumber(c, "discrimination"), GetNumber(c, "rankingImpact"), branches));
+                    GetNumber(c, "discrimination"), GetNumber(c, "rankingImpact"), branches)
+                {
+                    MappedOutcomeCodes = ParseMappedOutcomeCodes(c),
+                });
                 if (results.Count >= maxCandidates)
                     break;
             }
@@ -4464,6 +4745,7 @@ public sealed partial class LegalDecisionService(
                         SemanticCandidateId = GetNullableString(c, "candidateId"),
                         ProposedScore = GetNullableNumber(c, "score") is { } s ? Math.Clamp(s, 0d, 1d) : null,
                         OriginatingOutcomeNodeIds = ParseOutcomeNodeIdArray(c),
+                        MappedOutcomeCodes = ParseMappedOutcomeCodes(c),
                     });
                     if (results.Count >= maxCandidates)
                         break;
@@ -4495,6 +4777,71 @@ public sealed partial class LegalDecisionService(
                 ids.Add(trimmed);
         }
         return ids;
+    }
+
+    // Domain Pack mode only (DECISION_DISCOVERY_DOMAIN_PACK_V2, migration 0408): fail-soft reader for the
+    // advisory semantic outcome-to-canonical mapping the LLM emits per candidate. Returns the distinct,
+    // trimmed, non-empty mappedOutcomeCodes[] strings exactly as proposed (canonical-vocabulary validation
+    // is applied later, advisory-only, against the resolved pack). A missing/empty/non-array field yields
+    // an empty list so the candidate is preserved unchanged.
+    private static IReadOnlyList<string> ParseMappedOutcomeCodes(JsonElement candidate)
+    {
+        if (!candidate.TryGetProperty("mappedOutcomeCodes", out var arr) || arr.ValueKind != JsonValueKind.Array)
+            return [];
+        var codes = new List<string>();
+        foreach (var item in arr.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.String)
+                continue;
+            var value = item.GetString();
+            if (string.IsNullOrWhiteSpace(value))
+                continue;
+            var trimmed = value.Trim();
+            if (!codes.Contains(trimmed, StringComparer.OrdinalIgnoreCase))
+                codes.Add(trimmed);
+        }
+        return codes;
+    }
+
+    // Advisory outcome→canonical mapping reconciliation result: the candidate list with sanitized mappings
+    // plus the telemetry-only diagnostics (outcomes no canonical code fit, model-invented codes dropped).
+    internal sealed record OutcomeMappingReconciliation(
+        IReadOnlyList<ProposedCandidate> Proposal,
+        IReadOnlyList<string> UnmappedOutcomes,
+        IReadOnlyList<string> DroppedInvalidCodes);
+
+    // Pure, deterministic reconciliation of the LLM's advisory mappedOutcomeCodes[] against the resolved
+    // pack vocabulary. Keeps ONLY codes that exist in the pack (dropping invented/unknown/abbreviated
+    // codes), records which outcomes stayed unmapped, and preserves every candidate unchanged apart from
+    // the sanitized advisory mapping. This is advisory/presentation + routing ONLY: it never eliminates,
+    // selects, scores, ranks, re-orders, or gates any candidate — POLOXI Core still owns all competition,
+    // normalization, and the canonical verification gates (C5 asserted-historical, C9 factual-predicate).
+    internal static OutcomeMappingReconciliation ReconcileAdvisoryOutcomeMapping(
+        IReadOnlyList<ProposedCandidate> proposal,
+        IReadOnlyCollection<DecisionDomainPackOutcomeCandidateDto> outcomeCandidates)
+    {
+        var canonicalCodes = outcomeCandidates
+            .Select(candidate => candidate.OutcomeCode)
+            .Where(code => !string.IsNullOrWhiteSpace(code))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var reconciled = new List<ProposedCandidate>(proposal.Count);
+        var unmappedOutcomes = new List<string>();
+        var droppedCodes = new List<string>();
+        foreach (var candidate in proposal)
+        {
+            var kept = candidate.MappedOutcomeCodes
+                .Where(code => canonicalCodes.Contains(code))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            droppedCodes.AddRange(candidate.MappedOutcomeCodes.Where(code => !canonicalCodes.Contains(code)));
+            if (kept.Length == 0)
+                unmappedOutcomes.Add(candidate.DisplayName);
+            // Preserve the candidate unchanged except for the sanitized advisory mapping.
+            reconciled.Add(kept.Length == candidate.MappedOutcomeCodes.Count
+                ? candidate
+                : candidate with { MappedOutcomeCodes = kept });
+        }
+        return new OutcomeMappingReconciliation(reconciled, unmappedOutcomes, droppedCodes);
     }
 
     // R1 Outcome Proposal Hierarchy parser (§2 DISCOVERY): reads the optional outcomeProposalHierarchy
@@ -6169,6 +6516,14 @@ public sealed partial class LegalDecisionService(
         // R1 Outcome Proposal Hierarchy: the outcome-node codes (e.g. "O1", "O1.1") this candidate was
         // normalized from. DISCOVERY provenance ONLY; never contributes evidentiary support to scoring.
         public IReadOnlyList<string> OriginatingOutcomeNodeIds { get; init; } = [];
+
+        // Domain Pack mode only (DECISION_DISCOVERY_DOMAIN_PACK_V2, migration 0408): the canonical
+        // OutcomeCandidate codes (e.g. "C1", "C7") the LLM semantically mapped this proposed outcome to,
+        // drawn only from the SELECTED_DOMAIN_PACK OutcomeCandidates. ADVISORY / presentation + routing
+        // ONLY: it never eliminates, selects, scores, ranks, or establishes eligibility, and the canonical
+        // verification gates remain owned by POLOXI Core. Empty when the LLM mapped to nothing or when not
+        // in Domain Pack mode; an empty mapping never drops the candidate.
+        public IReadOnlyList<string> MappedOutcomeCodes { get; init; } = [];
     }
     internal sealed record ProposedBranch(string DisplayName, string Interpretation, double DecisionRelevance, double FlipPotential, double EvidenceAvailability, IReadOnlyList<ProposedBranch> Children)
     {

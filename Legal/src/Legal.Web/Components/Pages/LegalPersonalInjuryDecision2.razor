@@ -352,6 +352,25 @@
                                                             </p>
                                                         }
                                                         <h5 class="ov-card-title">@o.Title</h5>
+                                                        @if (_useDomainPack)
+                                                        {
+                                                            <div class="ov-card-packmap" title="Advisory Domain Pack mapping — the canonical pack outcome this LLM outcome maps to. Presentation only; it does not score, rank, or select.">
+                                                                <span class="ov-card-packmap-lbl"><i class="bi bi-diagram-3" aria-hidden="true"></i> Domain Pack outcome</span>
+                                                                @if (o.MappedOutcomes.Count > 0)
+                                                                {
+                                                                    <span class="ov-card-packmap-vals">
+                                                                        @foreach (var m in o.MappedOutcomes)
+                                                                        {
+                                                                            <span class="ov-card-packmap-val">@m.Code &middot; @m.Name</span>
+                                                                        }
+                                                                    </span>
+                                                                }
+                                                                else
+                                                                {
+                                                                    <span class="ov-card-packmap-none">No canonical Domain Pack outcome</span>
+                                                                }
+                                                            </div>
+                                                        }
                                                         <p class="ov-card-detail">@o.CardText</p>
                                                         @if (o.FullNarrative.Count > 0)
                                                         {
@@ -1376,6 +1395,7 @@
                                                         <th>Actual value</th>
                                                         <th>Availability</th>
                                                         <th>Verification</th>
+                                                        <th>References</th>
                                                         <th>Decision impact</th>
                                                         <th>Review status</th>
                                                     </tr>
@@ -1390,9 +1410,10 @@
                                                             <td>@DfiFactorCandidate(f)</td>
                                                             <td><span class="dfi-badge dfi-badge-@DfiRelationTone(f)">@DfiFactorRelation(f)</span></td>
                                                             <td>@f.Source</td>
-                                                            <td>@(f.ActualValue ?? "—")</td>
+                                                            <td>@(string.IsNullOrWhiteSpace(f.ActualValue) ? "—" : f.ActualValue)</td>
                                                             <td><span class="dfi-badge dfi-badge-@(f.Availability == "AVAILABLE" ? "ok" : "warn")">@f.Availability</span></td>
                                                             <td><span class="dfi-badge dfi-badge-@(f.VerificationStatus == "VERIFIED" ? "ok" : "muted")">@f.VerificationStatus</span></td>
+                                                            <td @onclick:stopPropagation="true"><FactorReferenceChips References="f.References" OnReferenceSelected="OpenReferenceDetail" /></td>
                                                             <td>@DfiFactorImpact(f)</td>
                                                             <td><span class="dfi-badge dfi-badge-muted">Pending</span></td>
                                                         </tr>
@@ -2973,6 +2994,7 @@
                     </select>
                 </label>
                 <label class="poloxi-toggle"><input type="checkbox" @bind="_usePoloxiEngine" /><span></span><strong>POLOXI Engine</strong></label>
+                <label class="poloxi-toggle" title="Use the matter's configured Domain Pack to guide the hierarchy discovery. Off = standard behavior."><input type="checkbox" @bind="_useDomainPack" /><span></span><strong>Use Domain Pack</strong></label>
                 <button class="um-btn um-btn-primary" @onclick="SearchAsync" disabled="@(_loading||string.IsNullOrWhiteSpace(_query))"><i class="bi bi-stars"></i> Disambiguate &amp; Answer</button>
             </div>
         </section>
@@ -4019,6 +4041,8 @@
             </div>
         </div>
     }
+
+    <FactorReferencePopup Reference="_referenceDetail" OnClose="CloseReferenceDetail" />
 </LegalWorkspace>
 
 @code {
@@ -5365,6 +5389,23 @@
                 _ => "apw-node--prop",
             };
 
+            // Map every branch by id so a child can resolve its parent name and its root L1 family (for the
+            // shared lineage-color accent). The root-family index is the sort position of the ancestor L1.
+            var byId = branches.ToDictionary(b => b.WideBranchId);
+            var l1Order = branches
+                .Where(b => b.LevelNumber == 1)
+                .OrderBy(b => b.SortOrder)
+                .Select((b, i) => (b.WideBranchId, i))
+                .ToDictionary(x => x.WideBranchId, x => x.i);
+
+            Guid? RootL1Id(WideBranchDto b)
+            {
+                var cur = b;
+                while (cur.LevelNumber > 1 && cur.ParentWideBranchId is { } pid && byId.TryGetValue(pid, out var parent))
+                    cur = parent;
+                return cur.LevelNumber == 1 ? cur.WideBranchId : null;
+            }
+
             AttorneyPropositionWorkspace.TreeNode ToNode(WideBranchDto b)
             {
                 var lvl = b.LevelNumber == 1 ? "L1"
@@ -5374,11 +5415,28 @@
                     ? (HxComplete(b) ? "Complete" : "Incomplete")
                     : b.Interpretation;
                 var score = Math.Round(b.Confidence * 100m, 0);
-                return new AttorneyPropositionWorkspace.TreeNode(lvl, b.DisplayName, sub, score, NodeClass(b.LevelNumber));
+                string? parentName = b.ParentWideBranchId is { } pid && byId.TryGetValue(pid, out var parent)
+                    ? parent.DisplayName
+                    : null;
+                var lineageIndex = RootL1Id(b) is { } rootId && l1Order.TryGetValue(rootId, out var li) ? li : -1;
+                return new AttorneyPropositionWorkspace.TreeNode(lvl, b.DisplayName, sub, score, NodeClass(b.LevelNumber))
+                {
+                    NodeId = b.WideBranchId,
+                    ParentId = b.ParentWideBranchId,
+                    ParentName = parentName,
+                    LineageIndex = lineageIndex,
+                };
             }
 
             var columns = new List<AttorneyPropositionWorkspace.TreeColumn>();
-            foreach (var level in new[] { 1, 2, 3 })
+            // Render every level actually present in SurvivingBranches (L1, L2, L3, L4, … Ln). The Wide2
+            // pipeline allows depth beyond L3 (AbsoluteDepthCeiling), so the tree must not hard-cap at 3 —
+            // otherwise any deeper branch the engine produced would be silently dropped from this view.
+            var levels = branches
+                .Select(b => b.LevelNumber)
+                .Distinct()
+                .OrderBy(level => level);
+            foreach (var level in levels)
             {
                 var nodes = branches
                     .Where(b => b.LevelNumber == level)
@@ -5394,7 +5452,8 @@
                 {
                     1 => "L1 · Decision dimension",
                     2 => "L2 · Supporting factor",
-                    _ => "L3 · Propositions",
+                    3 => "L3 · Propositions",
+                    _ => $"L{level} · Sub-propositions",
                 };
                 columns.Add(new AttorneyPropositionWorkspace.TreeColumn(level, head, nodes));
             }
@@ -6261,6 +6320,48 @@
                                                 @if (!string.IsNullOrWhiteSpace(rel.Rationale))
                                                 {
                                                     <div class="poloxi-factorcheck-item-effect"><i class="bi bi-arrow-return-right"></i> @rel.Rationale</div>
+                                                }
+                                                @if (factor is not null && factor.References is { Count: > 0 })
+                                                {
+                                                    <div class="poloxi-factorcheck-item-refs">
+                                                        @foreach (var reference in factor.References)
+                                                        {
+                                                            var refIcon = reference.KindCode switch
+                                                            {
+                                                                "MATTER_FIELD" => "bi-journal-text",
+                                                                "PROFILE_FIELD" => "bi-person-badge",
+                                                                "DOCUMENT" => "bi-file-earmark-text",
+                                                                "EVIDENCE" => "bi-paperclip",
+                                                                "LEGAL_AUTHORITY" => "bi-bank",
+                                                                "CHANNEL" => "bi-broadcast",
+                                                                _ => "bi-link-45deg"
+                                                            };
+                                                            var refKindLabel = reference.KindCode switch
+                                                            {
+                                                                "MATTER_FIELD" => "Matter",
+                                                                "PROFILE_FIELD" => "Profile",
+                                                                "DOCUMENT" => "Doc",
+                                                                "EVIDENCE" => "Evidence",
+                                                                "LEGAL_AUTHORITY" => "Authority",
+                                                                "CHANNEL" => "Channel",
+                                                                _ => reference.KindCode
+                                                            };
+                                                            var refState = (reference.VerificationState ?? "UNVERIFIED").ToLowerInvariant();
+                                                            var refTitle = string.IsNullOrWhiteSpace(reference.Reference) ? reference.Label : reference.Reference;
+                                                            if (!string.IsNullOrWhiteSpace(reference.NavigationRoute))
+                                                            {
+                                                                <a class="poloxi-factor-ref poloxi-factor-ref--@refState" href="@reference.NavigationRoute" title="@refTitle">
+                                                                    <i class="bi @refIcon"></i><span class="poloxi-factor-ref-kind">@refKindLabel:</span> @reference.Label
+                                                                </a>
+                                                            }
+                                                            else
+                                                            {
+                                                                <span class="poloxi-factor-ref poloxi-factor-ref--@refState" title="@refTitle">
+                                                                    <i class="bi @refIcon"></i><span class="poloxi-factor-ref-kind">@refKindLabel:</span> @reference.Label
+                                                                </span>
+                                                            }
+                                                        }
+                                                    </div>
                                                 }
                                             </div>
                                         </li>
@@ -8036,7 +8137,7 @@
                             </label>
                             <table class="poloxi-inspector-table">
                                 <thead>
-                                    <tr><th>Factor</th><th>Source</th><th>Actual value</th><th>Availability</th><th>Verification</th><th>Requirement</th><th>Relationship</th><th>Missing information</th></tr>
+                                    <tr><th>Factor</th><th>Source</th><th>Actual value</th><th>Availability</th><th>Verification</th><th>Requirement</th><th>Relationship</th><th>References</th><th>Missing information</th></tr>
                                 </thead>
                                 <tbody>
                                     @foreach (var f in inventory.Factors.Where(f => !_atomicFactorsOnly || !string.Equals(f.NodeKind, "PARENT", StringComparison.OrdinalIgnoreCase)))
@@ -8052,6 +8153,7 @@
                                             <td><span class="poloxi-factor-badge poloxi-factor-badge--@f.VerificationStatus.ToLowerInvariant()">@f.VerificationStatus</span></td>
                                             <td>@f.Requirement</td>
                                             <td>@(f.Relationships.Count == 0 ? "—" : string.Join(" · ", f.Relationships))</td>
+                                            <td><FactorReferenceChips References="f.References" OnReferenceSelected="OpenReferenceDetail" /></td>
                                             <td>@(string.IsNullOrWhiteSpace(f.MissingInformation) ? "—" : f.MissingInformation)</td>
                                         </tr>
                                     }
@@ -8059,12 +8161,15 @@
                             </table>
 
                             <h4>Candidate × factor relationships</h4>
+                            @{
+                                var factorRefLookup = inventory.Factors.ToDictionary(f => f.FactorId, f => f, StringComparer.OrdinalIgnoreCase);
+                            }
                             @foreach (var grp in inventory.Relationships.GroupBy(r => r.CandidateTitle).OrderBy(g => g.Key))
                             {
                                 <details class="poloxi-inspector-stage">
                                     <summary><span class="poloxi-inspector-stage-name">@grp.Key</span> <span class="poloxi-inspector-badge">@grp.Count() factors</span></summary>
                                     <table class="poloxi-inspector-table">
-                                        <thead><tr><th>Factor</th><th>Relationship</th><th>Required</th><th>Validated</th><th>Rationale</th></tr></thead>
+                                        <thead><tr><th>Factor</th><th>Relationship</th><th>Required</th><th>Validated</th><th>References</th><th>Rationale</th></tr></thead>
                                         <tbody>
                                             @foreach (var rel in grp)
                                             {
@@ -8073,6 +8178,7 @@
                                                     <td>@rel.RelationType</td>
                                                     <td>@(rel.IsRequired ? "Yes" : "No")</td>
                                                     <td><span class="poloxi-factor-badge poloxi-factor-badge--@(rel.IsValidatedRelation ? "available" : "missing")" title="@(rel.IsValidatedRelation ? "Validated by a semantic legal/logical rationale" : "Lexical/structural link only — not a validated dependency")">@(rel.IsValidatedRelation ? "Validated" : "Unvalidated")</span></td>
+                                                    <td>@if (factorRefLookup.TryGetValue(rel.FactorId, out var relFactor)){<FactorReferenceChips References="relFactor.References" OnReferenceSelected="OpenReferenceDetail" />}else{<text>-</text>}</td>
                                                     <td>@(string.IsNullOrWhiteSpace(rel.Rationale) ? "—" : rel.Rationale)</td>
                                                 </tr>
                                             }
@@ -8086,6 +8192,22 @@
             </section>
         }
     };
+
+    // Renders the ACTUAL reference chips for a factor (matter/profile/document/evidence/authority/channel),
+    // each linked to its real entity route when one exists. Shared by the Global factors table, the
+    // Candidate × factor relationships table, and the Factor Inventory Checklist cards.
+    private static readonly RenderFragment NoReferenceDash = builder => builder.AddContent(0, "—");
+
+    private RenderFragment FactorReferenceChipsRemovedPlaceholder => null!;
+
+    // ── Reusable reference popup state ──────────────────────────────────────────────────────────────────
+    // Backs a shared modal that, for a document/evidence/channel reference, surfaces the ACTUAL source
+    // excerpt (the line that links to the proposition) and a deep link to open the underlying document.
+    private WideFactorReferenceDto? _referenceDetail;
+
+    private void OpenReferenceDetail(WideFactorReferenceDto reference) => _referenceDetail = reference;
+
+    private void CloseReferenceDetail() => _referenceDetail = null;
 
     private RenderFragment ComparisonPanel => __builder =>
     {
@@ -8505,6 +8627,7 @@
     private string _selectedContextCode = "Legal";
     private IReadOnlyCollection<WideSearchContextDto> _contexts = [];
     private bool _loading, _usePoloxiEngine = true;
+    private bool _useDomainPack;
     private bool _initializing = true;
     private bool _showPipeline;
     // Factor inventory: default to hiding broad parent (L1/L2) groupings so only atomic L3 factors show.
@@ -9457,6 +9580,12 @@
         // never mistaken for an evidence-grounded, attorney-ready determination.
         public decimal EvidenceCoverage { get; init; }
 
+        // Advisory Domain Pack mapping (UseDomainPack only): the canonical pack OutcomeCandidate(s) that the
+        // Candidate Landscape composer semantically mapped this LLM-proposed outcome to. Presentation/routing
+        // only — it never scores, ranks, selects, or establishes eligibility; the LLM outcome remains the
+        // scored C card. Empty when the composer mapped nothing (rendered as a muted disclosure in pack mode).
+        public IReadOnlyList<(string Code, string Name)> MappedOutcomes { get; init; } = [];
+
         // Deterministic text for the Overview card so it is NEVER blank: prefer the composed landscape
         // narrative, then the candidate Detail, then a derived viability/support summary built from the
         // persisted scores already on this record. Nothing is fabricated — every value comes from the run.
@@ -9498,6 +9627,26 @@
             || c.CandidateName.Contains(displayName, StringComparison.OrdinalIgnoreCase)
             || displayName.Contains(c.CandidateName, StringComparison.OrdinalIgnoreCase));
         return string.IsNullOrWhiteSpace(match?.OverviewNarrative) ? null : match!.OverviewNarrative;
+    }
+
+    // Resolves the advisory Domain Pack outcome mapping for a candidate display name from the Wide response.
+    // The Candidate Landscape composer attaches the canonical pack OutcomeCandidate(s) it semantically mapped
+    // each LLM outcome to (code + name). Presentation/routing only — never scores, ranks, or selects. Fail-soft:
+    // empty when the composer did not run, produced no mapping, or the candidate is unmatched.
+    private IReadOnlyList<(string Code, string Name)> OvMappedOutcomesFor(string displayName)
+    {
+        var candidates = _response?.CandidateLandscape?.Candidates;
+        if (candidates is null || string.IsNullOrWhiteSpace(displayName)) return [];
+        var match = candidates.FirstOrDefault(c =>
+            string.Equals(c.CandidateName, displayName, StringComparison.OrdinalIgnoreCase)
+            || c.CandidateName.Contains(displayName, StringComparison.OrdinalIgnoreCase)
+            || displayName.Contains(c.CandidateName, StringComparison.OrdinalIgnoreCase));
+        var mapped = match?.MappedOutcomes;
+        if (mapped is null || mapped.Count == 0) return [];
+        return mapped
+            .Where(m => !string.IsNullOrWhiteSpace(m.OutcomeCode) && !string.IsNullOrWhiteSpace(m.Name))
+            .Select(m => (m.OutcomeCode, m.Name))
+            .ToArray();
     }
 
     // Resolves the deep, long-form candidate-landscape analysis for a candidate display name, composed in
@@ -9629,7 +9778,7 @@
                         null,
                         null,
                         [])
-                        { Narrative = OvNarrativeFor(title), FullNarrative = OvFullNarrativeFor(title) });
+                        { Narrative = OvNarrativeFor(title), FullNarrative = OvFullNarrativeFor(title), MappedOutcomes = OvMappedOutcomesFor(title) });
                     if (proposed.Count >= 10) break;
                 }
                 return proposed;
@@ -9701,7 +9850,7 @@
                     c.EstimatedResolutionLabel,
                     c.EstimatedCostBand,
                     c.BranchScores.Take(8).ToArray())
-                    { Narrative = OvNarrativeFor(c.DisplayName), FullNarrative = OvFullNarrativeFor(c.DisplayName), EvidenceCoverage = c.EvidenceCoverage });
+                    { Narrative = OvNarrativeFor(c.DisplayName), FullNarrative = OvFullNarrativeFor(c.DisplayName), EvidenceCoverage = c.EvidenceCoverage, MappedOutcomes = OvMappedOutcomesFor(c.DisplayName) });
             }
             return outcomes;
         }
@@ -11029,7 +11178,7 @@
         await ActivateMatterCorpusForAnswerAsync();
         try
         {
-            _response = await Api.IntelligentSearchWide2DynamicAsync(new(Guid.Empty, Guid.Empty, _query.Trim(), 50, correlationId) { UsePoloxiEngine = _usePoloxiEngine, ModelCode = _selectedModelCode, ForceRequestedModelAllStages = !string.IsNullOrWhiteSpace(_selectedModelCode), ContextCode = _selectedContextCode, MatterId = MatterId }, _searchCancellation.Token);
+            _response = await Api.IntelligentSearchWide2DynamicAsync(new(Guid.Empty, Guid.Empty, _query.Trim(), 50, correlationId) { UsePoloxiEngine = _usePoloxiEngine, UseDomainPack = _useDomainPack, ModelCode = _selectedModelCode, ForceRequestedModelAllStages = !string.IsNullOrWhiteSpace(_selectedModelCode), ContextCode = _selectedContextCode, MatterId = MatterId }, _searchCancellation.Token);
         }
         catch (OperationCanceledException)
         {
@@ -11235,7 +11384,7 @@
         await StartLiveProgressAsync(correlationId);
         try
         {
-            _response = await Api.IntelligentSearchWide2DynamicAsync(new(Guid.Empty, Guid.Empty, _query.Trim(), 50, correlationId) { UsePoloxiEngine = _usePoloxiEngine, ClarificationAnswer = answer.Trim(), ClarificationTarget = target, ClarificationRound = round, PriorIntentEntropy = priorIntentEntropy, OriginalAnswerKind = originalAnswerKind, ParentWideExecutionId = parentExecutionId, ModelCode = _selectedModelCode, ForceRequestedModelAllStages = !string.IsNullOrWhiteSpace(_selectedModelCode), ContextCode = _selectedContextCode, MatterId = MatterId }, _searchCancellation.Token);
+            _response = await Api.IntelligentSearchWide2DynamicAsync(new(Guid.Empty, Guid.Empty, _query.Trim(), 50, correlationId) { UsePoloxiEngine = _usePoloxiEngine, UseDomainPack = _useDomainPack, ClarificationAnswer = answer.Trim(), ClarificationTarget = target, ClarificationRound = round, PriorIntentEntropy = priorIntentEntropy, OriginalAnswerKind = originalAnswerKind, ParentWideExecutionId = parentExecutionId, ModelCode = _selectedModelCode, ForceRequestedModelAllStages = !string.IsNullOrWhiteSpace(_selectedModelCode), ContextCode = _selectedContextCode, MatterId = MatterId }, _searchCancellation.Token);
             _clarificationAnswer = "";
         }
         catch (OperationCanceledException)

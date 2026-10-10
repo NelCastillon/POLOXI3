@@ -1487,13 +1487,13 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
     {
         var dimensions = (await connection.QueryAsync<DecisionDomainPackDimensionDto>(new CommandDefinition(
             """
-            SELECT DimensionCode, Name, Description FROM POLOXI.Legal_DecisionDomainPackDimension
+            SELECT DimensionCode, Name, Description, PoloxiImportanceScore FROM POLOXI.Legal_DecisionDomainPackDimension
             WHERE IsDeleted = 0 AND IsActive = 1 AND DecisionDomainPackId = @PackId ORDER BY SortOrder, Name;
             """, new { PackId = pack.DecisionDomainPackId }, cancellationToken: cancellationToken))).ToArray();
 
         var evidenceTypes = (await connection.QueryAsync<DecisionDomainPackEvidenceTypeDto>(new CommandDefinition(
             """
-            SELECT EvidenceTypeCode, Name, DimensionCode, Description FROM POLOXI.Legal_DecisionDomainPackEvidenceType
+            SELECT EvidenceTypeCode, Name, DimensionCode, Description, PoloxiImportanceScore FROM POLOXI.Legal_DecisionDomainPackEvidenceType
             WHERE IsDeleted = 0 AND IsActive = 1 AND DecisionDomainPackId = @PackId ORDER BY SortOrder, Name;
             """, new { PackId = pack.DecisionDomainPackId }, cancellationToken: cancellationToken))).ToArray();
 
@@ -1705,10 +1705,11 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
             ON target.DecisionDomainPackId = source.PackId AND target.DimensionCode = source.DimensionCode AND target.IsDeleted = 0
             WHEN MATCHED THEN
                 UPDATE SET Name = @Name, Description = @Description, SortOrder = @SortOrder, IsActive = @IsActive,
+                           PoloxiImportanceScore = @PoloxiImportanceScore,
                            ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @ActorUserId
             WHEN NOT MATCHED THEN
-                INSERT (DecisionDomainPackId, DimensionCode, Name, Description, SortOrder, IsActive, TenantId, CreatedByUserId)
-                VALUES (@PackId, @DimensionCode, @Name, @Description, @SortOrder, @IsActive, @TenantId, @ActorUserId);
+                INSERT (DecisionDomainPackId, DimensionCode, Name, Description, SortOrder, IsActive, PoloxiImportanceScore, TenantId, CreatedByUserId)
+                VALUES (@PackId, @DimensionCode, @Name, @Description, @SortOrder, @IsActive, @PoloxiImportanceScore, @TenantId, @ActorUserId);
             """,
             new
             {
@@ -1718,6 +1719,7 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
                 Description = string.IsNullOrWhiteSpace(request.Description) ? null : request.Description.Trim(),
                 request.SortOrder,
                 request.IsActive,
+                request.PoloxiImportanceScore,
                 TenantId = tenantId == Guid.Empty ? (Guid?)null : tenantId,
                 ActorUserId = actorUserId == Guid.Empty ? (Guid?)null : actorUserId,
             },
@@ -1732,12 +1734,12 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
             """
             UPDATE POLOXI.Legal_DecisionDomainPackDimension
             SET IsDeleted = 1, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @ActorUserId
-            WHERE DecisionDomainPackId = @PackId AND DimensionCode = @DimensionCode AND IsDeleted = 0;
+            WHERE DecisionDomainPackId = @PackId AND DimensionCode = @DimensionCode AND TenantId = @TenantId AND IsDeleted = 0;
             """,
-            new { PackId = packId, DimensionCode = dimensionCode.Trim(), ActorUserId = actorUserId },
+            new { PackId = packId, DimensionCode = dimensionCode.Trim(), ActorUserId = actorUserId, TenantId = tenantId == Guid.Empty ? (Guid?)null : tenantId },
             cancellationToken: cancellationToken));
         if (affected == 0)
-            throw new InvalidOperationException($"Dimension '{dimensionCode}' was not found.");
+            throw new InvalidOperationException($"Dimension '{dimensionCode}' was not found for this tenant. Global seed rows cannot be deleted.");
     }
 
     public async Task SaveDomainPackEvidenceTypeAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackEvidenceTypeRequest request, CancellationToken cancellationToken = default)
@@ -1751,10 +1753,11 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
             ON target.DecisionDomainPackId = source.PackId AND target.EvidenceTypeCode = source.EvidenceTypeCode AND target.IsDeleted = 0
             WHEN MATCHED THEN
                 UPDATE SET Name = @Name, DimensionCode = @DimensionCode, Description = @Description, SortOrder = @SortOrder, IsActive = @IsActive,
+                           PoloxiImportanceScore = @PoloxiImportanceScore,
                            ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @ActorUserId
             WHEN NOT MATCHED THEN
-                INSERT (DecisionDomainPackId, EvidenceTypeCode, Name, DimensionCode, Description, SortOrder, IsActive, TenantId, CreatedByUserId)
-                VALUES (@PackId, @EvidenceTypeCode, @Name, @DimensionCode, @Description, @SortOrder, @IsActive, @TenantId, @ActorUserId);
+                INSERT (DecisionDomainPackId, EvidenceTypeCode, Name, DimensionCode, Description, SortOrder, IsActive, PoloxiImportanceScore, TenantId, CreatedByUserId)
+                VALUES (@PackId, @EvidenceTypeCode, @Name, @DimensionCode, @Description, @SortOrder, @IsActive, @PoloxiImportanceScore, @TenantId, @ActorUserId);
             """,
             new
             {
@@ -1765,6 +1768,7 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
                 Description = string.IsNullOrWhiteSpace(request.Description) ? null : request.Description.Trim(),
                 request.SortOrder,
                 request.IsActive,
+                request.PoloxiImportanceScore,
                 TenantId = tenantId == Guid.Empty ? (Guid?)null : tenantId,
                 ActorUserId = actorUserId == Guid.Empty ? (Guid?)null : actorUserId,
             },
@@ -1779,12 +1783,12 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
             """
             UPDATE POLOXI.Legal_DecisionDomainPackEvidenceType
             SET IsDeleted = 1, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @ActorUserId
-            WHERE DecisionDomainPackId = @PackId AND EvidenceTypeCode = @EvidenceTypeCode AND IsDeleted = 0;
+            WHERE DecisionDomainPackId = @PackId AND EvidenceTypeCode = @EvidenceTypeCode AND TenantId = @TenantId AND IsDeleted = 0;
             """,
-            new { PackId = packId, EvidenceTypeCode = evidenceTypeCode.Trim(), ActorUserId = actorUserId },
+            new { PackId = packId, EvidenceTypeCode = evidenceTypeCode.Trim(), ActorUserId = actorUserId, TenantId = tenantId == Guid.Empty ? (Guid?)null : tenantId },
             cancellationToken: cancellationToken));
         if (affected == 0)
-            throw new InvalidOperationException($"Evidence type '{evidenceTypeCode}' was not found.");
+            throw new InvalidOperationException($"Evidence type '{evidenceTypeCode}' was not found for this tenant. Global seed rows cannot be deleted.");
     }
 
     public async Task SaveDomainPackVerificationProfileAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackVerificationProfileRequest request, CancellationToken cancellationToken = default)
@@ -1826,12 +1830,12 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
             """
             UPDATE POLOXI.Legal_DecisionDomainPackVerificationProfile
             SET IsDeleted = 1, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @ActorUserId
-            WHERE DecisionDomainPackId = @PackId AND ProfileCode = @ProfileCode AND IsDeleted = 0;
+            WHERE DecisionDomainPackId = @PackId AND ProfileCode = @ProfileCode AND TenantId = @TenantId AND IsDeleted = 0;
             """,
-            new { PackId = packId, ProfileCode = profileCode.Trim(), ActorUserId = actorUserId },
+            new { PackId = packId, ProfileCode = profileCode.Trim(), ActorUserId = actorUserId, TenantId = tenantId == Guid.Empty ? (Guid?)null : tenantId },
             cancellationToken: cancellationToken));
         if (affected == 0)
-            throw new InvalidOperationException($"Verification profile '{profileCode}' was not found.");
+            throw new InvalidOperationException($"Verification profile '{profileCode}' was not found for this tenant. Global seed rows cannot be deleted.");
     }
 
     public async Task SaveDomainPackMatterTypeAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackMatterTypeRequest request, CancellationToken cancellationToken = default)
@@ -1872,12 +1876,12 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
             """
             UPDATE POLOXI.Legal_DecisionDomainPackMatterType
             SET IsDeleted = 1, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @ActorUserId
-            WHERE DecisionDomainPackId = @PackId AND MatterTypeCode = @MatterTypeCode AND IsDeleted = 0;
+            WHERE DecisionDomainPackId = @PackId AND MatterTypeCode = @MatterTypeCode AND TenantId = @TenantId AND IsDeleted = 0;
             """,
-            new { PackId = packId, MatterTypeCode = matterTypeCode.Trim(), ActorUserId = actorUserId },
+            new { PackId = packId, MatterTypeCode = matterTypeCode.Trim(), ActorUserId = actorUserId, TenantId = tenantId == Guid.Empty ? (Guid?)null : tenantId },
             cancellationToken: cancellationToken));
         if (affected == 0)
-            throw new InvalidOperationException($"Matter type '{matterTypeCode}' was not found.");
+            throw new InvalidOperationException($"Matter type '{matterTypeCode}' was not found for this tenant. Global seed rows cannot be deleted.");
     }
 
     public async Task SaveDomainPackConceptAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackConceptRequest request, CancellationToken cancellationToken = default)
@@ -1935,12 +1939,12 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
             """
             UPDATE POLOXI.Legal_DecisionDomainConcept
             SET IsDeleted = 1, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @ActorUserId
-            WHERE DecisionDomainPackId = @PackId AND ConceptCode = @ConceptCode AND IsDeleted = 0;
+            WHERE DecisionDomainPackId = @PackId AND ConceptCode = @ConceptCode AND TenantId = @TenantId AND IsDeleted = 0;
             """,
-            new { PackId = packId, ConceptCode = conceptCode.Trim(), ActorUserId = actorUserId },
+            new { PackId = packId, ConceptCode = conceptCode.Trim(), ActorUserId = actorUserId, TenantId = tenantId == Guid.Empty ? (Guid?)null : tenantId },
             cancellationToken: cancellationToken));
         if (affected == 0)
-            throw new InvalidOperationException($"Concept '{conceptCode}' was not found.");
+            throw new InvalidOperationException($"Concept '{conceptCode}' was not found for this tenant. Global seed rows cannot be deleted.");
     }
 
     public async Task SaveDomainPackConceptRelationAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackConceptRelationRequest request, CancellationToken cancellationToken = default)
@@ -2008,12 +2012,141 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
             UPDATE POLOXI.Legal_DecisionDomainConceptRelation
             SET IsDeleted = 1, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @ActorUserId
             WHERE DecisionDomainPackId = @PackId AND SourceConceptCode = @SourceConceptCode
-              AND TargetConceptCode = @TargetConceptCode AND RelationTypeCode = @RelationTypeCode AND IsDeleted = 0;
+              AND TargetConceptCode = @TargetConceptCode AND RelationTypeCode = @RelationTypeCode AND TenantId = @TenantId AND IsDeleted = 0;
             """,
-            new { PackId = packId, SourceConceptCode = sourceConceptCode.Trim(), TargetConceptCode = targetConceptCode.Trim(), RelationTypeCode = relationTypeCode.Trim(), ActorUserId = actorUserId },
+            new { PackId = packId, SourceConceptCode = sourceConceptCode.Trim(), TargetConceptCode = targetConceptCode.Trim(), RelationTypeCode = relationTypeCode.Trim(), ActorUserId = actorUserId, TenantId = tenantId == Guid.Empty ? (Guid?)null : tenantId },
             cancellationToken: cancellationToken));
         if (affected == 0)
-            throw new InvalidOperationException($"Concept relation '{sourceConceptCode} → {targetConceptCode}' was not found.");
+            throw new InvalidOperationException($"Concept relation '{sourceConceptCode} → {targetConceptCode}' was not found for this tenant. Global seed rows cannot be deleted.");
+    }
+
+    public async Task SaveDomainPackOutcomeCandidateAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackOutcomeCandidateRequest request, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var packId = await ResolveDomainPackIdAsync(connection, tenantId, packCode, cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(
+            """
+            MERGE POLOXI.Legal_DecisionDomainPackOutcomeCandidate AS target
+            USING (SELECT @PackId AS PackId, @OutcomeCode AS OutcomeCode) AS source
+            ON target.DecisionDomainPackId = source.PackId AND target.OutcomeCode = source.OutcomeCode
+               AND ((target.TenantId = @TenantId) OR (target.TenantId IS NULL AND @TenantId IS NULL)) AND target.IsDeleted = 0
+            WHEN MATCHED THEN
+                UPDATE SET Name = @Name, Description = @Description, RoleCode = @RoleCode, RequiresVerification = @RequiresVerification,
+                           MatterTypeCode = @MatterTypeCode, SortOrder = @SortOrder, RequiresFactualPredicate = @RequiresFactualPredicate,
+                           FactualPredicateKeywords = @FactualPredicateKeywords, IsActive = @IsActive,
+                           ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @ActorUserId
+            WHEN NOT MATCHED THEN
+                INSERT (DecisionDomainPackId, OutcomeCode, Name, Description, RoleCode, RequiresVerification, MatterTypeCode, SortOrder,
+                        RequiresFactualPredicate, FactualPredicateKeywords, IsActive, TenantId, CreatedByUserId)
+                VALUES (@PackId, @OutcomeCode, @Name, @Description, @RoleCode, @RequiresVerification, @MatterTypeCode, @SortOrder,
+                        @RequiresFactualPredicate, @FactualPredicateKeywords, @IsActive, @TenantId, @ActorUserId);
+            """,
+            new
+            {
+                PackId = packId,
+                OutcomeCode = request.OutcomeCode.Trim(),
+                Name = request.Name.Trim(),
+                Description = string.IsNullOrWhiteSpace(request.Description) ? null : request.Description.Trim(),
+                RoleCode = request.RoleCode.Trim(),
+                request.RequiresVerification,
+                MatterTypeCode = string.IsNullOrWhiteSpace(request.MatterTypeCode) ? null : request.MatterTypeCode.Trim(),
+                request.SortOrder,
+                request.RequiresFactualPredicate,
+                FactualPredicateKeywords = string.IsNullOrWhiteSpace(request.FactualPredicateKeywords) ? null : request.FactualPredicateKeywords.Trim(),
+                request.IsActive,
+                TenantId = tenantId == Guid.Empty ? (Guid?)null : tenantId,
+                ActorUserId = actorUserId == Guid.Empty ? (Guid?)null : actorUserId,
+            },
+            cancellationToken: cancellationToken));
+    }
+
+    public async Task DeleteDomainPackOutcomeCandidateAsync(Guid tenantId, Guid actorUserId, string packCode, string outcomeCode, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var packId = await ResolveDomainPackIdAsync(connection, tenantId, packCode, cancellationToken);
+        var affected = await connection.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE POLOXI.Legal_DecisionDomainPackOutcomeCandidate
+            SET IsDeleted = 1, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @ActorUserId
+            WHERE DecisionDomainPackId = @PackId AND OutcomeCode = @OutcomeCode AND TenantId = @TenantId AND IsDeleted = 0;
+            """,
+            new { PackId = packId, OutcomeCode = outcomeCode.Trim(), ActorUserId = actorUserId, TenantId = tenantId == Guid.Empty ? (Guid?)null : tenantId },
+            cancellationToken: cancellationToken));
+        if (affected == 0)
+            throw new InvalidOperationException($"Outcome candidate '{outcomeCode}' was not found for this tenant. Global seed rows cannot be deleted.");
+    }
+
+    // Root Domain Pack upsert — tenant-scoped only. Global (TenantId NULL) seed packs are never modified.
+    public async Task SaveDomainPackAsync(Guid tenantId, Guid actorUserId, SaveDomainPackRequest request, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var packCode = request.PackCode.Trim();
+        var existingTenantPackId = await connection.ExecuteScalarAsync<Guid?>(new CommandDefinition(
+            """
+            SELECT TOP 1 DecisionDomainPackId FROM POLOXI.Legal_DecisionDomainPack
+            WHERE PackCode = @PackCode AND TenantId = @TenantId AND IsDeleted = 0;
+            """,
+            new { PackCode = packCode, TenantId = tenantId },
+            cancellationToken: cancellationToken));
+
+        if (existingTenantPackId is not null)
+        {
+            await connection.ExecuteAsync(new CommandDefinition(
+                """
+                UPDATE POLOXI.Legal_DecisionDomainPack
+                SET PracticeAreaCode = @PracticeAreaCode, Name = @Name, Description = @Description,
+                    SortOrder = @SortOrder, IsActive = @IsActive, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @ActorUserId
+                WHERE DecisionDomainPackId = @PackId AND TenantId = @TenantId AND IsDeleted = 0;
+                """,
+                new
+                {
+                    PackId = existingTenantPackId.Value,
+                    PracticeAreaCode = request.PracticeAreaCode.Trim(),
+                    Name = request.Name.Trim(),
+                    Description = string.IsNullOrWhiteSpace(request.Description) ? null : request.Description.Trim(),
+                    request.SortOrder,
+                    request.IsActive,
+                    TenantId = tenantId,
+                    ActorUserId = actorUserId == Guid.Empty ? (Guid?)null : actorUserId,
+                },
+                cancellationToken: cancellationToken));
+            return;
+        }
+
+        await connection.ExecuteAsync(new CommandDefinition(
+            """
+            INSERT POLOXI.Legal_DecisionDomainPack
+                (DecisionDomainPackId, PackCode, PracticeAreaCode, Name, Description, IsDefault, IsActive, SortOrder, TenantId, CreatedByUserId)
+            VALUES (NEWID(), @PackCode, @PracticeAreaCode, @Name, @Description, 0, @IsActive, @SortOrder, @TenantId, @ActorUserId);
+            """,
+            new
+            {
+                PackCode = packCode,
+                PracticeAreaCode = request.PracticeAreaCode.Trim(),
+                Name = request.Name.Trim(),
+                Description = string.IsNullOrWhiteSpace(request.Description) ? null : request.Description.Trim(),
+                request.IsActive,
+                request.SortOrder,
+                TenantId = tenantId == Guid.Empty ? (Guid?)null : tenantId,
+                ActorUserId = actorUserId == Guid.Empty ? (Guid?)null : actorUserId,
+            },
+            cancellationToken: cancellationToken));
+    }
+
+    public async Task DeleteDomainPackAsync(Guid tenantId, Guid actorUserId, string packCode, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        // Only a tenant-scoped pack can be soft-deleted; global (TenantId NULL) seed packs are immutable.
+        var affected = await connection.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE POLOXI.Legal_DecisionDomainPack
+            SET IsDeleted = 1, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @ActorUserId
+            WHERE PackCode = @PackCode AND TenantId = @TenantId AND IsDeleted = 0;
+            """,
+            new { PackCode = packCode.Trim(), TenantId = tenantId, ActorUserId = actorUserId },
+            cancellationToken: cancellationToken));
+        if (affected == 0)
+            throw new InvalidOperationException($"Tenant Domain Pack '{packCode}' was not found. Global seed packs cannot be deleted.");
     }
 
     private sealed record DomainPackRow(Guid DecisionDomainPackId, string PackCode, string PracticeAreaCode, string Name, string? Description);

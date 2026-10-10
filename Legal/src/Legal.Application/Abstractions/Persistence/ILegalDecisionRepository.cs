@@ -81,6 +81,12 @@ public interface ILegalDecisionRepository
     Task DeleteDomainPackConceptAsync(Guid tenantId, Guid actorUserId, string packCode, string conceptCode, CancellationToken cancellationToken = default);
     Task SaveDomainPackConceptRelationAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackConceptRelationRequest request, CancellationToken cancellationToken = default);
     Task DeleteDomainPackConceptRelationAsync(Guid tenantId, Guid actorUserId, string packCode, string sourceConceptCode, string targetConceptCode, string relationTypeCode, CancellationToken cancellationToken = default);
+    Task SaveDomainPackOutcomeCandidateAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackOutcomeCandidateRequest request, CancellationToken cancellationToken = default);
+    Task DeleteDomainPackOutcomeCandidateAsync(Guid tenantId, Guid actorUserId, string packCode, string outcomeCode, CancellationToken cancellationToken = default);
+
+    // Root Domain Pack CRUD. Tenant-scoped create/update/soft-delete only; global (TenantId NULL) seed packs are immutable.
+    Task SaveDomainPackAsync(Guid tenantId, Guid actorUserId, SaveDomainPackRequest request, CancellationToken cancellationToken = default);
+    Task DeleteDomainPackAsync(Guid tenantId, Guid actorUserId, string packCode, CancellationToken cancellationToken = default);
 
     // ── Personal Injury (Domain Pack: PERSONAL_INJURY) profile + child aggregates + options ──
     Task<PersonalInjuryOptionsDto> GetPersonalInjuryOptionsAsync(Guid tenantId, CancellationToken cancellationToken = default);

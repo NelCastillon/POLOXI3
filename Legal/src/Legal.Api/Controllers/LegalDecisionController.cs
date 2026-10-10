@@ -284,6 +284,135 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
         return pack is null ? NotFound() : Ok(pack);
     }
 
+    // ── Domain Pack CRUD (tenant-scoped writes; global seed rows immutable) ──
+    [HttpPut("domainpacks")]
+    [Authorize(Policy = IntelligencePolicies.Configure)]
+    public async Task<IActionResult> SaveDomainPack([FromBody] SaveDomainPackRequest request, CancellationToken cancellationToken)
+    {
+        await service.SaveDomainPackAsync(TenantId, ActorUserId, request, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpDelete("domainpacks/{packCode}")]
+    [Authorize(Policy = IntelligencePolicies.Configure)]
+    public async Task<IActionResult> DeleteDomainPack(string packCode, CancellationToken cancellationToken)
+    {
+        await service.DeleteDomainPackAsync(TenantId, ActorUserId, packCode, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpPut("domainpacks/{packCode}/dimensions")]
+    [Authorize(Policy = IntelligencePolicies.Configure)]
+    public async Task<IActionResult> SaveDomainPackDimension(string packCode, [FromBody] SaveDomainPackDimensionRequest request, CancellationToken cancellationToken)
+    {
+        await service.SaveDomainPackDimensionAsync(TenantId, ActorUserId, packCode, request, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpDelete("domainpacks/{packCode}/dimensions/{dimensionCode}")]
+    [Authorize(Policy = IntelligencePolicies.Configure)]
+    public async Task<IActionResult> DeleteDomainPackDimension(string packCode, string dimensionCode, CancellationToken cancellationToken)
+    {
+        await service.DeleteDomainPackDimensionAsync(TenantId, ActorUserId, packCode, dimensionCode, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpPut("domainpacks/{packCode}/evidencetypes")]
+    [Authorize(Policy = IntelligencePolicies.Configure)]
+    public async Task<IActionResult> SaveDomainPackEvidenceType(string packCode, [FromBody] SaveDomainPackEvidenceTypeRequest request, CancellationToken cancellationToken)
+    {
+        await service.SaveDomainPackEvidenceTypeAsync(TenantId, ActorUserId, packCode, request, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpDelete("domainpacks/{packCode}/evidencetypes/{evidenceTypeCode}")]
+    [Authorize(Policy = IntelligencePolicies.Configure)]
+    public async Task<IActionResult> DeleteDomainPackEvidenceType(string packCode, string evidenceTypeCode, CancellationToken cancellationToken)
+    {
+        await service.DeleteDomainPackEvidenceTypeAsync(TenantId, ActorUserId, packCode, evidenceTypeCode, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpPut("domainpacks/{packCode}/verificationprofiles")]
+    [Authorize(Policy = IntelligencePolicies.Configure)]
+    public async Task<IActionResult> SaveDomainPackVerificationProfile(string packCode, [FromBody] SaveDomainPackVerificationProfileRequest request, CancellationToken cancellationToken)
+    {
+        await service.SaveDomainPackVerificationProfileAsync(TenantId, ActorUserId, packCode, request, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpDelete("domainpacks/{packCode}/verificationprofiles/{profileCode}")]
+    [Authorize(Policy = IntelligencePolicies.Configure)]
+    public async Task<IActionResult> DeleteDomainPackVerificationProfile(string packCode, string profileCode, CancellationToken cancellationToken)
+    {
+        await service.DeleteDomainPackVerificationProfileAsync(TenantId, ActorUserId, packCode, profileCode, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpPut("domainpacks/{packCode}/mattertypes")]
+    [Authorize(Policy = IntelligencePolicies.Configure)]
+    public async Task<IActionResult> SaveDomainPackMatterType(string packCode, [FromBody] SaveDomainPackMatterTypeRequest request, CancellationToken cancellationToken)
+    {
+        await service.SaveDomainPackMatterTypeAsync(TenantId, ActorUserId, packCode, request, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpDelete("domainpacks/{packCode}/mattertypes/{matterTypeCode}")]
+    [Authorize(Policy = IntelligencePolicies.Configure)]
+    public async Task<IActionResult> DeleteDomainPackMatterType(string packCode, string matterTypeCode, CancellationToken cancellationToken)
+    {
+        await service.DeleteDomainPackMatterTypeAsync(TenantId, ActorUserId, packCode, matterTypeCode, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpPut("domainpacks/{packCode}/concepts")]
+    [Authorize(Policy = IntelligencePolicies.Configure)]
+    public async Task<IActionResult> SaveDomainPackConcept(string packCode, [FromBody] SaveDomainPackConceptRequest request, CancellationToken cancellationToken)
+    {
+        await service.SaveDomainPackConceptAsync(TenantId, ActorUserId, packCode, request, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpDelete("domainpacks/{packCode}/concepts/{conceptCode}")]
+    [Authorize(Policy = IntelligencePolicies.Configure)]
+    public async Task<IActionResult> DeleteDomainPackConcept(string packCode, string conceptCode, CancellationToken cancellationToken)
+    {
+        await service.DeleteDomainPackConceptAsync(TenantId, ActorUserId, packCode, conceptCode, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpPut("domainpacks/{packCode}/conceptrelations")]
+    [Authorize(Policy = IntelligencePolicies.Configure)]
+    public async Task<IActionResult> SaveDomainPackConceptRelation(string packCode, [FromBody] SaveDomainPackConceptRelationRequest request, CancellationToken cancellationToken)
+    {
+        await service.SaveDomainPackConceptRelationAsync(TenantId, ActorUserId, packCode, request, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpDelete("domainpacks/{packCode}/conceptrelations/{sourceConceptCode}/{targetConceptCode}/{relationTypeCode}")]
+    [Authorize(Policy = IntelligencePolicies.Configure)]
+    public async Task<IActionResult> DeleteDomainPackConceptRelation(string packCode, string sourceConceptCode, string targetConceptCode, string relationTypeCode, CancellationToken cancellationToken)
+    {
+        await service.DeleteDomainPackConceptRelationAsync(TenantId, ActorUserId, packCode, sourceConceptCode, targetConceptCode, relationTypeCode, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpPut("domainpacks/{packCode}/outcomecandidates")]
+    [Authorize(Policy = IntelligencePolicies.Configure)]
+    public async Task<IActionResult> SaveDomainPackOutcomeCandidate(string packCode, [FromBody] SaveDomainPackOutcomeCandidateRequest request, CancellationToken cancellationToken)
+    {
+        await service.SaveDomainPackOutcomeCandidateAsync(TenantId, ActorUserId, packCode, request, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpDelete("domainpacks/{packCode}/outcomecandidates/{outcomeCode}")]
+    [Authorize(Policy = IntelligencePolicies.Configure)]
+    public async Task<IActionResult> DeleteDomainPackOutcomeCandidate(string packCode, string outcomeCode, CancellationToken cancellationToken)
+    {
+        await service.DeleteDomainPackOutcomeCandidateAsync(TenantId, ActorUserId, packCode, outcomeCode, cancellationToken);
+        return NoContent();
+    }
+
     [HttpGet("matters/{matterId:guid}")]
     [Authorize(Policy = IntelligencePolicies.Search)]
     public async Task<IActionResult> Matter(Guid matterId, CancellationToken cancellationToken)

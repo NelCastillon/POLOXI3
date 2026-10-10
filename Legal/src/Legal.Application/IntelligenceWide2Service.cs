@@ -15,7 +15,7 @@ namespace Legal.Application;
 // Isolated clone of the POLOXI search orchestration used by /intelligence/search/poloxi_wide.
 // Intentionally duplicates IntelligenceService.SearchWithPoloxiAsync so this "Wide" path can be
 // tweaked freely without changing /intelligence/search/poloxi behavior.
-public sealed partial class IntelligenceWide2Service(IIntelligenceRepository repository,IIntelligenceWide2Repository wideRepository,IAiProviderRouter aiProviderRouter,IExternalKnowledgeProvider externalKnowledgeProvider,ILegalRetriever legalRetriever,IPromptCatalog promptCatalog,IAdaptiveRetriever adaptiveRetriever,IAbvResolutionEngine abvEngine,ILegalDecisionRepository legalDecisionRepository,IErrorLogService errorLog,ILogger<IntelligenceWide2Service> logger,IWide2ProgressPublisher? progressPublisher=null,ILegalHierarchyExecutionRepository? hierarchyExecutionRepository=null,Features.Intelligence.Decision.Channels.IChannelContributionProjectionService? channelProjectionService=null,ILegalDecisionContractRepository? decisionContractRepository=null,Features.Intelligence.Decision.Channels.IDecisionChannelOrchestrator? channelOrchestrator=null,Abstractions.Intelligence.ILegalAuthorityOrchestrationService? legalAuthorityOrchestration=null,Abstractions.Intelligence.IDecisionRevisionResolver? decisionRevisionResolver=null):IIntelligenceWide2Service
+public sealed partial class IntelligenceWide2Service(IIntelligenceRepository repository,IIntelligenceWide2Repository wideRepository,IAiProviderRouter aiProviderRouter,IExternalKnowledgeProvider externalKnowledgeProvider,ILegalRetriever legalRetriever,IPromptCatalog promptCatalog,IAdaptiveRetriever adaptiveRetriever,IAbvResolutionEngine abvEngine,ILegalDecisionRepository legalDecisionRepository,IErrorLogService errorLog,ILogger<IntelligenceWide2Service> logger,IWide2ProgressPublisher? progressPublisher=null,ILegalHierarchyExecutionRepository? hierarchyExecutionRepository=null,Features.Intelligence.Decision.Channels.IChannelContributionProjectionService? channelProjectionService=null,ILegalDecisionContractRepository? decisionContractRepository=null,Features.Intelligence.Decision.Channels.IDecisionChannelOrchestrator? channelOrchestrator=null,Abstractions.Intelligence.ILegalAuthorityOrchestrationService? legalAuthorityOrchestration=null,Abstractions.Intelligence.IDecisionRevisionResolver? decisionRevisionResolver=null,Abstractions.Persistence.IChannelContributionRepository? channelContributionRepository=null):IIntelligenceWide2Service
 {
     // Real-time cockpit KPI feed. Optional so hosts without SignalR (or tests) run unchanged. Publishing
     // is fully fail-soft: a broken/absent transport must never affect grounding, scoring, or readiness.
@@ -51,6 +51,19 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     private MatterContextSnapshot? _matterContext;
     // Bounded, pre-rendered projection block appended to the proposal prompts. Empty when no context.
     private string _matterContextBlock=string.Empty;
+    // Per-run artifacts captured so the Factor Inventory can attach ACTUAL reference chips (admitted
+    // matter-fact evidence + proposed legal authorities). Set just before the inspector is built; read
+    // only by the deterministic Factor Inventory projector. Never fabricated — empty when the run
+    // produced none. Scoped service => per-run fields are safe.
+    private IReadOnlyList<PoloxiEvidenceDto> _factorInventoryAdmittedEvidence=[];
+    private IReadOnlyList<WideProposedAuthorityDto> _factorInventoryProposedAuthorities=[];
+    // Previously-persisted Decision Channel contributions (Document Evidence, Human Intelligence,
+    // Investigation, External Research, Decision Contract, …) for the CURRENT matter, loaded fail-soft just
+    // before the inspector is built. Same-run contributions persist AFTER the inspector, so only PRIOR runs'
+    // contributions are visible here — acceptable and additive. Read only by the deterministic Factor
+    // Inventory projector to attach ACTUAL CHANNEL reference chips; channel references NEVER upgrade a
+    // factor's admission/verification status. Empty when no repository is wired or none are persisted.
+    private IReadOnlyList<Features.Intelligence.Decision.Channels.ChannelContributionDto> _factorInventoryChannelContributions=[];
     // R3 Decision ownership: the authoritative decision intent for the CURRENT run. On an EVALUATE run a
     // supplied CurrentOutcome must NEVER become a fixed legal conclusion; on IMPLEMENT_DRAFT it is the
     // governing premise. Defaults to Evaluate so nothing is silently adopted. Per-run (scoped service).
@@ -64,6 +77,21 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     // universe at the start of the EVALUATE run so the Decision Outcome cards are never starved by the
     // emergent harvest/enumeration sources. Shared evaluation FACTORS are NOT in this set. Per-run (scoped).
     private IReadOnlyList<DecisionDomainPackOutcomeCandidateDto> _canonicalOutcomeCandidates=[];
+    // ADDITIVE "Use Domain Pack" mode (default OFF): captured once per run from the request toggle. When ON
+    // AND a DB-backed pack resolved, the Decision Outcome competition is locked to the pack's DB-backed
+    // OutcomeCandidates (no emergent/harvested/seeded outcome names survive) and the pack Dimensions seed the
+    // advisory L1 axes. OFF path is byte-for-byte unchanged: none of the pack-lock logic runs. Per-run (scoped).
+    private bool _useDomainPack;
+    // Pack Dimension codes (e.g. LIABILITY, DUTY, BREACH, CAUSATION, DAMAGES) for the resolved pack, captured
+    // only in Use Domain Pack mode as the eligible/preferred L1 scoring-axis vocabulary. Per-run (scoped).
+    private IReadOnlyList<string> _packDimensionCodes=[];
+    // Full DB-backed pack hierarchy tables captured only in Use Domain Pack mode. Dimensions become the
+    // deterministic Level-1 branches; Concepts (factors) and EvidenceTypes become the Level-2 children
+    // (siblings) grouped under their parent DimensionCode. These REPLACE the LLM intent/next-level output
+    // for L1/L2 when Use Domain Pack is on; L3+ stays LLM-generated. Per-run (scoped).
+    private IReadOnlyList<DecisionDomainPackDimensionDto> _packDimensions=[];
+    private IReadOnlyList<DecisionDomainConceptDto> _packConcepts=[];
+    private IReadOnlyList<DecisionDomainPackEvidenceTypeDto> _packEvidenceTypes=[];
     // R3 competition accountability: typed status for whether candidate competition ran on this run.
     private string? _candidateCompetitionStatus;
     // R4 Normalization Gate observability: the outcome of routing this run through the shared gate, or
@@ -622,6 +650,12 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         _decisionIntent=new(DecisionIntent.Evaluate,"No matter context.",false);
         _resolvedDomainPackId=null;
         _resolvedDomainPackCode=null;
+        _useDomainPack=false;
+        _packDimensionCodes=[];
+        _packDimensions=[];
+        _packConcepts=[];
+        _packEvidenceTypes=[];
+        _canonicalOutcomeCandidates=[];
         _candidateCompetitionStatus=null;
         _legalNormalization=null;
         _factBindingValidator=null;
@@ -644,7 +678,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         // Matter context is only projected into the POLOXI proposal prompts, so load it after the LLM-only
         // short-circuit to avoid a wasted lookup on the raw passthrough path.
         if(request.MatterId is{}matterId&&matterId!=Guid.Empty&&string.Equals(request.ContextCode,WideSearchContexts.Legal,StringComparison.OrdinalIgnoreCase))
-            await LoadMatterContextAsync(request.TenantId,matterId,request.Query,cancellationToken);
+            await LoadMatterContextAsync(request.TenantId,matterId,request.Query,request.UseDomainPack,cancellationToken);
         var configuration=await wideRepository.GetWideConfigurationAsync(request.TenantId,cancellationToken);
         // Wide search is knowledge-only: it never grounds branches against AMS enterprise records.
         // An empty capability catalog forces every branch onto the INTERPRETIVE reasoning path.
@@ -740,9 +774,21 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 ?ProposeLegalAuthoritiesAsync(request,configuration,queryContract,cancellationToken):null;
 
             // Stage 1: Ambiguous intent framing -> problem-specific Level-1 hierarchy (open, not catalog-limited).
-            var intent=await ProposeIntentAsync(request,capabilities,configuration,queryContract,cancellationToken);
-            llmCalls++;
-            var currentLevel=MaterializeBranches(intent.Branches,executionId,request.TenantId,1,new Dictionary<string,WideBranchRecord>(),configuration);
+            // Use Domain Pack mode: the Level-1 axes are the DB-backed pack Dimensions, so the intent LLM call
+            // is skipped and L1 is materialized deterministically from the pack. Off-path is unchanged.
+            var useDomainPackHierarchy=_useDomainPack&&_resolvedDomainPackId is not null&&_packDimensions.Count>0;
+            IReadOnlyCollection<WideProposedBranch> level1Branches;
+            if(useDomainPackHierarchy)
+            {
+                level1Branches=BuildDomainPackLevel1Branches();
+            }
+            else
+            {
+                var intent=await ProposeIntentAsync(request,capabilities,configuration,queryContract,cancellationToken);
+                llmCalls++;
+                level1Branches=intent.Branches;
+            }
+            var currentLevel=MaterializeBranches(level1Branches,executionId,request.TenantId,1,new Dictionary<string,WideBranchRecord>(),configuration);
             await wideRepository.SaveWideBranchesAsync(currentLevel,request.UserId,cancellationToken);
             allBranches.AddRange(currentLevel);
 
@@ -849,10 +895,25 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 // "only the first L1 generated L3s; the other L1s stopped at L2" asymmetry. Forcing all
                 // survivors here keeps L2->L3 (and every pre-minimum level) balanced across siblings.
                 if(depth<minimumTerminationDepth)narrowingParents=survivors.ToArray();
-                var proposal=await ProposeNextLevelAsync(request,narrowingParents,capabilities,configuration,depth+1,evidence,queryContract,cancellationToken);
-                llmCalls++;
                 var parentsByCode=survivors.ToDictionary(branch=>branch.BranchCode,StringComparer.OrdinalIgnoreCase);
-                var nextLevel=MaterializeBranches(proposal.Branches,executionId,request.TenantId,depth+1,parentsByCode,configuration);
+                WideBranchRecord[] nextLevel;
+                // Use Domain Pack mode: Level-2 is the DB-backed Concepts + EvidenceTypes (siblings) under each
+                // surviving Dimension parent, so the next-level LLM call is skipped for depth 1->2 only. L3+ is
+                // still LLM-generated via ProposeNextLevelAsync below. Off-path is unchanged.
+                if(useDomainPackHierarchy&&depth==1)
+                {
+                    var packLevel2=narrowingParents
+                        .Where(parent=>parent.BranchCode.StartsWith("DIM_",StringComparison.OrdinalIgnoreCase))
+                        .SelectMany(parent=>BuildDomainPackLevel2Branches(parent.BranchCode["DIM_".Length..]))
+                        .ToArray();
+                    nextLevel=MaterializeBranches(packLevel2,executionId,request.TenantId,depth+1,parentsByCode,configuration);
+                }
+                else
+                {
+                    var proposal=await ProposeNextLevelAsync(request,narrowingParents,capabilities,configuration,depth+1,evidence,queryContract,cancellationToken);
+                    llmCalls++;
+                    nextLevel=MaterializeBranches(proposal.Branches,executionId,request.TenantId,depth+1,parentsByCode,configuration);
+                }
                 // Degenerate-progress guard AND global BranchCode-uniqueness guard. Excluding only the
                 // immediately-preceding level's codes is not enough: the model can re-emit a code that
                 // already exists at a NON-adjacent earlier level (e.g. "WAGE_LOSS_CLAIMED" generated at L1
@@ -1502,6 +1563,31 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 }
             }
             var effectiveContractCount=EffectiveRankingContractCount(configuration,queryContract,rankingCompletionRequired);
+            // Use Domain Pack mode (default OFF): keep the LLM-proposed Decision Outcomes as the scored
+            // outcome cards and ADD the resolved pack's DB-backed OutcomeCandidates to the competition basis
+            // (union, not replace). Previously this REPLACED the basis with pack-only names, which dropped the
+            // LLM outcome identities from the cards. Per the UseDomainPack presentation contract the LLM
+            // outcomes are the C cards and the canonical pack outcome is shown as an advisory sub-line
+            // underneath (resolved later in the Candidate Landscape composer via mappedOutcomeCodes). Union
+            // keeps the pack outcomes eligible to compete without starving or overwriting emergent names.
+            // Fail-soft: if no eligible outcomes resolve, the basis is unchanged. OFF path is byte-for-byte unchanged.
+            if(_useDomainPack&&IsLegalDecisionEvaluationRun&&_canonicalOutcomeCandidates is{Count:>0})
+            {
+                var packOutcomes=_canonicalOutcomeCandidates
+                    .Where(IsCanonicalOutcomeEligible)
+                    .Select(outcome=>outcome.Name)
+                    .Where(name=>!string.IsNullOrWhiteSpace(name))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+                if(packOutcomes.Length>0)
+                {
+                    competitionBasis=competitionBasis
+                        .Concat(packOutcomes)
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .ToArray();
+                    logger.LogInformation("Wide2 Domain Pack mode: added {Count} DB-backed pack outcome(s) to the competition basis for matter {MatterId}; LLM-proposed outcomes retained as scored cards with advisory canonical mapping.",packOutcomes.Length,_matterContext!.MatterId);
+                }
+            }
             _competitionBasis=competitionBasis;
             var completion=await CompleteRankingAsync(request,executionId,queryContract,survivorsFinal,interpretiveResults,competitionBasis,externalKnowledgeAll,configuration,llmCalls,rankingCompletionRequired,effectiveContractCount,cancellationToken);
             candidates=completion.Candidates;
@@ -1860,6 +1946,22 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             WidePoloxiComputationDetailsDto? poloxiComputationDetails=null;
             try{poloxiComputationDetails=await wideRepository.GetPoloxiComputationDetailsAsync(request.TenantId,cancellationToken);}
             catch(Exception ex){logger.LogWarning(ex,"Failed to load POLOXI computation details for tenant {TenantId}.",request.TenantId);}
+            // Capture the ACTUAL run artifacts the Factor Inventory links to (admitted matter-fact evidence
+            // and proposed legal authorities). Both already cleared their own admission/identity gates upstream,
+            // so the inventory only references them — it never re-admits or fabricates them.
+            _factorInventoryAdmittedEvidence=matterFactEvidenceAdmitted;
+            _factorInventoryProposedAuthorities=MapProposedLegalAuthorities(proposedLegalAuthorities,externalKnowledge);
+            // Load PREVIOUSLY-persisted Decision Channel contributions (all channels incl. Human Intelligence)
+            // for this matter so the Factor Inventory can attach ACTUAL CHANNEL reference chips. Fail-soft and
+            // additive: a missing repo/matter or any read error simply yields no channel chips and never
+            // affects the primary response. Same-run contributions persist later (IngestChannelContributionsAsync),
+            // so only prior runs' contributions are visible here — by design.
+            _factorInventoryChannelContributions=[];
+            if(channelContributionRepository is not null && (request.DecisionMatterId??request.MatterId) is {} factorChannelMatterId && factorChannelMatterId!=Guid.Empty)
+            {
+                try{_factorInventoryChannelContributions=[..await channelContributionRepository.GetContributionsForMatterAsync(request.TenantId,factorChannelMatterId,cancellationToken)];}
+                catch(Exception ex){logger.LogWarning(ex,"Failed to load channel contributions for Factor Inventory (matter {MatterId}); channel chips omitted.",factorChannelMatterId);}
+            }
             var response=new WideSearchResponse(executionId,request.Query,answerStatus,terminationReason,depth,llmCalls,aggregateConfidence,answer.VerificationCode,finalAnswerText,allBranches.Select(ToDto).ToArray(),relevantEvidence,answer.SuggestedActions.Select(action=>new WideActionSuggestionDto(action.DisplayName,action.NavigationRoute,action.Rationale)).ToArray(),timer.ElapsedMilliseconds){ExternalReferences=MapExternalReferences(answer),InterpretiveResults=interpretiveResults,ExternalKnowledge=externalKnowledge,ProposedLegalAuthorities=MapProposedLegalAuthorities(proposedLegalAuthorities,externalKnowledge),QueryContract=queryContract,
             Candidates=candidates,AmbiguityGroups=ambiguityGroups,EvidenceCoverage=evidenceCoverage,DecisionEvidenceCoverage=decisionEvidenceCoverage,ExternalEvidenceCount=externalKnowledge.Count,EnterpriseEvidenceCount=relevantEvidence.Length,
             InitialEntropy=initialEntropy.Entropy,FinalEntropy=finalEntropy.Entropy,InitialNormalizedEntropy=initialEntropy.NormalizedEntropy,FinalNormalizedEntropy=finalEntropy.NormalizedEntropy,TotalActualInformationGain=totalActualInformationGain,EntropyBasisCode=finalEntropy.EntropyBasisCode,InformationRounds=informationRounds,
@@ -2178,6 +2280,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
           "primaryRiskReason": { "type": ["string", "null"] },
           "strongestAlternativeName": { "type": ["string", "null"] },
           "strongestAlternativeDiscriminator": { "type": ["string", "null"] },
+          "mappedOutcomeCodes": { "type": "array", "maxItems": 9, "items": { "type": "string" } },
           "fullAnalysis": {
             "type": ["object", "null"],
             "properties": {
@@ -2197,7 +2300,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             "additionalProperties": false
           }
         },
-        "required": ["candidateId", "candidateName", "presentationRole", "overviewHeadline", "overviewNarrative", "keyDrivers", "primaryRiskLabel", "primaryRiskReason", "strongestAlternativeName", "strongestAlternativeDiscriminator", "fullAnalysis"],
+        "required": ["candidateId", "candidateName", "presentationRole", "overviewHeadline", "overviewNarrative", "keyDrivers", "primaryRiskLabel", "primaryRiskReason", "strongestAlternativeName", "strongestAlternativeDiscriminator", "mappedOutcomeCodes", "fullAnalysis"],
         "additionalProperties": false
       }
     }
@@ -2210,7 +2313,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     // LLM proposal shapes for the Candidate Landscape composer (deserialized from CandidateLandscapeSchema).
     private sealed record CandidateDriverProposal(string? Label,string? Reason);
     private sealed record CandidateFullAnalysisProposal(string? ExecutiveAssessment,string? WhyCurrentPosition,string? EvidenceAndAuthorityPosition,string? ComparisonWithStrongestAlternative,string? StrongestCaseAgainst,string? MaterialUncertainty,string? WhatStrengthensCandidate,string? WhatWeakensCandidate,string? WhatCouldChangePosition,string? NextBestInformation,string? CurrentDecisionPosition);
-    private sealed record CandidateNarrativeProposal(string? CandidateId,string? CandidateName,string? PresentationRole,string? OverviewHeadline,string? OverviewNarrative,IReadOnlyList<CandidateDriverProposal>? KeyDrivers,string? PrimaryRiskLabel,string? PrimaryRiskReason,string? StrongestAlternativeName,string? StrongestAlternativeDiscriminator,CandidateFullAnalysisProposal? FullAnalysis);
+    private sealed record CandidateNarrativeProposal(string? CandidateId,string? CandidateName,string? PresentationRole,string? OverviewHeadline,string? OverviewNarrative,IReadOnlyList<CandidateDriverProposal>? KeyDrivers,string? PrimaryRiskLabel,string? PrimaryRiskReason,string? StrongestAlternativeName,string? StrongestAlternativeDiscriminator,IReadOnlyList<string>? MappedOutcomeCodes,CandidateFullAnalysisProposal? FullAnalysis);
     private sealed record CandidateLandscapeOuterProposal(string? PresentationState,string? ExecutiveSynthesis,IReadOnlyList<string>? PrincipalDiscriminators,IReadOnlyList<string>? MaterialUnknowns);
     private sealed record CandidateLandscapeProposal(string? AnalysisRunId,CandidateLandscapeOuterProposal? Landscape,IReadOnlyList<CandidateNarrativeProposal>? Candidates);
 
@@ -2311,12 +2414,13 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 :string.IsNullOrWhiteSpace(winnerDisplayName)?"INTERPRETIVE"
                 :"COMPETED";
             var userPrompt=BuildCandidateLandscapeContext(request,executionId,candidates,winnerDisplayName,presentationState,decisionConfidence,finalEntropy);
+            userPrompt=AppendCanonicalOutcomeMappingContext(userPrompt);
             var result=await aiProviderRouter.GenerateAsync(request.TenantId,CandidateLandscapeFeatureCode(request),
                 await GetWideSystemPromptAsync(request,IntelligencePromptCodes.WideCandidateLandscape,cancellationToken),
                 userPrompt,
                 CandidateLandscapeSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_CANDIDATE_LANDSCAPE",null,request.CorrelationId,"Intelligent Search Wide"),SynthesisModel(request),cancellationToken);
             var proposal=JsonSerializer.Deserialize<CandidateLandscapeProposal>(result.Content,JsonOptions);
-            return MapCandidateLandscape(proposal,executionId,candidates,presentationState);
+            return MapCandidateLandscape(proposal,executionId,candidates,presentationState,ResolveCanonicalOutcomeMap());
         }
         catch(Exception ex)when(!cancellationToken.IsCancellationRequested)
         {
@@ -2331,7 +2435,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     // Deterministic projection of the composer proposal into the presentation DTO. Preserves candidate
     // identity (only candidate names matching the authoritative set are kept) and drops the whole result
     // when no usable narrative survives, so the standard POLOXI cards are shown instead of a partial hybrid.
-    private static WideCandidateLandscapeDto? MapCandidateLandscape(CandidateLandscapeProposal? proposal,string executionId,IReadOnlyCollection<WideCandidateDto> candidates,string presentationState)
+    private static WideCandidateLandscapeDto? MapCandidateLandscape(CandidateLandscapeProposal? proposal,string executionId,IReadOnlyCollection<WideCandidateDto> candidates,string presentationState,IReadOnlyDictionary<string,string> canonicalOutcomeMap)
     {
         if(proposal?.Candidates is null||proposal.Candidates.Count==0)return null;
         var known=candidates.ToDictionary(c=>c.DisplayName.Trim(),StringComparer.OrdinalIgnoreCase);
@@ -2365,7 +2469,8 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 CleanOrNull(candidate.PrimaryRiskReason),
                 CleanOrNull(candidate.StrongestAlternativeName),
                 CleanOrNull(candidate.StrongestAlternativeDiscriminator),
-                full));
+                full)
+                { MappedOutcomes = ResolveMappedOutcomes(candidate.MappedOutcomeCodes,canonicalOutcomeMap) });
         }
         if(narratives.Count==0)return null;
         var landscape=proposal.Landscape;
@@ -2380,6 +2485,70 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     }
 
     private static string? CleanOrNull(string? value)=>string.IsNullOrWhiteSpace(value)?null:value.Trim();
+
+    // Advisory Domain Pack outcome-mapping support (UseDomainPack only). The LLM Decision Outcome keeps
+    // its own scored identity as the C card; this layer associates it with zero-or-more canonical Domain
+    // Pack OutcomeCandidates by legal MEANING. Presentation/routing ONLY — it never scores, ranks,
+    // selects, eliminates, or establishes eligibility, and it never alters POLOXI Core competition,
+    // normalization, or the C5/C9 verification gates. Everything is fail-soft: an absent pack, an empty
+    // map, or invalid codes simply yield no sub-line, and the outcome card is unchanged.
+
+    // Builds a case-insensitive OutcomeCode -> canonical Name lookup from the resolved DB-backed pack.
+    // Only populated in UseDomainPack mode with a resolved pack; empty otherwise so the OFF path and
+    // non-pack runs carry no mapping.
+    private IReadOnlyDictionary<string,string> ResolveCanonicalOutcomeMap()
+    {
+        if(!_useDomainPack||_canonicalOutcomeCandidates is not{Count:>0})
+            return new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
+        var map=new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
+        foreach(var outcome in _canonicalOutcomeCandidates)
+        {
+            if(string.IsNullOrWhiteSpace(outcome.OutcomeCode)||string.IsNullOrWhiteSpace(outcome.Name))continue;
+            map[outcome.OutcomeCode.Trim()]=outcome.Name.Trim();
+        }
+        return map;
+    }
+
+    // Appends the canonical OutcomeCandidate list to the composer prompt so the model can emit, per
+    // candidate, an advisory mappedOutcomeCodes[] drawn ONLY from these codes (chosen by MEANING, empty
+    // when none fit). No-op (prompt unchanged) unless UseDomainPack is on and a pack resolved — so the
+    // default path is byte-for-byte unchanged.
+    private string AppendCanonicalOutcomeMappingContext(string userPrompt)
+    {
+        if(!_useDomainPack||_canonicalOutcomeCandidates is not{Count:>0})return userPrompt;
+        var builder=new StringBuilder(userPrompt);
+        builder.Append("\n\nCANONICAL DOMAIN PACK OUTCOMES (advisory mapping targets — select by MEANING, never by surface keywords; mappedOutcomeCodes[] MUST use ONLY these codes; empty when none fit; never invented):\n");
+        foreach(var outcome in _canonicalOutcomeCandidates)
+        {
+            if(string.IsNullOrWhiteSpace(outcome.OutcomeCode)||string.IsNullOrWhiteSpace(outcome.Name))continue;
+            builder.Append("- ").Append(outcome.OutcomeCode.Trim()).Append(" | ").Append(Truncate(outcome.Name.Trim(),160));
+            if(!string.IsNullOrWhiteSpace(outcome.RoleCode))builder.Append(" | role=").Append(outcome.RoleCode.Trim());
+            if(!string.IsNullOrWhiteSpace(outcome.Description))builder.Append(" | ").Append(Truncate(outcome.Description!.Trim(),300));
+            builder.Append('\n');
+        }
+        builder.Append("For EVERY candidate above, set mappedOutcomeCodes to the canonical code(s) whose Name/Description/role match its actual legal character (distinguish merits dismissal vs procedural/jurisdictional bar vs voluntary withdrawal). An empty array is correct and preferred over a forced match. This mapping is advisory/presentation only; it NEVER changes scoring, ranking, selection, or eligibility.");
+        return builder.ToString();
+    }
+
+    // Deterministically resolves the model's advisory mappedOutcomeCodes[] against the canonical pack
+    // lookup: keeps only codes that exist in the pack (dedup, order-preserving), drops anything invented
+    // or blank, and projects to (code, name) pairs. Empty when nothing valid maps — the outcome card then
+    // shows the muted "No canonical Domain Pack outcome" line.
+    private static IReadOnlyCollection<WideCandidateOutcomeMappingDto> ResolveMappedOutcomes(IReadOnlyList<string>? proposedCodes,IReadOnlyDictionary<string,string> canonicalOutcomeMap)
+    {
+        if(proposedCodes is null||proposedCodes.Count==0||canonicalOutcomeMap.Count==0)return [];
+        var seen=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var resolved=new List<WideCandidateOutcomeMappingDto>();
+        foreach(var raw in proposedCodes)
+        {
+            if(string.IsNullOrWhiteSpace(raw))continue;
+            var code=raw.Trim();
+            if(!canonicalOutcomeMap.TryGetValue(code,out var name))continue;
+            if(!seen.Add(code))continue;
+            resolved.Add(new WideCandidateOutcomeMappingDto(code,name));
+        }
+        return resolved;
+    }
 
     // Deterministic output guard for the Legal Answer Composer. Enforces the presentation-only contract:
     // (1) required sections must be present; (2) every cited authority MUST match a verified authority
@@ -2565,7 +2734,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     // DecisionMatter aggregate and its optional Personal Injury profile, projects them into the snapshot
     // (distinct legal fields, provenance-tagged, no cross-derivation), and pre-renders a bounded prompt
     // block. Any failure (missing/foreign matter, provider error) leaves the run matter-less. Never throws.
-    private async Task LoadMatterContextAsync(Guid tenantId,Guid matterId,string originalQuestion,CancellationToken cancellationToken)
+    private async Task LoadMatterContextAsync(Guid tenantId,Guid matterId,string originalQuestion,bool useDomainPack,CancellationToken cancellationToken)
     {
         try
         {
@@ -2637,6 +2806,21 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                             _canonicalOutcomeCandidates=pack.OutcomeCandidates
                                 .OrderBy(o=>o.SortOrder)
                                 .ToArray();
+                        // Use Domain Pack mode: capture the pack Dimension codes as the eligible/preferred L1
+                        // scoring-axis vocabulary. Off-path leaves this empty and unused.
+                        if(useDomainPack&&pack.Dimensions.Count>0)
+                        {
+                            _packDimensionCodes=pack.Dimensions
+                                .Select(d=>d.DimensionCode)
+                                .Where(code=>!string.IsNullOrWhiteSpace(code))
+                                .ToArray();
+                            // Capture the full DB-backed hierarchy tables so the pipeline can build the
+                            // deterministic Level-1 (Dimensions) and Level-2 (Concepts + EvidenceTypes) branches
+                            // from the authoritative pack rows instead of the LLM intent/next-level output.
+                            _packDimensions=pack.Dimensions.ToArray();
+                            _packConcepts=pack.Concepts.Count>0 ? pack.Concepts.ToArray() : [];
+                            _packEvidenceTypes=pack.EvidenceTypes.Count>0 ? pack.EvidenceTypes.ToArray() : [];
+                        }
                     }
                 }
                 catch(Exception)when(!cancellationToken.IsCancellationRequested){/* pack is advisory; run continues unresolved */}
@@ -2646,6 +2830,26 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             // inferred practice-area label. Only appended when a pack actually resolved.
             if(_resolvedDomainPackId is{}resolvedPackId)
                 _matterContextBlock=Truncate($"RESOLVED DOMAIN PACK (verified, database-backed): {_resolvedDomainPackCode} [id {resolvedPackId}]\n{_matterContextBlock}",6200)??_matterContextBlock;
+            // ADDITIVE "Use Domain Pack" mode (default OFF). Only when the user explicitly enables the toggle
+            // AND a DB-backed pack resolved do we append the FULL Domain Pack mode configuration
+            // (Dimensions, EvidenceTypes, VerificationProfiles, MatterTypes, OutcomeCandidates, Concepts,
+            // Relations + advisory boundaries) as domain guidance for the proposal prompts. OFF path is
+            // byte-for-byte unchanged: nothing here runs and the existing prompts are untouched. Fail-soft.
+            if(useDomainPack&&_resolvedDomainPackId is not null)
+            {
+                _useDomainPack=true;
+                try
+                {
+                    var pack=await legalDecisionRepository.GetDomainPackAsync(tenantId,_resolvedDomainPackCode!,cancellationToken);
+                    if(pack is not null)
+                    {
+                        var config=LegalDecisionService.BuildDomainPackModeConfiguration(pack,pack.Concepts,pack.ConceptRelations,matter.MatterTypeCode);
+                        _matterContextBlock=Truncate($"{_matterContextBlock}\n\n──────── SELECTED DOMAIN PACK (configuration, not evidence; dynamic hierarchy is primary) ────────{config}",12000)??_matterContextBlock;
+                        logger.LogInformation("Wide2 Domain Pack mode ENABLED for matter {MatterId}; appended pack {DomainPack} configuration to the proposal prompts.",matterId,_resolvedDomainPackCode);
+                    }
+                }
+                catch(Exception)when(!cancellationToken.IsCancellationRequested){/* Domain Pack overlay is advisory; run continues with the unchanged proposal prompts */}
+            }
             // R2 diagnostic (#6): prove which saved matter fields actually reach EVERY prompt stage
             // (query contract, intent, hierarchy, answer, legal composer, candidate competition).
             logger.LogInformation("Wide2 matter context projected into all prompt stages for matter {MatterId}. DomainPack={DomainPack} (id {DomainPackId}). DecisionIntent={DecisionIntent} ({DecisionIntentReason}). Fields={FieldCount}. SerializedRequest:\n{MatterBlock}",matterId,_resolvedDomainPackCode??snapshot.DomainPackCode??"(none)",_resolvedDomainPackId?.ToString()??"(unresolved)",_decisionIntent.Intent,_decisionIntent.Reason,snapshot.FieldCount,_matterContextBlock);
@@ -3329,6 +3533,63 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         WideBranchRoles.Context=>WideBranchRoles.Context,
         _=>WideBranchRoles.Preference
     };
+
+    // Use Domain Pack mode: deterministic Level-1 branches built from the resolved DB pack Dimensions
+    // instead of the LLM intent output. Each Dimension is a DIMENSION-typed branch (jointly valid
+    // evaluation axis). Codes are DIM_-prefixed so they never collide with LLM-emitted codes. A neutral
+    // 0.8 interpretation prior keeps branches ACTIVE while staying under the interpretive ceiling (0.9),
+    // and ContinueNarrowing is true so the LLM still generates L3+ beneath them.
+    private IReadOnlyList<WideProposedBranch> BuildDomainPackLevel1Branches()=>
+        _packDimensions
+            .Where(d=>!string.IsNullOrWhiteSpace(d.DimensionCode))
+            .Select(d=>new WideProposedBranch(
+                $"DIM_{d.DimensionCode}",
+                string.IsNullOrWhiteSpace(d.Name)?d.DimensionCode:d.Name,
+                d.Description??string.Empty,
+                null,null,DomainPackInterpretationPrior(d.PoloxiImportanceScore),true,null,null)
+            {
+                SemanticType=WideBranchSemanticTypes.Dimension,
+            })
+            .ToArray();
+
+    // Maps a DB-backed advisory POLOXI importance score (0.0–1.0, migration 0407) onto the interpretive
+    // band [0.50, 0.90] used by deterministic Domain Pack branches: important nodes stay firmly ACTIVE
+    // while remaining under the interpretive ceiling (0.9). A missing score falls back to the neutral 0.8
+    // prior so behaviour is unchanged for packs without scoring. This is an advisory ordering prior only;
+    // POLOXI Core still owns all authoritative scoring and competition.
+    private static decimal DomainPackInterpretationPrior(decimal? importanceScore)
+    {
+        if(importanceScore is not { } score)
+            return 0.8m;
+        var clamped=score<0m?0m:score>1m?1m:score;
+        return 0.50m+(clamped*0.40m);
+    }
+
+    // Use Domain Pack mode: deterministic Level-2 children for a single parent Dimension branch, built
+    // from the DB Concepts (factors) and EvidenceTypes that reference that DimensionCode. Both kinds are
+    // L2 siblings under the Dimension per the table relationships. Concept codes are CPT_-prefixed and
+    // evidence codes EVD_-prefixed so they stay globally unique. ParentBranchCode is the dimension's
+    // DIM_ code so MaterializeBranches attaches them to the correct parent.
+    private IReadOnlyList<WideProposedBranch> BuildDomainPackLevel2Branches(string dimensionCode)
+    {
+        if(string.IsNullOrWhiteSpace(dimensionCode))
+            return [];
+        var parentCode=$"DIM_{dimensionCode}";
+        var children=new List<WideProposedBranch>();
+        foreach(var concept in _packConcepts.Where(c=>string.Equals(c.DimensionCode,dimensionCode,StringComparison.OrdinalIgnoreCase)))
+            children.Add(new WideProposedBranch(
+                $"CPT_{concept.ConceptCode}",
+                string.IsNullOrWhiteSpace(concept.Name)?concept.ConceptCode:concept.Name,
+                concept.Description??string.Empty,
+                null,null,0.8m,true,null,parentCode));
+        foreach(var evidence in _packEvidenceTypes.Where(e=>string.Equals(e.DimensionCode,dimensionCode,StringComparison.OrdinalIgnoreCase)))
+            children.Add(new WideProposedBranch(
+                $"EVD_{evidence.EvidenceTypeCode}",
+                string.IsNullOrWhiteSpace(evidence.Name)?evidence.EvidenceTypeCode:evidence.Name,
+                evidence.Description??string.Empty,
+                null,null,DomainPackInterpretationPrior(evidence.PoloxiImportanceScore),true,null,parentCode));
+        return children;
+    }
 
     private static IReadOnlyCollection<WideCandidateBranchEvidence> MergeMissingBranchScores(IReadOnlyCollection<WideCandidateBranchEvidence> existing,IReadOnlyCollection<WideCandidateBranchEvidence> incoming,IReadOnlyCollection<WideBranchRecord> branches)
     {

@@ -53,6 +53,11 @@ public sealed record WideSearchRequest(Guid TenantId,Guid UserId,[Required,Strin
     // fields into the Astra proposal prompt. The original user Query is preserved verbatim and is never
     // suppressed by the matter context; loading is fail-soft so an unavailable matter never breaks search.
     public Guid? MatterId{get;init;}
+    // ADDITIVE Domain Pack mode (default false = existing behavior, byte-for-byte unchanged prompts).
+    // When true, the WIDE proposal stages (intent + hierarchy) prepend the stored Domain Pack overlay
+    // (DECISION_DISCOVERY_DOMAIN_PACK_V1) plus the complete active SELECTED_DOMAIN_PACK configuration,
+    // resolved fail-soft from the matter's DomainPackCode. Scoring/competition/grounding are unchanged.
+    public bool UseDomainPack{get;init;}
 }
 
 // Database-backed model option for the wide-search Model dropdown (active CHAT deployments).
@@ -424,6 +429,43 @@ public sealed record WideFactorDto(
     // means the proposition is CONTRADICTED and must not be treated as established regardless of any single
     // supplied value.
     public IReadOnlyCollection<string> Contradictions { get; init; } = [];
+
+    // Actual, linkable references that back (or relate to) this factor: matter/profile fields, uploaded
+    // documents, admitted evidence, proposed/key legal authorities, and decision-channel contributions.
+    // Each chip carries the real entity navigation route when known so the attorney can open the source.
+    // Empty when nothing in the run references this factor. References are additive transparency: they only
+    // RAISE status through the existing admission gate, never lower or fabricate it.
+    public IReadOnlyCollection<WideFactorReferenceDto> References { get; init; } = [];
+
+    // Provenance of the matched matter/profile field that supplied ActualValue (UNKNOWN / SUPPLIED /
+    // VERIFIED / DISPUTED / INFERRED). Surfaces the profile's own verification status directly on the factor
+    // so a VERIFIED profile field is no longer silently downgraded to UNVERIFIED. Null when no field matched.
+    public string? MatterProvenance { get; init; }
+}
+
+// One actual, linkable reference backing or relating to a factor. KindCode identifies the source channel
+// (MATTER_FIELD / PROFILE_FIELD / DOCUMENT / EVIDENCE / LEGAL_AUTHORITY / CHANNEL). Label is the chip text,
+// Reference is the human citation/source location, NavigationRoute (when present) links to the real entity,
+// and VerificationState reflects the source's own status (VERIFIED / UNVERIFIED / SUPPLIED / ADMITTED / …).
+public sealed record WideFactorReferenceDto(
+    string KindCode,
+    string Label,
+    string? Reference,
+    string? NavigationRoute,
+    string VerificationState)
+{
+    // Optional document deep-link context so a reusable reference popup can open the ACTUAL source document
+    // and surface the exact passage line that backs the proposition. All additive and nullable: when a
+    // reference has no underlying document/passage (e.g. a matter field or an authority), these stay null and
+    // the popup degrades gracefully to citation-only. Never fabricated.
+    public Guid? DocumentId { get; init; }
+    public Guid? DocumentVersionId { get; init; }
+    public Guid? PassageId { get; init; }
+    public int? PageNumber { get; init; }
+    public string? LineReference { get; init; }
+    // The exact text excerpt from the source that links to the proposition (the "actual line inside the
+    // document"). Empty when no passage text is available.
+    public string? Excerpt { get; init; }
 }
 
 // One Candidate×Factor relationship. The same shared factor may have different relationships with
@@ -699,7 +741,18 @@ public sealed record WideCandidateNarrativeDto(
     string? PrimaryRiskReason,
     string? StrongestAlternativeName,
     string? StrongestAlternativeDiscriminator,
-    WideCandidateFullAnalysisNarrativeDto? FullAnalysis);
+    WideCandidateFullAnalysisNarrativeDto? FullAnalysis)
+{
+    // Advisory Domain Pack outcome mapping (UseDomainPack only). The LLM outcome card keeps its own
+    // scored identity; this carries the zero-or-more canonical Domain Pack OutcomeCandidates it maps to
+    // by legal MEANING, resolved to (code + name) from the DB-backed pack. Presentation/routing ONLY:
+    // never scores, ranks, selects, eliminates, or establishes eligibility. Empty when nothing fits.
+    public IReadOnlyCollection<WideCandidateOutcomeMappingDto> MappedOutcomes { get; init; } = [];
+}
+
+// One resolved advisory Domain Pack outcome mapping: the canonical OutcomeCode plus its DB-backed Name.
+// Rendered as a subordinate line under the LLM outcome card. Advisory/presentation only.
+public sealed record WideCandidateOutcomeMappingDto(string OutcomeCode, string Name);
 
 // A single decision-material driver for a candidate (label + plain-language reason it matters).
 public sealed record WideCandidateDriverDto(string Label,string? Reason);

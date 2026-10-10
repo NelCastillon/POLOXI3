@@ -340,4 +340,11 @@ public sealed record PersonalInjuryDecisionContext(
 
     // Opt-in deterministic AI response replay (honored only when the resolved mode allows replay).
     public bool EnableReplay { get; init; }
+
+    // Discovery grounding toggle. When true, discovery runs in Domain Pack mode: the existing discovery
+    // prompt is assembled together with the Domain Pack mode instructions and the matter's selected Domain
+    // Pack configuration. When false (default), discovery uses the existing unchanged behavior. The selected
+    // Domain Pack must resolve to a valid authorized pack when this is true; otherwise the decision fails with
+    // a clear validation error. POLOXI Core, output schema, and canonical outcome injection are unchanged.
+    public bool UseDomainPack { get; init; }
 }

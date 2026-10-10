@@ -66,6 +66,10 @@ internal abstract class StubDecisionRepository : ILegalDecisionRepository
     public Task DeleteDomainPackConceptAsync(Guid tenantId, Guid actorUserId, string packCode, string conceptCode, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     public Task SaveDomainPackConceptRelationAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackConceptRelationRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     public Task DeleteDomainPackConceptRelationAsync(Guid tenantId, Guid actorUserId, string packCode, string sourceConceptCode, string targetConceptCode, string relationTypeCode, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task SaveDomainPackOutcomeCandidateAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackOutcomeCandidateRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task DeleteDomainPackOutcomeCandidateAsync(Guid tenantId, Guid actorUserId, string packCode, string outcomeCode, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task SaveDomainPackAsync(Guid tenantId, Guid actorUserId, SaveDomainPackRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task DeleteDomainPackAsync(Guid tenantId, Guid actorUserId, string packCode, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     public Task<PersonalInjuryOptionsDto> GetPersonalInjuryOptionsAsync(Guid tenantId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     public Task<PersonalInjuryProfileDto?> GetPersonalInjuryProfileAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     public Task SavePersonalInjuryProfileAsync(Guid tenantId, Guid userId, Guid decisionMatterId, PersonalInjuryProfileSaveRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();

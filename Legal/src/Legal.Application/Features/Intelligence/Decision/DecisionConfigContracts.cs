@@ -34,6 +34,20 @@ public enum DecisionExecutionMode
     Prod
 }
 
+// Discovery-prompt assembly mode for a decision. This selects HOW the discovery (candidate/hierarchy
+// proposal) prompt is assembled; it does NOT change POLOXI Core scoring, competition, the output schema,
+// normalization, or the canonical outcome injection. Original is the existing, unchanged behavior.
+// DomainPack assembles a separate discovery prompt from the exact stored original prompt text PLUS the
+// Domain Pack mode instructions and the selected pack's structured configuration, grounding the SAME
+// L1 -> L2 -> L3 -> ... -> Ln reasoning in the selected pack. Defaults to Original.
+public enum DecisionDiscoveryMode
+{
+    // Existing discovery behavior: the stored discovery prompt is used unchanged.
+    Original,
+    // Domain Pack mode: original discovery prompt + Domain Pack instructions + selected pack configuration.
+    DomainPack
+}
+
 // A row of POLOXI.Legal_DecisionExecutionMode: the DB-backed, admin-editable configuration that
 // resolves an execution mode to its default model deployment, provider/endpoint overrides and
 // safeguards. Nullable override fields mean "use the existing Auto/route-resolved value" (so blank =
@@ -153,7 +167,8 @@ public sealed record SaveDomainPackDimensionRequest(
     [Required, StringLength(200)] string Name,
     [StringLength(1000)] string? Description,
     int SortOrder,
-    bool IsActive);
+    bool IsActive,
+    [Range(0, 1)] decimal? PoloxiImportanceScore = null);
 
 public sealed record SaveDomainPackEvidenceTypeRequest(
     [Required, StringLength(60)] string EvidenceTypeCode,
@@ -161,7 +176,8 @@ public sealed record SaveDomainPackEvidenceTypeRequest(
     [StringLength(60)] string? DimensionCode,
     [StringLength(1000)] string? Description,
     int SortOrder,
-    bool IsActive);
+    bool IsActive,
+    [Range(0, 1)] decimal? PoloxiImportanceScore = null);
 
 public sealed record SaveDomainPackVerificationProfileRequest(
     [Required, StringLength(60)] string ProfileCode,
@@ -202,6 +218,31 @@ public sealed record SaveDomainPackConceptRelationRequest(
     [StringLength(120)] string? JurisdictionCode,
     [StringLength(120)] string? MatterTypeCode,
     bool IsHardConstraint,
+    int SortOrder,
+    bool IsActive);
+
+// Canonical Decision Outcome candidate upsert (migration 0396/0398). RoleCode is PATHWAY or
+// ASSERTED_HISTORICAL. RequiresFactualPredicate + FactualPredicateKeywords drive the data-driven
+// eligibility gate. Upserted tenant-scoped by OutcomeCode; global seed rows stay immutable.
+public sealed record SaveDomainPackOutcomeCandidateRequest(
+    [Required, StringLength(60)] string OutcomeCode,
+    [Required, StringLength(200)] string Name,
+    [StringLength(1000)] string? Description,
+    [Required, StringLength(40)] string RoleCode,
+    bool RequiresVerification,
+    [StringLength(120)] string? MatterTypeCode,
+    int SortOrder,
+    bool RequiresFactualPredicate,
+    [StringLength(2000)] string? FactualPredicateKeywords,
+    bool IsActive);
+
+// Root Domain Pack upsert (practice-area domain semantics). Tenant-scoped create/update only; the
+// repository never modifies global (TenantId NULL) seed packs. Upserted by PackCode within the tenant.
+public sealed record SaveDomainPackRequest(
+    [Required, StringLength(60)] string PackCode,
+    [Required, StringLength(60)] string PracticeAreaCode,
+    [Required, StringLength(200)] string Name,
+    [StringLength(2000)] string? Description,
     int SortOrder,
     bool IsActive);
 

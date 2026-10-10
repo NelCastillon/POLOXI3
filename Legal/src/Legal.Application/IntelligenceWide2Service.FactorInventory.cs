@@ -35,6 +35,7 @@ public sealed partial class IntelligenceWide2Service
 
     private const string VerifSupplied = "SUPPLIED";
     private const string VerifUnverified = "UNVERIFIED";
+    private const string VerifVerified = "VERIFIED";
 
     // Per-run fact-binding validator (DB-backed config resolved by the orchestrator; fail-soft
     // DefaultConfig when the DB load degrades) and optional semantic probe (off by default).
@@ -56,7 +57,10 @@ public sealed partial class IntelligenceWide2Service
             _resolvedDomainPackCode ?? _matterContext?.DomainPackCode,
             deliveredCandidates?.Any(c => !c.IsConstraintViolation) == true,
             _factBindingValidator ?? new PropositionFactBindingValidator(PropositionFactBindingValidator.DefaultConfig()),
-            _factBindingSemanticProbe);
+            _factBindingSemanticProbe,
+            _factorInventoryAdmittedEvidence,
+            _factorInventoryProposedAuthorities,
+            _factorInventoryChannelContributions);
     }
 
     // Deterministic, instance-free projection. Accepts only the validated plan + immutable matter context
@@ -69,7 +73,10 @@ public sealed partial class IntelligenceWide2Service
         string? domainPackCode,
         bool anyCandidateDelivered,
         PropositionFactBindingValidator? validator = null,
-        FactBindingSemanticProbe? semanticProbe = null)
+        FactBindingSemanticProbe? semanticProbe = null,
+        IReadOnlyList<PoloxiEvidenceDto>? admittedEvidence = null,
+        IReadOnlyList<WideProposedAuthorityDto>? proposedAuthorities = null,
+        IReadOnlyList<Features.Intelligence.Decision.Channels.ChannelContributionDto>? channelContributions = null)
     {
         // Fail-soft: with no explicit validator (unit tests / degraded config) apply the embedded
         // DefaultConfig so the deterministic guardrails still run.
@@ -102,9 +109,9 @@ public sealed partial class IntelligenceWide2Service
             // Resolve the actual value from matter data only (never invented). MISSING when no matter
             // field materially matches the factor's label/question.
             var matterMatches = ResolveFactorMatches(dep, matterContext);
-            var (actualValue, valueSource, sourceLocation, matchedFieldLabel) = matterMatches.Count == 0
-                ? ((string?)null, AvailMissing, (string?)null, (string?)null)
-                : (matterMatches[0].Value, matterMatches[0].ValueSource, matterMatches[0].SourceLocation, matterMatches[0].FieldLabel);
+            var (actualValue, valueSource, sourceLocation, matchedFieldLabel, matchedProvenance, matchedGroup) = matterMatches.Count == 0
+                ? ((string?)null, AvailMissing, (string?)null, (string?)null, MatterFieldProvenance.Unknown, (string?)null)
+                : (matterMatches[0].Value, matterMatches[0].ValueSource, matterMatches[0].SourceLocation, matterMatches[0].FieldLabel, matterMatches[0].Provenance, matterMatches[0].GroupName);
             var hasValue = !string.IsNullOrWhiteSpace(actualValue);
 
             // Cross-source contradiction: the same proposition carries more than one distinct value across
@@ -199,6 +206,103 @@ public sealed partial class IntelligenceWide2Service
                     blockingObligations.Add($"Establish required factor '{dep.Label}' — no value in matter data or documents.");
             }
 
+            // ── Actual reference chips (additive transparency) ──────────────────────────────────────────
+            // Collect the real, linkable sources that back or relate to THIS factor: the matched matter /
+            // profile field (with its own provenance), admitted evidence, proposed/key legal authorities,
+            // and decision-channel contributions. References never lower status; a matter/profile field whose
+            // provenance is VERIFIED legitimately promotes VerificationStatus to VERIFIED, but ONLY when the
+            // value also established the proposition (passed the admission gate) — a rejected/contradicted
+            // value is surfaced as a reference without upgrading status, so no gate is weakened.
+            var references = new List<WideFactorReferenceDto>();
+            var factorEstablished = string.Equals(validationStatus, "VALID", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(availability, AvailAvailable, StringComparison.OrdinalIgnoreCase);
+
+            foreach (var match in matterMatches)
+            {
+                var isDocument = string.Equals(match.GroupName, "AVAILABLE EVIDENCE", StringComparison.OrdinalIgnoreCase);
+                references.Add(new WideFactorReferenceDto(
+                    KindCode: isDocument ? "DOCUMENT" : "MATTER_FIELD",
+                    Label: match.FieldLabel,
+                    Reference: $"{match.GroupName}: {match.Value}",
+                    NavigationRoute: BuildMatterFieldRoute(matterContext),
+                    VerificationState: match.Provenance.ToString().ToUpperInvariant())
+                {
+                    Excerpt = isDocument ? match.Value : null,
+                });
+            }
+
+            // Admitted matter-fact evidence that materially matches THIS proposition (already cleared the
+            // fact-binding gate upstream). Matched by field-label / proposition term overlap; never fabricated.
+            if (admittedEvidence is { Count: > 0 })
+            {
+                foreach (var ev in admittedEvidence)
+                {
+                    if (!EvidenceMatchesFactor(ev, dep, matchedFieldLabel))
+                        continue;
+                    references.Add(new WideFactorReferenceDto(
+                        KindCode: "EVIDENCE",
+                        Label: string.IsNullOrWhiteSpace(ev.Title) ? dep.Label : ev.Title,
+                        Reference: string.IsNullOrWhiteSpace(ev.Excerpt) ? ev.Title : ev.Excerpt,
+                        NavigationRoute: string.IsNullOrWhiteSpace(ev.NavigationRoute) ? null : ev.NavigationRoute,
+                        VerificationState: "ADMITTED")
+                    {
+                        DocumentId = ev.SearchDocumentId == Guid.Empty ? null : ev.SearchDocumentId,
+                        Excerpt = string.IsNullOrWhiteSpace(ev.Excerpt) ? null : ev.Excerpt,
+                    });
+                }
+            }
+
+            // Proposed legal authorities whose name materially relates to the proposition. VerificationState
+            // mirrors the authority's own identity-verification status (VERIFIED/UNVERIFIED) — never upgraded.
+            if (proposedAuthorities is { Count: > 0 })
+            {
+                foreach (var auth in proposedAuthorities)
+                {
+                    if (!AuthorityMatchesFactor(auth, dep))
+                        continue;
+                    references.Add(new WideFactorReferenceDto(
+                        KindCode: "LEGAL_AUTHORITY",
+                        Label: auth.Name,
+                        Reference: auth.Relevance,
+                        NavigationRoute: null,
+                        VerificationState: string.IsNullOrWhiteSpace(auth.VerificationStatus) ? "UNVERIFIED" : auth.VerificationStatus));
+                }
+            }
+
+            // Decision Channel contributions (Document Evidence, Human Intelligence, Investigation, External
+            // Research, Decision Contract, …) persisted against this matter that materially relate to THIS
+            // proposition. Purely additive provenance: the contribution's OWN verification state is surfaced
+            // verbatim and NEVER upgrades the factor's admission/verification status. Matched by conservative
+            // significant-token overlap; never fabricated. Routes to the matter workspace when one exists.
+            if (channelContributions is { Count: > 0 })
+            {
+                foreach (var contribution in channelContributions)
+                {
+                    if (!ChannelContributionMatchesFactor(contribution, dep))
+                        continue;
+                    var channelKind = ChannelKindLabel(contribution.ChannelTypeCode);
+                    var channelLabel = string.IsNullOrWhiteSpace(contribution.SourceLabel) ? channelKind : contribution.SourceLabel!;
+                    references.Add(new WideFactorReferenceDto(
+                        KindCode: "CHANNEL",
+                        Label: $"{channelKind}: {channelLabel}",
+                        Reference: string.IsNullOrWhiteSpace(contribution.VerificationReason) ? contribution.RelationCode : contribution.VerificationReason,
+                        NavigationRoute: BuildMatterFieldRoute(matterContext),
+                        VerificationState: string.IsNullOrWhiteSpace(contribution.VerificationStateCode) ? "UNVERIFIED" : contribution.VerificationStateCode.ToUpperInvariant())
+                    {
+                        DocumentId = contribution.LegalDocumentId,
+                        DocumentVersionId = contribution.LegalDocumentVersionId,
+                        PassageId = contribution.LegalDocumentPassageId,
+                    });
+                }
+            }
+
+            // Promote to VERIFIED when the establishing matter/profile field is itself VERIFIED provenance.
+            // Gate preserved: only an already-established (VALID + AVAILABLE) factor may be upgraded.
+            if (factorEstablished && matchedProvenance == MatterFieldProvenance.Verified)
+            {
+                verification = VerifVerified;
+            }
+
             factors.Add(new WideFactorDto(
                 FactorName: dep.Label,
                 Source: source,
@@ -220,6 +324,8 @@ public sealed partial class IntelligenceWide2Service
                 BindingAdmissibility = bindingAdmissibility,
                 VerificationObligation = verificationObligation,
                 Contradictions = contradictions,
+                References = references,
+                MatterProvenance = hasValue ? matchedProvenance.ToString().ToUpperInvariant() : null,
             });
 
             // One relationship row per candidate edge. The same factor may be REQUIRED for one candidate
@@ -320,11 +426,11 @@ public sealed partial class IntelligenceWide2Service
     // All materially-matching matter values for a factor across every group. Used both to resolve the
     // primary value (first match) and to detect cross-source contradictions (distinct values for the same
     // proposition). Never fabricates: only returns values actually present in matter data / documents.
-    private static IReadOnlyList<(string Value, string ValueSource, string SourceLocation, string FieldLabel)> ResolveFactorMatches(
+    private static IReadOnlyList<(string Value, string ValueSource, string SourceLocation, string FieldLabel, MatterFieldProvenance Provenance, string GroupName)> ResolveFactorMatches(
         LegalDecisionService.NormalizedDependency dep,
         MatterContextSnapshot? matterContext)
     {
-        var matches = new List<(string, string, string, string)>();
+        var matches = new List<(string, string, string, string, MatterFieldProvenance, string)>();
         if (matterContext is null)
             return matches;
 
@@ -334,22 +440,94 @@ public sealed partial class IntelligenceWide2Service
             {
                 if (!field.HasValue)
                     continue;
-                if (FieldMatchesFactor(field.Label, dep.Label))
+                // Match the field against BOTH the factor's short label AND its fuller proposition/question text.
+                // Many real matter values (e.g. "Settlement Status" ↔ "Has the claim already settled?") only
+                // overlap with the richer question wording, so testing the label alone left them unbound and the
+                // Actual Value showing "—". Still deterministic and conservative: FieldMatchesFactor keeps the
+                // significant-token gate, so unrelated fields are not conflated and nothing is fabricated.
+                var matchesLabel = FieldMatchesFactor(field.Label, dep.Label);
+                var matchesQuestion = !matchesLabel
+                    && !string.IsNullOrWhiteSpace(dep.Question)
+                    && FieldMatchesFactor(field.Label, dep.Question!);
+                if (matchesLabel || matchesQuestion)
                 {
                     var source = string.Equals(groupName, "AVAILABLE EVIDENCE", StringComparison.OrdinalIgnoreCase)
                         ? FactorSourceDocument
                         : FactorSourceMatter;
-                    matches.Add((field.Value!, source, $"{groupName}:{field.Label}", field.Label));
+                    matches.Add((field.Value!, source, $"{groupName}:{field.Label}", field.Label, field.Provenance, groupName));
                 }
             }
         }
         return matches;
     }
 
-    // Distinct conflicting values (case-insensitive) captured for the same proposition from more than one
-    // matter source. Returns an empty set when zero or one distinct value exists (no contradiction).
+    // Deterministic navigation route for a matched matter/profile field reference chip. Links to the real
+    // matter workspace (documents tab for uploaded evidence, profile otherwise). Null when no matter is
+    // loaded — never fabricates a route for a matter that does not exist.
+    private static string? BuildMatterFieldRoute(MatterContextSnapshot? matterContext)
+    {
+        if (matterContext is null || matterContext.MatterId == Guid.Empty)
+            return null;
+        return $"/legal/matters/{matterContext.MatterId}";
+    }
+
+    // True when an admitted evidence row materially relates to THIS factor. Uses the same significant-token
+    // overlap gate as matter-field matching against the evidence title/excerpt and the factor label/question.
+    // No fabrication: an evidence row with no material overlap is simply not attached.
+    private static bool EvidenceMatchesFactor(PoloxiEvidenceDto evidence, LegalDecisionService.NormalizedDependency dep, string? matchedFieldLabel)
+    {
+        var haystack = $"{evidence.Title} {evidence.Excerpt}".Trim();
+        if (haystack.Length == 0)
+            return false;
+        if (!string.IsNullOrWhiteSpace(matchedFieldLabel) && FieldMatchesFactor(haystack, matchedFieldLabel))
+            return true;
+        if (FieldMatchesFactor(haystack, dep.Label))
+            return true;
+        return !string.IsNullOrWhiteSpace(dep.Question) && FieldMatchesFactor(haystack, dep.Question!);
+    }
+
+    // True when a proposed legal authority materially relates to THIS factor by significant-token overlap of
+    // the authority name/relevance against the factor label/question. Authority identity verification is not
+    // altered here — only whether the authority is surfaced as a reference for this factor.
+    private static bool AuthorityMatchesFactor(WideProposedAuthorityDto authority, LegalDecisionService.NormalizedDependency dep)
+    {
+        var haystack = $"{authority.Name} {authority.Relevance}".Trim();
+        if (haystack.Length == 0)
+            return false;
+        if (FieldMatchesFactor(haystack, dep.Label))
+            return true;
+        return !string.IsNullOrWhiteSpace(dep.Question) && FieldMatchesFactor(haystack, dep.Question!);
+    }
+
+    // True when a persisted Decision Channel contribution materially relates to THIS factor by significant-token
+    // overlap of the contribution's source label / verification reason against the factor label/question. The
+    // contribution's own verification state is never altered here — only whether it is surfaced as a channel
+    // reference for this factor. No fabrication: a contribution with no material overlap is simply not attached.
+    private static bool ChannelContributionMatchesFactor(Features.Intelligence.Decision.Channels.ChannelContributionDto contribution, LegalDecisionService.NormalizedDependency dep)
+    {
+        var haystack = $"{contribution.SourceLabel} {contribution.VerificationReason}".Trim();
+        if (haystack.Length == 0)
+            return false;
+        if (FieldMatchesFactor(haystack, dep.Label))
+            return true;
+        return !string.IsNullOrWhiteSpace(dep.Question) && FieldMatchesFactor(haystack, dep.Question!);
+    }
+
+    // Human-readable channel label for a persisted contribution's ChannelTypeCode. Falls back to the raw code
+    // so an unrecognized/new channel still surfaces its real source rather than being dropped.
+    private static string ChannelKindLabel(string? channelTypeCode) => channelTypeCode switch
+    {
+        "DocumentEvidence" => "Document",
+        "HumanIntelligence" => "Human Intelligence",
+        "Investigation" => "Investigation",
+        "ExternalResearch" => "External Research",
+        "DecisionContract" => "Decision Contract",
+        "LegalAuthority" => "Legal Authority",
+        null or "" => "Channel",
+        _ => channelTypeCode
+    };
     private static IReadOnlyList<string> DetectContradictions(
-        IReadOnlyList<(string Value, string ValueSource, string SourceLocation, string FieldLabel)> matches)
+        IReadOnlyList<(string Value, string ValueSource, string SourceLocation, string FieldLabel, MatterFieldProvenance Provenance, string GroupName)> matches)
     {
         if (matches.Count < 2)
             return [];

@@ -50,6 +50,24 @@ public interface ILegalDecisionService
     Task<DecisionDomainPackDto?> GetDomainPackAsync(Guid tenantId, string packCode, CancellationToken cancellationToken = default);
     Task<IReadOnlyCollection<DecisionDomainPackDto>> GetDomainPacksAsync(Guid tenantId, CancellationToken cancellationToken = default);
 
+    // Domain Pack CRUD (tenant-scoped; global TenantId NULL seed rows are immutable).
+    Task SaveDomainPackAsync(Guid tenantId, Guid actorUserId, SaveDomainPackRequest request, CancellationToken cancellationToken = default);
+    Task DeleteDomainPackAsync(Guid tenantId, Guid actorUserId, string packCode, CancellationToken cancellationToken = default);
+    Task SaveDomainPackDimensionAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackDimensionRequest request, CancellationToken cancellationToken = default);
+    Task DeleteDomainPackDimensionAsync(Guid tenantId, Guid actorUserId, string packCode, string dimensionCode, CancellationToken cancellationToken = default);
+    Task SaveDomainPackEvidenceTypeAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackEvidenceTypeRequest request, CancellationToken cancellationToken = default);
+    Task DeleteDomainPackEvidenceTypeAsync(Guid tenantId, Guid actorUserId, string packCode, string evidenceTypeCode, CancellationToken cancellationToken = default);
+    Task SaveDomainPackVerificationProfileAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackVerificationProfileRequest request, CancellationToken cancellationToken = default);
+    Task DeleteDomainPackVerificationProfileAsync(Guid tenantId, Guid actorUserId, string packCode, string profileCode, CancellationToken cancellationToken = default);
+    Task SaveDomainPackMatterTypeAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackMatterTypeRequest request, CancellationToken cancellationToken = default);
+    Task DeleteDomainPackMatterTypeAsync(Guid tenantId, Guid actorUserId, string packCode, string matterTypeCode, CancellationToken cancellationToken = default);
+    Task SaveDomainPackConceptAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackConceptRequest request, CancellationToken cancellationToken = default);
+    Task DeleteDomainPackConceptAsync(Guid tenantId, Guid actorUserId, string packCode, string conceptCode, CancellationToken cancellationToken = default);
+    Task SaveDomainPackConceptRelationAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackConceptRelationRequest request, CancellationToken cancellationToken = default);
+    Task DeleteDomainPackConceptRelationAsync(Guid tenantId, Guid actorUserId, string packCode, string sourceConceptCode, string targetConceptCode, string relationTypeCode, CancellationToken cancellationToken = default);
+    Task SaveDomainPackOutcomeCandidateAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackOutcomeCandidateRequest request, CancellationToken cancellationToken = default);
+    Task DeleteDomainPackOutcomeCandidateAsync(Guid tenantId, Guid actorUserId, string packCode, string outcomeCode, CancellationToken cancellationToken = default);
+
     // ── Personal Injury (Domain Pack: PERSONAL_INJURY) support ──
     Task<PersonalInjuryOptionsDto> GetPersonalInjuryOptionsAsync(Guid tenantId, CancellationToken cancellationToken = default);
     Task<PersonalInjuryProfileDto?> GetPersonalInjuryProfileAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default);
