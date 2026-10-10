@@ -1,0 +1,773 @@
+@page "/admin/domainpacks"
+@using System.ComponentModel.DataAnnotations
+@using Legal.Application.Features.Intelligence.Decision
+@inject ApiClient Api
+
+<LegalWorkspace>
+<div class="intel-page">
+    <header class="intel-header">
+        <div>
+            <span>Administration · Domain Packs</span>
+            <h1>Domain Pack Management</h1>
+            <p>Manage practice-area Domain Packs and their domain semantics — dimensions, evidence types, verification profiles, matter types, concepts, concept relations, and outcome candidates. Edits are tenant-scoped; global seed packs stay read-only.</p>
+        </div>
+        <div class="um-header-actions">
+            <button class="um-btn um-btn-primary" @onclick="OpenCreatePack"><i class="bi bi-box-seam"></i> Add pack</button>
+            <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+        </div>
+    </header>
+
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_loadError</div>
+    }
+
+    @if (_loading)
+    {
+        <div class="intel-state">Loading domain packs…</div>
+    }
+    else
+    {
+        <section class="intel-panel">
+            <div class="um-form-grid">
+                <label>Domain Pack
+                    <select class="um-input" @onchange="OnPackChanged">
+                        <option value="">Select a pack…</option>
+                        @foreach (var p in _packs)
+                        {
+                            <option value="@p.PackCode" selected="@(p.PackCode == _selectedCode)">@p.Name (@p.PackCode) · @p.PracticeAreaCode</option>
+                        }
+                    </select>
+                </label>
+                @if (_selected is not null)
+                {
+                    <div class="um-inline">
+                        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEditPack(_selected)"><i class="bi bi-pencil"></i> Edit pack</button>
+                        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => AskDeletePack(_selected)"><i class="bi bi-trash"></i> Delete pack</button>
+                    </div>
+                }
+            </div>
+        </section>
+
+        @if (_selected is not null)
+        {
+            <section class="intel-kpis">
+                @foreach (var t in _tabs)
+                {
+                    <article class="intel-kpi-link @(_activeTab == t.Key ? "intel-kpi-active" : null)" role="button" tabindex="0"
+                             title="@t.Title" @onclick="() => SetTab(t.Key)">
+                        <span>@t.Title</span><strong>@TabCount(t.Key)</strong>
+                    </article>
+                }
+            </section>
+
+            <section class="intel-panel">
+                <div class="um-header-actions" style="margin-bottom:.75rem;">
+                    <button class="um-btn um-btn-primary um-btn-sm" @onclick="OpenCreateRow"><i class="bi bi-plus-lg"></i> Add @CurrentTabSingular</button>
+                </div>
+
+                @if (_activeTab == "dimensions")
+                {
+                    <table class="um-table">
+                        <thead><tr><th>Code</th><th>Name</th><th>Description</th><th>Importance</th><th></th></tr></thead>
+                        <tbody>
+                            @foreach (var d in _selected.Dimensions)
+                            {
+                                <tr class="um-row-clickable" @onclick="() => EditDimension(d)">
+                                    <td>@d.DimensionCode</td><td>@d.Name</td><td>@d.Description</td>
+                                    <td>@(d.PoloxiImportanceScore?.ToString("0.00") ?? "—")</td>
+                                    <td><button class="um-btn um-btn-ghost um-btn-sm" title="Delete" @onclick="() => AskDeleteDimension(d)" @onclick:stopPropagation="true"><i class="bi bi-trash"></i></button></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+                else if (_activeTab == "evidencetypes")
+                {
+                    <table class="um-table">
+                        <thead><tr><th>Code</th><th>Name</th><th>Dimension</th><th>Description</th><th>Importance</th><th></th></tr></thead>
+                        <tbody>
+                            @foreach (var ev in _selected.EvidenceTypes)
+                            {
+                                <tr class="um-row-clickable" @onclick="() => EditEvidenceType(ev)">
+                                    <td>@ev.EvidenceTypeCode</td><td>@ev.Name</td><td>@ev.DimensionCode</td><td>@ev.Description</td>
+                                    <td>@(ev.PoloxiImportanceScore?.ToString("0.00") ?? "—")</td>
+                                    <td><button class="um-btn um-btn-ghost um-btn-sm" title="Delete" @onclick="() => AskDeleteEvidenceType(ev)" @onclick:stopPropagation="true"><i class="bi bi-trash"></i></button></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+                else if (_activeTab == "verificationprofiles")
+                {
+                    <table class="um-table">
+                        <thead><tr><th>Code</th><th>Name</th><th>Evidence Type</th><th>Description</th><th></th></tr></thead>
+                        <tbody>
+                            @foreach (var vp in _selected.VerificationProfiles)
+                            {
+                                <tr class="um-row-clickable" @onclick="() => EditVerificationProfile(vp)">
+                                    <td>@vp.ProfileCode</td><td>@vp.Name</td><td>@vp.EvidenceTypeCode</td><td>@vp.Description</td>
+                                    <td><button class="um-btn um-btn-ghost um-btn-sm" title="Delete" @onclick="() => AskDeleteVerificationProfile(vp)" @onclick:stopPropagation="true"><i class="bi bi-trash"></i></button></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+                else if (_activeTab == "mattertypes")
+                {
+                    <table class="um-table">
+                        <thead><tr><th>Code</th><th>Name</th><th>Description</th><th></th></tr></thead>
+                        <tbody>
+                            @foreach (var mt in _selected.MatterTypes)
+                            {
+                                <tr class="um-row-clickable" @onclick="() => EditMatterType(mt)">
+                                    <td>@mt.MatterTypeCode</td><td>@mt.Name</td><td>@mt.Description</td>
+                                    <td><button class="um-btn um-btn-ghost um-btn-sm" title="Delete" @onclick="() => AskDeleteMatterType(mt)" @onclick:stopPropagation="true"><i class="bi bi-trash"></i></button></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+                else if (_activeTab == "concepts")
+                {
+                    <table class="um-table">
+                        <thead><tr><th>Code</th><th>Dimension</th><th>Name</th><th>Kind</th><th>Source</th><th></th></tr></thead>
+                        <tbody>
+                            @foreach (var c in _selected.Concepts)
+                            {
+                                <tr class="um-row-clickable" @onclick="() => EditConcept(c)">
+                                    <td>@c.ConceptCode</td><td>@c.DimensionCode</td><td>@c.Name</td><td>@c.ConceptKindCode</td><td>@c.SourceClassCode</td>
+                                    <td><button class="um-btn um-btn-ghost um-btn-sm" title="Delete" @onclick="() => AskDeleteConcept(c)" @onclick:stopPropagation="true"><i class="bi bi-trash"></i></button></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+                else if (_activeTab == "conceptrelations")
+                {
+                    <table class="um-table">
+                        <thead><tr><th>Source</th><th>Target</th><th>Relation</th><th>Constraint</th><th>Hard</th><th></th></tr></thead>
+                        <tbody>
+                            @foreach (var r in _selected.ConceptRelations)
+                            {
+                                <tr class="um-row-clickable" @onclick="() => EditConceptRelation(r)">
+                                    <td>@r.SourceConceptCode</td><td>@r.TargetConceptCode</td><td>@r.RelationTypeCode</td><td>@r.ConstraintCode</td><td>@(r.IsHardConstraint ? "Yes" : "No")</td>
+                                    <td><button class="um-btn um-btn-ghost um-btn-sm" title="Delete" @onclick="() => AskDeleteConceptRelation(r)" @onclick:stopPropagation="true"><i class="bi bi-trash"></i></button></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+                else if (_activeTab == "outcomecandidates")
+                {
+                    <table class="um-table">
+                        <thead><tr><th>Code</th><th>Name</th><th>Role</th><th>Verify</th><th>Matter Type</th><th></th></tr></thead>
+                        <tbody>
+                            @foreach (var o in _selected.OutcomeCandidates)
+                            {
+                                <tr class="um-row-clickable" @onclick="() => EditOutcomeCandidate(o)">
+                                    <td>@o.OutcomeCode</td><td>@o.Name</td><td>@o.RoleCode</td><td>@(o.RequiresVerification ? "Yes" : "No")</td><td>@o.MatterTypeCode</td>
+                                    <td><button class="um-btn um-btn-ghost um-btn-sm" title="Delete" @onclick="() => AskDeleteOutcomeCandidate(o)" @onclick:stopPropagation="true"><i class="bi bi-trash"></i></button></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+            </section>
+        }
+    }
+</div>
+
+@* ── Pack create/edit modal ── *@
+@if (_showPackForm)
+{
+    <div class="um-modal-backdrop">
+        <EditForm Model="_packForm" OnValidSubmit="SavePackAsync" class="um-modal">
+            <DataAnnotationsValidator />
+            <div class="um-modal-header">
+                <i class="bi bi-box-seam"></i>
+                <span>@(_packForm.IsEdit ? "Edit Domain Pack" : "Add Domain Pack")</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showPackForm = false"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <div class="um-modal-body"><div class="um-form-grid">
+                <label>Pack Code
+                    <InputText @bind-Value="_packForm.PackCode" class="um-input" disabled="@_packForm.IsEdit" />
+                    <ValidationMessage For="() => _packForm.PackCode" class="text-danger" />
+                </label>
+                <label>Practice Area Code
+                    <InputText @bind-Value="_packForm.PracticeAreaCode" class="um-input" />
+                    <ValidationMessage For="() => _packForm.PracticeAreaCode" class="text-danger" />
+                </label>
+                <label>Name
+                    <InputText @bind-Value="_packForm.Name" class="um-input" />
+                    <ValidationMessage For="() => _packForm.Name" class="text-danger" />
+                </label>
+                <label>Description
+                    <InputTextArea @bind-Value="_packForm.Description" class="um-input" />
+                    <ValidationMessage For="() => _packForm.Description" class="text-danger" />
+                </label>
+                <label>Sort Order
+                    <InputNumber @bind-Value="_packForm.SortOrder" class="um-input" />
+                    <ValidationMessage For="() => _packForm.SortOrder" class="text-danger" />
+                </label>
+                <label class="um-check"><InputCheckbox @bind-Value="_packForm.IsActive" /> Active</label>
+            </div></div>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showPackForm = false">Cancel</button>
+                <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@(_saving ? "Saving…" : "Save")</button>
+            </div>
+        </EditForm>
+    </div>
+}
+
+@* ── Child row create/edit modal ── *@
+@if (_showRowForm)
+{
+    <div class="um-modal-backdrop">
+        <EditForm Model="_rowModel" OnValidSubmit="SaveRowAsync" class="um-modal">
+            <DataAnnotationsValidator />
+            <div class="um-modal-header">
+                <i class="bi @CurrentTabIcon"></i>
+                <span>@(_rowIsEdit ? "Edit" : "Add") @CurrentTabSingular</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showRowForm = false"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <div class="um-modal-body"><div class="um-form-grid">
+                @if (_rowModel is DimensionForm df)
+                {
+                    <label>Dimension Code<InputText @bind-Value="df.DimensionCode" class="um-input" disabled="@_rowIsEdit" /><ValidationMessage For="() => df.DimensionCode" class="text-danger" /></label>
+                    <label>Name<InputText @bind-Value="df.Name" class="um-input" /><ValidationMessage For="() => df.Name" class="text-danger" /></label>
+                    <label>Description<InputTextArea @bind-Value="df.Description" class="um-input" /><ValidationMessage For="() => df.Description" class="text-danger" /></label>
+                    <label>Sort Order<InputNumber @bind-Value="df.SortOrder" class="um-input" /><ValidationMessage For="() => df.SortOrder" class="text-danger" /></label>
+                    <label>POLOXI Importance (0.00–1.00)<InputNumber @bind-Value="df.PoloxiImportanceScore" step="0.01" class="um-input" /><ValidationMessage For="() => df.PoloxiImportanceScore" class="text-danger" /></label>
+                    <label class="um-check"><InputCheckbox @bind-Value="df.IsActive" /> Active</label>
+                }
+                else if (_rowModel is EvidenceTypeForm ef)
+                {
+                    <label>Evidence Type Code<InputText @bind-Value="ef.EvidenceTypeCode" class="um-input" disabled="@_rowIsEdit" /><ValidationMessage For="() => ef.EvidenceTypeCode" class="text-danger" /></label>
+                    <label>Name<InputText @bind-Value="ef.Name" class="um-input" /><ValidationMessage For="() => ef.Name" class="text-danger" /></label>
+                    <label>Dimension Code
+                        <InputSelect @bind-Value="ef.DimensionCode" class="um-input">
+                            <option value="">— none —</option>
+                            @foreach (var d in _selected!.Dimensions) { <option value="@d.DimensionCode">@d.Name (@d.DimensionCode)</option> }
+                        </InputSelect>
+                        <ValidationMessage For="() => ef.DimensionCode" class="text-danger" />
+                    </label>
+                    <label>Description<InputTextArea @bind-Value="ef.Description" class="um-input" /><ValidationMessage For="() => ef.Description" class="text-danger" /></label>
+                    <label>Sort Order<InputNumber @bind-Value="ef.SortOrder" class="um-input" /><ValidationMessage For="() => ef.SortOrder" class="text-danger" /></label>
+                    <label>POLOXI Importance (0.00–1.00)<InputNumber @bind-Value="ef.PoloxiImportanceScore" step="0.01" class="um-input" /><ValidationMessage For="() => ef.PoloxiImportanceScore" class="text-danger" /></label>
+                    <label class="um-check"><InputCheckbox @bind-Value="ef.IsActive" /> Active</label>
+                }
+                else if (_rowModel is VerificationProfileForm vf)
+                {
+                    <label>Profile Code<InputText @bind-Value="vf.ProfileCode" class="um-input" disabled="@_rowIsEdit" /><ValidationMessage For="() => vf.ProfileCode" class="text-danger" /></label>
+                    <label>Name<InputText @bind-Value="vf.Name" class="um-input" /><ValidationMessage For="() => vf.Name" class="text-danger" /></label>
+                    <label>Evidence Type Code
+                        <InputSelect @bind-Value="vf.EvidenceTypeCode" class="um-input">
+                            <option value="">— none —</option>
+                            @foreach (var ev in _selected!.EvidenceTypes) { <option value="@ev.EvidenceTypeCode">@ev.Name (@ev.EvidenceTypeCode)</option> }
+                        </InputSelect>
+                        <ValidationMessage For="() => vf.EvidenceTypeCode" class="text-danger" />
+                    </label>
+                    <label>Description<InputTextArea @bind-Value="vf.Description" class="um-input" /><ValidationMessage For="() => vf.Description" class="text-danger" /></label>
+                    <label>Sort Order<InputNumber @bind-Value="vf.SortOrder" class="um-input" /><ValidationMessage For="() => vf.SortOrder" class="text-danger" /></label>
+                    <label class="um-check"><InputCheckbox @bind-Value="vf.IsActive" /> Active</label>
+                }
+                else if (_rowModel is MatterTypeForm mf)
+                {
+                    <label>Matter Type Code<InputText @bind-Value="mf.MatterTypeCode" class="um-input" disabled="@_rowIsEdit" /><ValidationMessage For="() => mf.MatterTypeCode" class="text-danger" /></label>
+                    <label>Name<InputText @bind-Value="mf.Name" class="um-input" /><ValidationMessage For="() => mf.Name" class="text-danger" /></label>
+                    <label>Description<InputTextArea @bind-Value="mf.Description" class="um-input" /><ValidationMessage For="() => mf.Description" class="text-danger" /></label>
+                    <label>Sort Order<InputNumber @bind-Value="mf.SortOrder" class="um-input" /><ValidationMessage For="() => mf.SortOrder" class="text-danger" /></label>
+                    <label class="um-check"><InputCheckbox @bind-Value="mf.IsActive" /> Active</label>
+                }
+                else if (_rowModel is ConceptForm cf)
+                {
+                    <label>Concept Code<InputText @bind-Value="cf.ConceptCode" class="um-input" disabled="@_rowIsEdit" /><ValidationMessage For="() => cf.ConceptCode" class="text-danger" /></label>
+                    <label>Dimension Code
+                        <InputSelect @bind-Value="cf.DimensionCode" class="um-input">
+                            <option value="">Select…</option>
+                            @foreach (var d in _selected!.Dimensions) { <option value="@d.DimensionCode">@d.Name (@d.DimensionCode)</option> }
+                        </InputSelect>
+                        <ValidationMessage For="() => cf.DimensionCode" class="text-danger" />
+                    </label>
+                    <label>Name<InputText @bind-Value="cf.Name" class="um-input" /><ValidationMessage For="() => cf.Name" class="text-danger" /></label>
+                    <label>Description<InputTextArea @bind-Value="cf.Description" class="um-input" /><ValidationMessage For="() => cf.Description" class="text-danger" /></label>
+                    <label>Concept Kind Code<InputText @bind-Value="cf.ConceptKindCode" class="um-input" /><ValidationMessage For="() => cf.ConceptKindCode" class="text-danger" /></label>
+                    <label>Source Class Code<InputText @bind-Value="cf.SourceClassCode" class="um-input" /><ValidationMessage For="() => cf.SourceClassCode" class="text-danger" /></label>
+                    <label>Verification Profile Code
+                        <InputSelect @bind-Value="cf.VerificationProfileCode" class="um-input">
+                            <option value="">— none —</option>
+                            @foreach (var vp in _selected!.VerificationProfiles) { <option value="@vp.ProfileCode">@vp.Name (@vp.ProfileCode)</option> }
+                        </InputSelect>
+                        <ValidationMessage For="() => cf.VerificationProfileCode" class="text-danger" />
+                    </label>
+                    <label>Jurisdiction Code<InputText @bind-Value="cf.JurisdictionCode" class="um-input" /><ValidationMessage For="() => cf.JurisdictionCode" class="text-danger" /></label>
+                    <label>Matter Type Code
+                        <InputSelect @bind-Value="cf.MatterTypeCode" class="um-input">
+                            <option value="">— none —</option>
+                            @foreach (var mt in _selected!.MatterTypes) { <option value="@mt.MatterTypeCode">@mt.Name (@mt.MatterTypeCode)</option> }
+                        </InputSelect>
+                        <ValidationMessage For="() => cf.MatterTypeCode" class="text-danger" />
+                    </label>
+                    <label class="um-check"><InputCheckbox @bind-Value="cf.IsRequiredCoverage" /> Required coverage</label>
+                    <label class="um-check"><InputCheckbox @bind-Value="cf.IsFallbackEligible" /> Fallback eligible</label>
+                    <label>Sort Order<InputNumber @bind-Value="cf.SortOrder" class="um-input" /><ValidationMessage For="() => cf.SortOrder" class="text-danger" /></label>
+                    <label class="um-check"><InputCheckbox @bind-Value="cf.IsActive" /> Active</label>
+                }
+                else if (_rowModel is ConceptRelationForm rf)
+                {
+                    <label>Source Concept Code
+                        <InputSelect @bind-Value="rf.SourceConceptCode" class="um-input">
+                            <option value="">Select…</option>
+                            @foreach (var c in _selected!.Concepts) { <option value="@c.ConceptCode">@c.Name (@c.ConceptCode)</option> }
+                        </InputSelect>
+                        <ValidationMessage For="() => rf.SourceConceptCode" class="text-danger" />
+                    </label>
+                    <label>Target Concept Code
+                        <InputSelect @bind-Value="rf.TargetConceptCode" class="um-input">
+                            <option value="">Select…</option>
+                            @foreach (var c in _selected!.Concepts) { <option value="@c.ConceptCode">@c.Name (@c.ConceptCode)</option> }
+                        </InputSelect>
+                        <ValidationMessage For="() => rf.TargetConceptCode" class="text-danger" />
+                    </label>
+                    <label>Relation Type Code<InputText @bind-Value="rf.RelationTypeCode" class="um-input" /><ValidationMessage For="() => rf.RelationTypeCode" class="text-danger" /></label>
+                    <label>Constraint Code<InputText @bind-Value="rf.ConstraintCode" class="um-input" /><ValidationMessage For="() => rf.ConstraintCode" class="text-danger" /></label>
+                    <label>Description<InputTextArea @bind-Value="rf.Description" class="um-input" /><ValidationMessage For="() => rf.Description" class="text-danger" /></label>
+                    <label>Jurisdiction Code<InputText @bind-Value="rf.JurisdictionCode" class="um-input" /><ValidationMessage For="() => rf.JurisdictionCode" class="text-danger" /></label>
+                    <label>Matter Type Code<InputText @bind-Value="rf.MatterTypeCode" class="um-input" /><ValidationMessage For="() => rf.MatterTypeCode" class="text-danger" /></label>
+                    <label class="um-check"><InputCheckbox @bind-Value="rf.IsHardConstraint" /> Hard constraint</label>
+                    <label>Sort Order<InputNumber @bind-Value="rf.SortOrder" class="um-input" /><ValidationMessage For="() => rf.SortOrder" class="text-danger" /></label>
+                    <label class="um-check"><InputCheckbox @bind-Value="rf.IsActive" /> Active</label>
+                }
+                else if (_rowModel is OutcomeCandidateForm of)
+                {
+                    <label>Outcome Code<InputText @bind-Value="of.OutcomeCode" class="um-input" disabled="@_rowIsEdit" /><ValidationMessage For="() => of.OutcomeCode" class="text-danger" /></label>
+                    <label>Name<InputText @bind-Value="of.Name" class="um-input" /><ValidationMessage For="() => of.Name" class="text-danger" /></label>
+                    <label>Description<InputTextArea @bind-Value="of.Description" class="um-input" /><ValidationMessage For="() => of.Description" class="text-danger" /></label>
+                    <label>Role Code
+                        <InputSelect @bind-Value="of.RoleCode" class="um-input">
+                            <option value="PATHWAY">PATHWAY</option>
+                            <option value="ASSERTED_HISTORICAL">ASSERTED_HISTORICAL</option>
+                        </InputSelect>
+                        <ValidationMessage For="() => of.RoleCode" class="text-danger" />
+                    </label>
+                    <label class="um-check"><InputCheckbox @bind-Value="of.RequiresVerification" /> Requires verification</label>
+                    <label>Matter Type Code
+                        <InputSelect @bind-Value="of.MatterTypeCode" class="um-input">
+                            <option value="">— none —</option>
+                            @foreach (var mt in _selected!.MatterTypes) { <option value="@mt.MatterTypeCode">@mt.Name (@mt.MatterTypeCode)</option> }
+                        </InputSelect>
+                        <ValidationMessage For="() => of.MatterTypeCode" class="text-danger" />
+                    </label>
+                    <label class="um-check"><InputCheckbox @bind-Value="of.RequiresFactualPredicate" /> Requires factual predicate</label>
+                    <label>Factual Predicate Keywords<InputTextArea @bind-Value="of.FactualPredicateKeywords" class="um-input" /><ValidationMessage For="() => of.FactualPredicateKeywords" class="text-danger" /></label>
+                    <label>Sort Order<InputNumber @bind-Value="of.SortOrder" class="um-input" /><ValidationMessage For="() => of.SortOrder" class="text-danger" /></label>
+                    <label class="um-check"><InputCheckbox @bind-Value="of.IsActive" /> Active</label>
+                }
+            </div></div>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showRowForm = false">Cancel</button>
+                <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@(_saving ? "Saving…" : "Save")</button>
+            </div>
+        </EditForm>
+    </div>
+}
+
+@* ── Delete confirm ── *@
+@if (_deletePrompt is not null)
+{
+    <div class="um-modal-backdrop">
+        <div class="um-confirm-dialog">
+            <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-exclamation-triangle"></i></div>
+            <h3>@_deletePrompt.Title</h3>
+            <p>@_deletePrompt.Message</p>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="() => _deletePrompt = null">Cancel</button>
+                <button type="button" class="um-btn um-btn-danger" disabled="@_saving" @onclick="ConfirmDeleteAsync">@(_saving ? "Deleting…" : "Delete")</button>
+            </div>
+        </div>
+    </div>
+}
+
+@* ── Toast ── *@
+@if (_toast is not null)
+{
+    <div class="um-toast @(_toastError ? "um-toast-danger" : "um-toast-success")">@_toast</div>
+}
+</LegalWorkspace>
+
+@code {
+    private bool _loading;
+    private bool _saving;
+    private string? _loadError;
+    private string? _toast;
+    private bool _toastError;
+
+    private IReadOnlyList<DecisionDomainPackDto> _packs = [];
+    private string? _selectedCode;
+    private DecisionDomainPackDto? _selected;
+
+    private string _activeTab = "dimensions";
+
+    private readonly (string Key, string Title, string Singular, string Icon)[] _tabsMeta =
+    [
+        ("dimensions", "Dimensions", "Dimension", "bi-diagram-2"),
+        ("evidencetypes", "Evidence Types", "Evidence Type", "bi-journal-text"),
+        ("verificationprofiles", "Verification Profiles", "Verification Profile", "bi-shield-check"),
+        ("mattertypes", "Matter Types", "Matter Type", "bi-folder2"),
+        ("concepts", "Concepts", "Concept", "bi-lightbulb"),
+        ("conceptrelations", "Concept Relations", "Concept Relation", "bi-share"),
+        ("outcomecandidates", "Outcome Candidates", "Outcome Candidate", "bi-flag"),
+    ];
+    private IEnumerable<(string Key, string Title, string Singular, string Icon)> _tabs => _tabsMeta;
+
+    private string CurrentTabSingular => _tabsMeta.First(t => t.Key == _activeTab).Singular;
+    private string CurrentTabIcon => _tabsMeta.First(t => t.Key == _activeTab).Icon;
+
+    // Form models
+    private readonly PackForm _packForm = new();
+    private bool _showPackForm;
+
+    private bool _showRowForm;
+    private bool _rowIsEdit;
+    private object _rowModel = new DimensionForm();
+
+    private DeletePrompt? _deletePrompt;
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            _packs = (await Api.GetLegalDecisionDomainPacksAsync()).ToList();
+            if (_selectedCode is not null)
+                _selected = _packs.FirstOrDefault(p => p.PackCode == _selectedCode)
+                            ?? await Api.GetLegalDecisionDomainPackAsync(_selectedCode);
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load domain packs: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task ReloadSelectedAsync()
+    {
+        if (_selectedCode is null) { _selected = null; return; }
+        try { _selected = await Api.GetLegalDecisionDomainPackAsync(_selectedCode); }
+        catch (Exception ex) { _loadError = $"Failed to load pack '{_selectedCode}': {ex.Message}"; }
+    }
+
+    private async Task OnPackChanged(ChangeEventArgs e)
+    {
+        _selectedCode = string.IsNullOrWhiteSpace(e.Value?.ToString()) ? null : e.Value!.ToString();
+        await ReloadSelectedAsync();
+    }
+
+    private void SetTab(string key) => _activeTab = key;
+
+    private int TabCount(string key) => _selected is null ? 0 : key switch
+    {
+        "dimensions" => _selected.Dimensions.Count,
+        "evidencetypes" => _selected.EvidenceTypes.Count,
+        "verificationprofiles" => _selected.VerificationProfiles.Count,
+        "mattertypes" => _selected.MatterTypes.Count,
+        "concepts" => _selected.Concepts.Count,
+        "conceptrelations" => _selected.ConceptRelations.Count,
+        "outcomecandidates" => _selected.OutcomeCandidates.Count,
+        _ => 0,
+    };
+
+    private void ShowToast(string message, bool isError)
+    {
+        _toast = message;
+        _toastError = isError;
+        _ = Task.Delay(4000).ContinueWith(_ => InvokeAsync(() => { _toast = null; StateHasChanged(); }));
+    }
+
+    // ── Pack CRUD ──
+    private void OpenCreatePack()
+    {
+        _packForm.Reset(isEdit: false);
+        _showPackForm = true;
+    }
+
+    private void OpenEditPack(DecisionDomainPackDto pack)
+    {
+        _packForm.PackCode = pack.PackCode;
+        _packForm.PracticeAreaCode = pack.PracticeAreaCode;
+        _packForm.Name = pack.Name;
+        _packForm.Description = pack.Description;
+        _packForm.SortOrder = 0;
+        _packForm.IsActive = true;
+        _packForm.IsEdit = true;
+        _showPackForm = true;
+    }
+
+    private async Task SavePackAsync()
+    {
+        _saving = true;
+        try
+        {
+            await Api.SaveLegalDecisionDomainPackAsync(new SaveDomainPackRequest(
+                _packForm.PackCode.Trim(), _packForm.PracticeAreaCode.Trim(), _packForm.Name.Trim(),
+                _packForm.Description, _packForm.SortOrder, _packForm.IsActive));
+            _showPackForm = false;
+            _selectedCode = _packForm.PackCode.Trim();
+            await LoadAsync();
+            await ReloadSelectedAsync();
+            ShowToast("Domain pack saved.", false);
+        }
+        catch (Exception ex) { ShowToast($"Save failed: {ex.Message}", true); }
+        finally { _saving = false; }
+    }
+
+    private void AskDeletePack(DecisionDomainPackDto pack) => _deletePrompt = new DeletePrompt(
+        "Delete Domain Pack",
+        $"Delete tenant pack '{pack.Name}' ({pack.PackCode})? Global seed packs cannot be deleted. This action cannot be undone.",
+        async () =>
+        {
+            await Api.DeleteLegalDecisionDomainPackAsync(pack.PackCode);
+            _selectedCode = null; _selected = null;
+            await LoadAsync();
+        });
+
+    // ── Row CRUD ──
+    private void OpenCreateRow()
+    {
+        _rowIsEdit = false;
+        _rowModel = NewRowModel();
+        _showRowForm = true;
+    }
+
+    private object NewRowModel() => _activeTab switch
+    {
+        "dimensions" => new DimensionForm(),
+        "evidencetypes" => new EvidenceTypeForm(),
+        "verificationprofiles" => new VerificationProfileForm(),
+        "mattertypes" => new MatterTypeForm(),
+        "concepts" => new ConceptForm(),
+        "conceptrelations" => new ConceptRelationForm(),
+        "outcomecandidates" => new OutcomeCandidateForm(),
+        _ => new DimensionForm(),
+    };
+
+    private void OpenRowEdit(object model) { _rowModel = model; _rowIsEdit = true; _showRowForm = true; }
+
+    private void EditDimension(DecisionDomainPackDimensionDto d) => OpenRowEdit(new DimensionForm
+    { DimensionCode = d.DimensionCode, Name = d.Name, Description = d.Description, PoloxiImportanceScore = d.PoloxiImportanceScore, IsActive = true });
+
+    private void EditEvidenceType(DecisionDomainPackEvidenceTypeDto ev) => OpenRowEdit(new EvidenceTypeForm
+    { EvidenceTypeCode = ev.EvidenceTypeCode, Name = ev.Name, DimensionCode = ev.DimensionCode, Description = ev.Description, PoloxiImportanceScore = ev.PoloxiImportanceScore, IsActive = true });
+
+    private void EditVerificationProfile(DecisionDomainPackVerificationProfileDto vp) => OpenRowEdit(new VerificationProfileForm
+    { ProfileCode = vp.ProfileCode, Name = vp.Name, EvidenceTypeCode = vp.EvidenceTypeCode, Description = vp.Description, IsActive = true });
+
+    private void EditMatterType(DecisionDomainPackMatterTypeDto mt) => OpenRowEdit(new MatterTypeForm
+    { MatterTypeCode = mt.MatterTypeCode, Name = mt.Name, Description = mt.Description, IsActive = true });
+
+    private void EditConcept(DecisionDomainConceptDto c) => OpenRowEdit(new ConceptForm
+    {
+        ConceptCode = c.ConceptCode, DimensionCode = c.DimensionCode, Name = c.Name, Description = c.Description,
+        ConceptKindCode = c.ConceptKindCode, SourceClassCode = c.SourceClassCode, VerificationProfileCode = c.VerificationProfileCode,
+        JurisdictionCode = c.JurisdictionCode, MatterTypeCode = c.MatterTypeCode, IsRequiredCoverage = c.IsRequiredCoverage,
+        IsFallbackEligible = c.IsFallbackEligible, SortOrder = c.SortOrder, IsActive = true
+    });
+
+    private void EditConceptRelation(DecisionDomainConceptRelationDto r) => OpenRowEdit(new ConceptRelationForm
+    {
+        SourceConceptCode = r.SourceConceptCode, TargetConceptCode = r.TargetConceptCode, RelationTypeCode = r.RelationTypeCode,
+        ConstraintCode = r.ConstraintCode, Description = r.Description, JurisdictionCode = r.JurisdictionCode,
+        MatterTypeCode = r.MatterTypeCode, IsHardConstraint = r.IsHardConstraint, SortOrder = r.SortOrder, IsActive = true
+    });
+
+    private void EditOutcomeCandidate(DecisionDomainPackOutcomeCandidateDto o) => OpenRowEdit(new OutcomeCandidateForm
+    {
+        OutcomeCode = o.OutcomeCode, Name = o.Name, Description = o.Description, RoleCode = o.RoleCode,
+        RequiresVerification = o.RequiresVerification, MatterTypeCode = o.MatterTypeCode, SortOrder = o.SortOrder,
+        RequiresFactualPredicate = o.RequiresFactualPredicate, FactualPredicateKeywords = o.FactualPredicateKeywords, IsActive = true
+    });
+
+    private async Task SaveRowAsync()
+    {
+        if (_selectedCode is null) return;
+        _saving = true;
+        try
+        {
+            switch (_rowModel)
+            {
+                case DimensionForm f:
+                    await Api.SaveLegalDecisionDomainPackDimensionAsync(_selectedCode, new SaveDomainPackDimensionRequest(f.DimensionCode.Trim(), f.Name.Trim(), f.Description, f.SortOrder, f.IsActive, f.PoloxiImportanceScore));
+                    break;
+                case EvidenceTypeForm f:
+                    await Api.SaveLegalDecisionDomainPackEvidenceTypeAsync(_selectedCode, new SaveDomainPackEvidenceTypeRequest(f.EvidenceTypeCode.Trim(), f.Name.Trim(), f.DimensionCode, f.Description, f.SortOrder, f.IsActive, f.PoloxiImportanceScore));
+                    break;
+                case VerificationProfileForm f:
+                    await Api.SaveLegalDecisionDomainPackVerificationProfileAsync(_selectedCode, new SaveDomainPackVerificationProfileRequest(f.ProfileCode.Trim(), f.Name.Trim(), f.EvidenceTypeCode, f.Description, f.SortOrder, f.IsActive));
+                    break;
+                case MatterTypeForm f:
+                    await Api.SaveLegalDecisionDomainPackMatterTypeAsync(_selectedCode, new SaveDomainPackMatterTypeRequest(f.MatterTypeCode.Trim(), f.Name.Trim(), f.Description, f.SortOrder, f.IsActive));
+                    break;
+                case ConceptForm f:
+                    await Api.SaveLegalDecisionDomainPackConceptAsync(_selectedCode, new SaveDomainPackConceptRequest(f.ConceptCode.Trim(), f.DimensionCode.Trim(), f.Name.Trim(), f.Description, f.ConceptKindCode.Trim(), f.SourceClassCode.Trim(), f.VerificationProfileCode, f.JurisdictionCode, f.MatterTypeCode, f.IsRequiredCoverage, f.IsFallbackEligible, f.SortOrder, f.IsActive));
+                    break;
+                case ConceptRelationForm f:
+                    await Api.SaveLegalDecisionDomainPackConceptRelationAsync(_selectedCode, new SaveDomainPackConceptRelationRequest(f.SourceConceptCode.Trim(), f.TargetConceptCode.Trim(), f.RelationTypeCode.Trim(), f.ConstraintCode, f.Description, f.JurisdictionCode, f.MatterTypeCode, f.IsHardConstraint, f.SortOrder, f.IsActive));
+                    break;
+                case OutcomeCandidateForm f:
+                    await Api.SaveLegalDecisionDomainPackOutcomeCandidateAsync(_selectedCode, new SaveDomainPackOutcomeCandidateRequest(f.OutcomeCode.Trim(), f.Name.Trim(), f.Description, f.RoleCode.Trim(), f.RequiresVerification, f.MatterTypeCode, f.SortOrder, f.RequiresFactualPredicate, f.FactualPredicateKeywords, f.IsActive));
+                    break;
+            }
+            _showRowForm = false;
+            await ReloadSelectedAsync();
+            ShowToast($"{CurrentTabSingular} saved.", false);
+        }
+        catch (Exception ex) { ShowToast($"Save failed: {ex.Message}", true); }
+        finally { _saving = false; }
+    }
+
+    private void AskDeleteRow(string title, string label, Func<Task> deleteAction) =>
+        _deletePrompt = new DeletePrompt($"Delete {title}", $"Delete '{label}'? This action cannot be undone.",
+            async () => { await deleteAction(); await ReloadSelectedAsync(); });
+
+    private void AskDeleteDimension(DecisionDomainPackDimensionDto d) =>
+        AskDeleteRow("Dimension", d.DimensionCode, () => Api.DeleteLegalDecisionDomainPackDimensionAsync(_selectedCode!, d.DimensionCode));
+
+    private void AskDeleteEvidenceType(DecisionDomainPackEvidenceTypeDto ev) =>
+        AskDeleteRow("Evidence Type", ev.EvidenceTypeCode, () => Api.DeleteLegalDecisionDomainPackEvidenceTypeAsync(_selectedCode!, ev.EvidenceTypeCode));
+
+    private void AskDeleteVerificationProfile(DecisionDomainPackVerificationProfileDto vp) =>
+        AskDeleteRow("Verification Profile", vp.ProfileCode, () => Api.DeleteLegalDecisionDomainPackVerificationProfileAsync(_selectedCode!, vp.ProfileCode));
+
+    private void AskDeleteMatterType(DecisionDomainPackMatterTypeDto mt) =>
+        AskDeleteRow("Matter Type", mt.MatterTypeCode, () => Api.DeleteLegalDecisionDomainPackMatterTypeAsync(_selectedCode!, mt.MatterTypeCode));
+
+    private void AskDeleteConcept(DecisionDomainConceptDto c) =>
+        AskDeleteRow("Concept", c.ConceptCode, () => Api.DeleteLegalDecisionDomainPackConceptAsync(_selectedCode!, c.ConceptCode));
+
+    private void AskDeleteConceptRelation(DecisionDomainConceptRelationDto r) =>
+        AskDeleteRow("Concept Relation", $"{r.SourceConceptCode} → {r.TargetConceptCode}", () => Api.DeleteLegalDecisionDomainPackConceptRelationAsync(_selectedCode!, r.SourceConceptCode, r.TargetConceptCode, r.RelationTypeCode));
+
+    private void AskDeleteOutcomeCandidate(DecisionDomainPackOutcomeCandidateDto o) =>
+        AskDeleteRow("Outcome Candidate", o.OutcomeCode, () => Api.DeleteLegalDecisionDomainPackOutcomeCandidateAsync(_selectedCode!, o.OutcomeCode));
+
+    private async Task ConfirmDeleteAsync()
+    {
+        if (_deletePrompt is null) return;
+        _saving = true;
+        try
+        {
+            await _deletePrompt.Action();
+            _deletePrompt = null;
+            ShowToast("Deleted.", false);
+        }
+        catch (Exception ex) { ShowToast($"Delete failed: {ex.Message}", true); }
+        finally { _saving = false; }
+    }
+
+    private sealed record DeletePrompt(string Title, string Message, Func<Task> Action);
+
+    // ── Form model classes with validation ──
+    private sealed class PackForm
+    {
+        public bool IsEdit { get; set; }
+        [Required, StringLength(60)] public string PackCode { get; set; } = "";
+        [Required, StringLength(60)] public string PracticeAreaCode { get; set; } = "";
+        [Required, StringLength(200)] public string Name { get; set; } = "";
+        [StringLength(2000)] public string? Description { get; set; }
+        [Range(0, 100000)] public int SortOrder { get; set; }
+        public bool IsActive { get; set; } = true;
+        public void Reset(bool isEdit) { IsEdit = isEdit; PackCode = ""; PracticeAreaCode = ""; Name = ""; Description = null; SortOrder = 0; IsActive = true; }
+    }
+
+    private sealed class DimensionForm
+    {
+        [Required, StringLength(60)] public string DimensionCode { get; set; } = "";
+        [Required, StringLength(200)] public string Name { get; set; } = "";
+        [StringLength(1000)] public string? Description { get; set; }
+        [Range(0, 100000)] public int SortOrder { get; set; }
+        [Range(0, 1)] public decimal? PoloxiImportanceScore { get; set; }
+        public bool IsActive { get; set; } = true;
+    }
+
+    private sealed class EvidenceTypeForm
+    {
+        [Required, StringLength(60)] public string EvidenceTypeCode { get; set; } = "";
+        [Required, StringLength(200)] public string Name { get; set; } = "";
+        [StringLength(60)] public string? DimensionCode { get; set; }
+        [StringLength(1000)] public string? Description { get; set; }
+        [Range(0, 100000)] public int SortOrder { get; set; }
+        [Range(0, 1)] public decimal? PoloxiImportanceScore { get; set; }
+        public bool IsActive { get; set; } = true;
+    }
+
+    private sealed class VerificationProfileForm
+    {
+        [Required, StringLength(60)] public string ProfileCode { get; set; } = "";
+        [Required, StringLength(200)] public string Name { get; set; } = "";
+        [StringLength(60)] public string? EvidenceTypeCode { get; set; }
+        [StringLength(1000)] public string? Description { get; set; }
+        [Range(0, 100000)] public int SortOrder { get; set; }
+        public bool IsActive { get; set; } = true;
+    }
+
+    private sealed class MatterTypeForm
+    {
+        [Required, StringLength(120)] public string MatterTypeCode { get; set; } = "";
+        [Required, StringLength(200)] public string Name { get; set; } = "";
+        [StringLength(1000)] public string? Description { get; set; }
+        [Range(0, 100000)] public int SortOrder { get; set; }
+        public bool IsActive { get; set; } = true;
+    }
+
+    private sealed class ConceptForm
+    {
+        [Required, StringLength(80)] public string ConceptCode { get; set; } = "";
+        [Required, StringLength(60)] public string DimensionCode { get; set; } = "";
+        [Required, StringLength(200)] public string Name { get; set; } = "";
+        [StringLength(1200)] public string? Description { get; set; }
+        [Required, StringLength(40)] public string ConceptKindCode { get; set; } = "";
+        [Required, StringLength(40)] public string SourceClassCode { get; set; } = "";
+        [StringLength(60)] public string? VerificationProfileCode { get; set; }
+        [StringLength(120)] public string? JurisdictionCode { get; set; }
+        [StringLength(120)] public string? MatterTypeCode { get; set; }
+        public bool IsRequiredCoverage { get; set; }
+        public bool IsFallbackEligible { get; set; }
+        [Range(0, 100000)] public int SortOrder { get; set; }
+        public bool IsActive { get; set; } = true;
+    }
+
+    private sealed class ConceptRelationForm
+    {
+        [Required, StringLength(80)] public string SourceConceptCode { get; set; } = "";
+        [Required, StringLength(80)] public string TargetConceptCode { get; set; } = "";
+        [Required, StringLength(40)] public string RelationTypeCode { get; set; } = "";
+        [StringLength(80)] public string? ConstraintCode { get; set; }
+        [StringLength(1200)] public string? Description { get; set; }
+        [StringLength(120)] public string? JurisdictionCode { get; set; }
+        [StringLength(120)] public string? MatterTypeCode { get; set; }
+        public bool IsHardConstraint { get; set; }
+        [Range(0, 100000)] public int SortOrder { get; set; }
+        public bool IsActive { get; set; } = true;
+    }
+
+    private sealed class OutcomeCandidateForm
+    {
+        [Required, StringLength(60)] public string OutcomeCode { get; set; } = "";
+        [Required, StringLength(200)] public string Name { get; set; } = "";
+        [StringLength(1000)] public string? Description { get; set; }
+        [Required, StringLength(40)] public string RoleCode { get; set; } = "PATHWAY";
+        public bool RequiresVerification { get; set; }
+        [StringLength(120)] public string? MatterTypeCode { get; set; }
+        [Range(0, 100000)] public int SortOrder { get; set; }
+        public bool RequiresFactualPredicate { get; set; }
+        [StringLength(2000)] public string? FactualPredicateKeywords { get; set; }
+        public bool IsActive { get; set; } = true;
+    }
+}
