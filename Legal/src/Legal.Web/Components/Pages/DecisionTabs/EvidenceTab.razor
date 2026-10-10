@@ -1,0 +1,184 @@
+@namespace Legal.Web.Components.Pages.DecisionTabs
+@using Legal.Web.Components.Pages
+
+                                <div class="dfi-panel-card">
+                                    <h4>Admitted evidence</h4>
+                                    <p class="dfi-panel-sub">@Owner._response?.EnterpriseEvidenceCount enterprise · @Owner._response?.ExternalEvidenceCount external · decision coverage @((Owner._response?.DecisionEvidenceCoverage ?? 0m).ToString("P0")).</p>
+                                    @if (!string.IsNullOrEmpty(Owner._activationNotice))
+                                    {
+                                        <div class="alert alert-warning d-flex align-items-start gap-2" role="alert">
+                                            <i class="bi bi-exclamation-triangle-fill"></i>
+                                            <div>
+                                                <strong>Corpus activation did not complete</strong>
+                                                <div>@Owner._activationNotice</div>
+                                            </div>
+                                        </div>
+                                    }
+                                    @if (Owner.TotalEvidenceCount == 0)
+                                    {
+                                        <p class="dfi-empty">No corpus evidence from your uploaded documents was admitted in the referenced execution.</p>
+                                        @if ((Owner._response?.DecisionEvidenceCoverage ?? 0m) > 0m)
+                                        {
+                                            <p class="dfi-panel-sub">
+                                                Note: the answer above reports @(( Owner._response?.DecisionEvidenceCoverage ?? 0m).ToString("P0")) decision coverage,
+                                                but that is drawn from the model's external/legal sources (@Owner._response?.ExternalEvidenceCount external ·
+                                                @Owner._response?.EnterpriseEvidenceCount enterprise) — not from your uploaded Matter Corpus. Corpus evidence
+                                                appears here only after uploaded documents are activated into propositions during Disambiguate &amp; Answer.
+                                            </p>
+                                        }
+                                    }
+                                    @{
+                                        var retrievedRaw = Owner._response?.ExternalKnowledge ?? Array.Empty<WideExternalKnowledgeSnippet>();
+                                        // Collapse duplicate rows for the same underlying source (same statute/case retrieved
+                                        // once per branch/proposition). Keep the strongest-support representative so the same
+                                        // authority is not listed multiple times as separate "Admitted" evidence.
+                                        var retrieved = retrievedRaw
+                                            .GroupBy(LegalPersonalInjuryDecision2.DfiSourceKey)
+                                            .Select(g => g
+                                                .OrderByDescending(LegalPersonalInjuryDecision2.DfiIsAdmitted)
+                                                .ThenByDescending(s => s.PropositionSupportScore)
+                                                .ThenByDescending(s => s.Score)
+                                                .First())
+                                            .ToArray();
+                                    }
+                                    @if (retrieved.Length > 0)
+                                    {
+                                        <div class="dfi-admission">
+                                            <div class="dfi-admission-head">
+                                                <h5>Why evidence was admitted or rejected</h5>
+                                                <p class="dfi-panel-sub">@retrieved.Length source(s) retrieved · @retrieved.Count(LegalPersonalInjuryDecision2.DfiIsAdmitted) admitted · @(retrieved.Length - retrieved.Count(LegalPersonalInjuryDecision2.DfiIsAdmitted)) rejected. Only identity-verified, in-scope sources count toward admitted evidence.</p>
+                                            </div>
+                                            <ul class="dfi-admission-list">
+                                                @foreach (var snip in retrieved.OrderByDescending(LegalPersonalInjuryDecision2.DfiIsAdmitted).ThenByDescending(s => s.Score))
+                                                {
+                                                    <li class="dfi-admission-item">
+                                                        <div class="dfi-admission-main">
+                                                            <span class="dfi-pill dfi-pill-@(LegalPersonalInjuryDecision2.DfiIsAdmitted(snip) ? "ok" : "warn")">@(LegalPersonalInjuryDecision2.DfiIsAdmitted(snip) ? "Admitted" : "Rejected")</span>
+                                                            @if (!string.IsNullOrWhiteSpace(snip.Url))
+                                                            {
+                                                                <a href="@snip.Url" target="_blank" rel="noopener" class="dfi-admission-title">@(string.IsNullOrWhiteSpace(snip.Title) ? snip.Url : snip.Title)</a>
+                                                            }
+                                                            else
+                                                            {
+                                                                <span class="dfi-admission-title">@(string.IsNullOrWhiteSpace(snip.Title) ? "(untitled source)" : snip.Title)</span>
+                                                            }
+                                                        </div>
+                                                        <div class="dfi-admission-meta">
+                                                            <span class="dfi-admission-reason">@LegalPersonalInjuryDecision2.DfiAdmissionReason(snip)</span>
+                                                            @if (!string.IsNullOrWhiteSpace(snip.AuthorityKind)) { <span class="dfi-admission-tag">@snip.AuthorityKind</span> }
+                                                            @if (!string.IsNullOrWhiteSpace(snip.Jurisdiction)) { <span class="dfi-admission-tag">@snip.Jurisdiction</span> }
+                                                            <span class="dfi-admission-tag">support @snip.PropositionSupportScore.ToString("P0")</span>
+                                                        </div>
+                                                                 </li>
+                                                            }
+                                                        </ul>
+                                                    </div>
+                                                         }
+                                                         @{
+                                                             var corpusProps = Owner._evidenceGraph?.Propositions
+                                                                 ?.Where(p => p.Support.Count > 0)
+                                                                 .ToArray() ?? Array.Empty<Legal.Application.Features.Intelligence.Decision.LegalEvidenceGraphPropositionDto>();
+                                                             var evidenceById = Owner._evidenceGraph?.Evidence
+                                                                 ?.ToDictionary(e => e.LegalEvidenceItemId)
+                                                                 ?? new Dictionary<Guid, Legal.Application.Features.Intelligence.Decision.LegalEvidenceGraphItemDto>();
+                                                         }
+                                                         @if (corpusProps.Length > 0)
+                                                         {
+                                                             <div class="dfi-admission">
+                                                                 <div class="dfi-admission-head">
+                                                                     <h5>Atomic propositions matched to document evidence</h5>
+                                                                     <p class="dfi-panel-sub">
+                                                                         @corpusProps.Length proposition(s) derived from your uploaded corpus ·
+                                                                         @corpusProps.Count(p => p.IsDecisionAuthoritative) decision-authoritative.
+                                                                         Each row links an atomic proposition to the extracted document evidence that supports, contradicts, or contextualizes it.
+                                                                     </p>
+                                                                 </div>
+                                                                 <ul class="dfi-admission-list">
+                                                                     @foreach (var prop in corpusProps.OrderByDescending(p => p.IsDecisionAuthoritative).ThenByDescending(p => p.Confidence ?? 0m))
+                                                                     {
+                                                                         <li class="dfi-admission-item">
+                                                                             <div class="dfi-admission-main">
+                                                                                 <span class="dfi-pill dfi-pill-@(prop.IsDecisionAuthoritative ? "ok" : "warn")">@prop.FactStateCode</span>
+                                                                                 <span class="dfi-admission-title">@prop.PropositionText</span>
+                                                                             </div>
+                                                                             <div class="dfi-admission-meta">
+                                                                                 @if (prop.Confidence is { } pc)
+                                                                                 {
+                                                                                     <span class="dfi-admission-tag">confidence @pc.ToString("P0")</span>
+                                                                                 }
+                                                                                 @if (prop.IsDecisionAuthoritative)
+                                                                                 {
+                                                                                     <span class="dfi-admission-tag"><i class="bi bi-shield-check"></i> authoritative</span>
+                                                                                 }
+                                                                                 <span class="dfi-admission-tag">@prop.Support.Count supporting evidence link(s)</span>
+                                                                             </div>
+                                                                             <ul class="dfi-support-list">
+                                                                                 @foreach (var sup in prop.Support)
+                                                                                 {
+                                                                                     evidenceById.TryGetValue(sup.LegalEvidenceItemId, out var ev);
+                                                                                     <li class="dfi-support-row">
+                                                                                         <span class="dfi-pill @LegalPersonalInjuryDecision2.DiRelationToneClass(sup.RelationshipTypeCode)" title="@sup.AssessmentReason">@sup.RelationshipTypeCode</span>
+                                                                                         <span class="dfi-support-text">
+                                                                                             @(ev is null ? "(evidence detail unavailable)" : ev.Summary)
+                                                                                         </span>
+                                                                                         @if (ev is not null)
+                                                                                         {
+                                                                                             <div class="dfi-support-meta">
+                                                                                                 @if (!string.IsNullOrWhiteSpace(ev.DocumentFileName))
+                                                                                                 {
+                                                                                                     <span class="dfi-support-source">
+                                                                                                         <i class="bi bi-file-earmark-text"></i> @ev.DocumentFileName
+                                                                                                         @(ev.DocumentVersionNumber > 0 ? $" v{ev.DocumentVersionNumber}" : "")
+                                                                                                     </span>
+                                                                                                 }
+                                                                                                 @if (ev.PageNumber is { } pg)
+                                                                                                 {
+                                                                                                     <span class="dfi-admission-tag"><i class="bi bi-file-text"></i> p.@pg</span>
+                                                                                                 }
+                                                                                                 @if (!string.IsNullOrWhiteSpace(ev.SectionPath))
+                                                                                                 {
+                                                                                                     <span class="dfi-admission-tag" title="Section">@ev.SectionPath</span>
+                                                                                                 }
+                                                                                                 @if (!string.IsNullOrWhiteSpace(ev.DocumentTypeCode))
+                                                                                                 {
+                                                                                                     <span class="dfi-admission-tag">@ev.DocumentTypeCode.Replace('_', ' ')</span>
+                                                                                                 }
+                                                                                                 @if (!string.IsNullOrWhiteSpace(ev.EvidenceTypeCode))
+                                                                                                 {
+                                                                                                     <span class="dfi-admission-tag">@ev.EvidenceTypeCode.Replace('_', ' ')</span>
+                                                                                                 }
+                                                                                                 @if (!string.IsNullOrWhiteSpace(ev.DimensionCode))
+                                                                                                 {
+                                                                                                     <span class="dfi-admission-tag">@ev.DimensionCode.Replace('_', ' ')</span>
+                                                                                                 }
+                                                                                                 @if (!string.IsNullOrWhiteSpace(ev.EvidenceStateCode))
+                                                                                                 {
+                                                                                                     <span class="dfi-admission-tag">@ev.EvidenceStateCode.Replace('_', ' ')</span>
+                                                                                                 }
+                                                                                                 @if (ev.Confidence is { } evc)
+                                                                                                 {
+                                                                                                     <span class="dfi-admission-tag">confidence @evc.ToString("P0")</span>
+                                                                                                 }
+                                                                                             </div>
+                                                                                             @if (!string.IsNullOrWhiteSpace(ev.PassageText))
+                                                                                             {
+                                                                                                 <blockquote class="dfi-support-passage">&ldquo;@ev.PassageText&rdquo;</blockquote>
+                                                                                             }
+                                                                                         }
+                                                                                         @if (!string.IsNullOrWhiteSpace(sup.AssessmentReason))
+                                                                                         {
+                                                                                             <span class="dfi-support-reason">@sup.AssessmentReason</span>
+                                                                                         }
+                                                                                     </li>
+                                                                                 }
+                                                                             </ul>
+                                                                         </li>
+                                                                     }
+                                                                 </ul>
+                                                             </div>
+                                                         }
+                                                     </div>
+
+@code {
+    [Parameter] public LegalPersonalInjuryDecision2 Owner { get; set; } = default!;
+}

@@ -1,0 +1,216 @@
+@namespace Legal.Web.Components.Pages.DecisionTabs
+@using Legal.Web.Components.Pages
+
+@{
+        var authorities = Owner.DaAuthorities;
+        var contributions = Owner.LegalAuthorityContributions;
+        var authorityReview = Owner._legalAuthorityReviewItems
+            .Where(i => string.Equals(i.AssertionTypeCode, "LegalAuthority", StringComparison.OrdinalIgnoreCase)
+                     || string.Equals(i.RetrievalModeCode, "AuthorityDirected", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        var reviewItems = authorityReview.Length > 0 ? authorityReview : Owner._legalAuthorityReviewItems;
+        var model = Owner._channelScoring;
+}
+
+        <div class="dci-root">
+            <div class="dci-topbar">
+                <div class="dci-topbar-title">
+                    <span class="dci-topbar-icon"><i class="bi bi-bank" aria-hidden="true"></i></span>
+                    <div>
+                        <div class="dci-topbar-heading">
+                            <h4>Legal Authority &mdash; Grounded Channel Workspace</h4>
+                            <span class="dci-badge dci-badge--live"><span class="dci-live-dot" aria-hidden="true"></span> POLOXI</span>
+                        </div>
+                        <p class="dfi-panel-sub">The Legal Authority channel consumes only <strong>verified</strong> legal-authority evidence, matches it to authoritative hierarchy nodes/propositions, and parks it for attorney review. It never scores candidates itself &mdash; POLOXI Core owns the ranking. This workspace shows the retrieved authorities, the hierarchy/proposition matches parked for review, and the exact &delta; math the channel folded into scoring.</p>
+                    </div>
+                </div>
+                <div class="dfi-topbar-actions" style="gap:8px;">
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="Owner.LoadLegalAuthorityWorkspaceAsync" disabled="@(Owner._legalAuthorityBusy || Owner._legalAuthorityLoading)">
+                        <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+                    </button>
+                    <button class="um-btn um-btn-primary um-btn-sm" @onclick="Owner.RunLegalAuthorityPassAsync" disabled="@Owner._legalAuthorityBusy" title="Match verified legal authorities to the hierarchy and park them for attorney review">
+                        <i class="bi bi-play-circle" aria-hidden="true"></i> Run Authority Pass
+                    </button>
+                </div>
+            </div>
+
+            @if (Owner._legalAuthorityBanner is not null)
+            {
+                <div class="alert @(Owner._legalAuthorityBannerError ? "alert-danger" : "alert-info")"
+                     style="@(Owner._legalAuthorityBannerError ? "border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" : "border-left: 4px solid #0d6efd;")">
+                    @Owner._legalAuthorityBanner
+                </div>
+            }
+
+            @if (Owner._legalAuthorityLoading)
+            {
+                <div class="dfi-panel-card"><p class="dfi-panel-sub">Loading Legal Authority workspace&hellip;</p></div>
+            }
+            else if (Owner._legalAuthorityError is not null)
+            {
+                <div class="dfi-panel-card"><div class="alert alert-danger" style="border-left: 4px solid #dc3545;">@Owner._legalAuthorityError</div></div>
+            }
+            else
+            {
+                <div class="dfi-panel-card" style="margin-bottom:14px;">
+                    <div style="display:flex; gap:18px; flex-wrap:wrap;">
+                        <div><span class="dfi-panel-sub">Authorities retrieved</span><div style="font-size:1.25rem; font-weight:600;">@authorities.Count</div></div>
+                        <div><span class="dfi-panel-sub">Verified</span><div style="font-size:1.25rem; font-weight:600; color:#198754;">@authorities.Count(a => string.Equals(a.VerificationStatus, "VERIFIED", StringComparison.OrdinalIgnoreCase))</div></div>
+                        <div><span class="dfi-panel-sub">Coverage</span><div style="font-size:1.25rem; font-weight:600;">@Owner.DaAuthorityCoverage.ToString("P0")</div></div>
+                        <div><span class="dfi-panel-sub">Parked for review</span><div style="font-size:1.25rem; font-weight:600; color:#fd7e14;">@reviewItems.Count</div></div>
+                        <div><span class="dfi-panel-sub">Scoring contributions</span><div style="font-size:1.25rem; font-weight:600;">@contributions.Count</div></div>
+                    </div>
+                </div>
+
+                <div class="dfi-panel-card" style="margin-bottom:14px;">
+                    <h5 style="margin-bottom:8px;"><i class="bi bi-bank2" aria-hidden="true"></i> Retrieved legal authorities</h5>
+                    @if (authorities.Count == 0)
+                    {
+                        <p class="dfi-panel-sub">No legal authorities have been retrieved for this matter's latest decision session yet. Run an authority pass or retrieval to surface authorities here.</p>
+                    }
+                    else
+                    {
+                        <table class="table table-sm" style="margin:0;">
+                            <thead>
+                                <tr><th>Authority</th><th>Kind</th><th>Relevance</th><th>Verification</th></tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var a in authorities)
+                                {
+                                    <tr>
+                                        <td><strong>@a.Name</strong></td>
+                                        <td>@a.Kind</td>
+                                        <td>@a.Relevance</td>
+                                        <td><span class="dfi-tag dfi-tag-@(string.Equals(a.VerificationStatus, "VERIFIED", StringComparison.OrdinalIgnoreCase) ? "ok" : "warn")">@a.VerificationStatus</span></td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    }
+                </div>
+
+                <div class="dfi-panel-card" style="margin-bottom:14px;">
+                    <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+                        <h5 style="margin:0;"><i class="bi bi-inbox" aria-hidden="true"></i> Hierarchy / proposition matches parked for review</h5>
+                        <span class="dfi-tag">@reviewItems.Count pending</span>
+                    </div>
+                    @if (Owner._legalAuthorityError is null && reviewItems.Count == 0)
+                    {
+                        <p class="dfi-panel-sub"><i class="bi bi-check2-circle" aria-hidden="true"></i> No authority propositions are awaiting review for this matter.</p>
+                    }
+                    else
+                    {
+                        <div class="decision-review-list">
+                            @foreach (var item in reviewItems)
+                            {
+                                var isAccepted = string.Equals(item.StateCode, "Accepted", StringComparison.OrdinalIgnoreCase);
+                                <article class="decision-review-item" @key="item.RetrievedPropositionId">
+                                    <div class="decision-review-item-head">
+                                        <span class="decision-review-state decision-review-state--@item.StateCode.ToLowerInvariant()">@item.StateCode</span>
+                                        <span class="decision-review-assertion">@item.AssertionTypeCode</span>
+                                        @if (!string.IsNullOrWhiteSpace(item.AttributedTo))
+                                        {
+                                            <span class="decision-review-attributed" title="Attributed to">@item.AttributedTo</span>
+                                        }
+                                    </div>
+                                    <p class="decision-review-proposition">@item.PropositionText</p>
+                                    @if (!string.IsNullOrWhiteSpace(item.SourceText))
+                                    {
+                                        <blockquote class="decision-review-source" title="@item.SourceLocator">&ldquo;@item.SourceText&rdquo;</blockquote>
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(item.SourceLocator))
+                                    {
+                                        <div class="decision-review-locator"><i class="bi bi-geo-alt" aria-hidden="true"></i> @item.SourceLocator</div>
+                                    }
+                                    @if (item.Placements.Count > 0)
+                                    {
+                                        <ul class="decision-review-placements">
+                                            @foreach (var placement in item.Placements)
+                                            {
+                                                <li>
+                                                    <span class="decision-review-rel decision-review-rel--@placement.RelationshipCode.ToLowerInvariant()">@placement.RelationshipCode</span>
+                                                    <code>@placement.TargetNodeId.ToString("N").Substring(0, 8)</code>
+                                                    @if (!string.IsNullOrWhiteSpace(placement.Rationale))
+                                                    {
+                                                        <span class="decision-review-rationale">@placement.Rationale</span>
+                                                    }
+                                                </li>
+                                            }
+                                        </ul>
+                                    }
+                                    <div class="decision-review-actions">
+                                        @if (isAccepted)
+                                        {
+                                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => Owner.WithdrawLegalAuthorityItemAsync(item)" disabled="@Owner._legalAuthorityBusy">
+                                                <i class="bi bi-x-octagon" aria-hidden="true"></i> Withdraw
+                                            </button>
+                                        }
+                                        else
+                                        {
+                                            <button class="um-btn um-btn-primary um-btn-sm" @onclick="() => Owner.AcceptLegalAuthorityItemAsync(item)" disabled="@Owner._legalAuthorityBusy">
+                                                <i class="bi bi-check2" aria-hidden="true"></i> Accept
+                                            </button>
+                                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => Owner.RejectLegalAuthorityItemAsync(item)" disabled="@Owner._legalAuthorityBusy">
+                                                <i class="bi bi-slash-circle" aria-hidden="true"></i> Reject
+                                            </button>
+                                        }
+                                    </div>
+                                </article>
+                            }
+                        </div>
+                    }
+                </div>
+
+                <div class="dfi-panel-card">
+                    <h5 style="margin-bottom:8px;"><i class="bi bi-calculator" aria-hidden="true"></i> Legal Authority scoring &amp; channel contributions</h5>
+                    @if (model is not null)
+                    {
+                        <ul style="margin:0 0 10px 0; padding-left:18px;">
+                            <li><code>@model.Formula.SupportFormula</code></li>
+                            <li><code>@model.Formula.QualifiedSupportFormula</code></li>
+                            <li><code>@model.Formula.ContradictionFormula</code></li>
+                            <li><code>@model.Formula.PlacementFormula</code></li>
+                        </ul>
+                    }
+                    @if (contributions.Count == 0)
+                    {
+                        <p class="dfi-panel-sub">No Legal Authority channel contributions have been folded into this matter's latest decision session yet. Once a verified authority is accepted and carries authoritative lineage, its exact &delta; appears here.</p>
+                    }
+                    else
+                    {
+                        <table class="table table-sm" style="margin:0;">
+                            <thead>
+                                <tr>
+                                    <th>Relation</th>
+                                    <th>Verification</th>
+                                    <th>Dimension</th>
+                                    <th>Formula applied</th>
+                                    <th style="text-align:right;">Applied &delta;</th>
+                                    <th>Effect</th>
+                                    <th>Source</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var c in contributions)
+                                {
+                                    <tr>
+                                        <td>@c.Relation</td>
+                                        <td>@c.VerificationState</td>
+                                        <td>@c.TargetDimension</td>
+                                        <td><code>@c.FormulaApplied</code></td>
+                                        <td style="text-align:right; font-weight:600; color:@(c.AppliedDelta >= 0 ? "#198754" : "#dc3545")">@c.AppliedDelta.ToString("+0.###;-0.###;0")</td>
+                                        <td title="@c.EffectExplanation">@c.Effect</td>
+                                        <td>@c.SourceLabel</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                        <p class="dfi-panel-sub" style="margin-top:6px;">These signed inputs land on the named POLOXI dimension; POLOXI Core alone decides their effect on the final candidate composite score and ranking.</p>
+                    }
+                </div>
+            }
+        </div>
+
+@code {
+    [Parameter] public LegalPersonalInjuryDecision2 Owner { get; set; } = default!;
+}

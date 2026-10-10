@@ -1,0 +1,270 @@
+@namespace Legal.Web.Components.Pages.DecisionTabs
+@using Legal.Web.Components.Pages
+
+@{
+        var deltas = Owner.DciDeltas;
+        var selected = Owner.DciSelectedDelta;
+        var latest = deltas.FirstOrDefault();
+}
+
+        <div class="dci-root">
+            <div class="dci-topbar">
+                <div class="dci-topbar-title">
+                    <span class="dci-topbar-icon"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i></span>
+                    <div>
+                        <div class="dci-topbar-heading">
+                            <h4>Decision Intelligence &mdash; Changes Since Last Review</h4>
+                            @if (latest is not null)
+                            {
+                                <span class="dci-badge dci-badge--live"><span class="dci-live-dot" aria-hidden="true"></span> Live</span>
+                            }
+                        </div>
+                        <p class="dci-topbar-sub">
+                            @if (latest is not null)
+                            {
+                                <span>Last updated: @latest.OccurredDateUtc.ToString("MMM dd, yyyy h:mm tt")</span>
+                                @if (Owner.DciLastReviewedUtc is { } reviewed)
+                                {
+                                    <span> · since reviewed snapshot of @reviewed.ToString("MMM dd, yyyy h:mm tt")</span>
+                                }
+                                else
+                                {
+                                    <span> · no reviewed snapshot yet — showing all recorded changes</span>
+                                }
+                            }
+                            else
+                            {
+                                <span>Every material change is reevaluated by POLOXI Core into an immutable decision delta.</span>
+                            }
+                        </p>
+                    </div>
+                </div>
+                @if (Owner.DciReviewRequiredCount > 0)
+                {
+                    <button type="button" class="dci-btn dci-btn--primary" @onclick='() => Owner.SelectDciViewAsync("Review Queue")'>
+                        Review Required (@Owner.DciReviewRequiredCount) <i class="bi bi-chevron-right"></i>
+                    </button>
+                }
+            </div>
+
+            @* -- Live Decision Monitor KPI strip (all values DB-backed; 0 when not computed) -- *@
+            <div class="dci-kpi-strip">
+                <div class="dci-kpi dci-kpi--evidence">
+                    <span class="dci-kpi-ic"><i class="bi bi-file-earmark-text"></i></span>
+                    <div><span class="dci-kpi-num">@Owner.DciNewEvidenceCount</span><span class="dci-kpi-lbl">New Evidence</span></div>
+                </div>
+                <div class="dci-kpi dci-kpi--props">
+                    <span class="dci-kpi-ic"><i class="bi bi-diagram-2"></i></span>
+                    <div><span class="dci-kpi-num">@Owner.DciChangedPropositionCount</span><span class="dci-kpi-lbl">Changed Propositions</span></div>
+                </div>
+                <div class="dci-kpi dci-kpi--outcomes">
+                    <span class="dci-kpi-ic"><i class="bi bi-bank"></i></span>
+                    <div><span class="dci-kpi-num">@Owner.DciAffectedOutcomeCount</span><span class="dci-kpi-lbl">Affected Outcomes</span></div>
+                </div>
+                <div class="dci-kpi dci-kpi--contradictions">
+                    <span class="dci-kpi-ic"><i class="bi bi-exclamation-triangle"></i></span>
+                    <div><span class="dci-kpi-num">@Owner.DciNewContradictionCount</span><span class="dci-kpi-lbl">New Contradictions</span></div>
+                </div>
+                <div class="dci-kpi dci-kpi--frontier">
+                    <span class="dci-kpi-ic"><i class="bi bi-bullseye"></i></span>
+                    <div><span class="dci-kpi-num">@Owner.DciFrontierChangeCount</span><span class="dci-kpi-lbl">Decision-Frontier Changes</span></div>
+                </div>
+                <div class="dci-kpi dci-kpi--review">
+                    <span class="dci-kpi-ic"><i class="bi bi-flag"></i></span>
+                    <div><span class="dci-kpi-num">@Owner.DciReviewRequiredCount</span><span class="dci-kpi-lbl">Material Changes Requiring Review</span></div>
+                </div>
+            </div>
+
+            @if (deltas.Count == 0)
+            {
+                <div class="dci-empty">
+                    <i class="bi bi-activity" aria-hidden="true"></i>
+                    <h5>No decision changes yet</h5>
+                    <p>As new documents and evidence are ingested, POLOXI reevaluates the matter and records each material change here as a traceable before/after decision delta.</p>
+                </div>
+            }
+            else
+            {
+                @* -- Inner view tabs -- *@
+                <div class="dci-views" role="tablist">
+                    @foreach (var view in LegalPersonalInjuryDecision2.DciViews)
+                    {
+                        <button type="button" role="tab"
+                                class="dci-view-tab @(Owner._dciView == view ? "dci-view-tab--active" : "")"
+                                @onclick="() => Owner.SelectDciViewAsync(view)">@view</button>
+                    }
+                </div>
+
+                <div class="dci-view-panel">
+                    @switch (Owner._dciView)
+                    {
+                        case "Changes":
+                            <div class="dci-feed">
+                                @foreach (var d in deltas)
+                                {
+                                    <button type="button" class="dci-feed-item @(d.DecisionDeltaId == Owner._dciSelectedDeltaId ? "dci-feed-item--active" : "")"
+                                            @onclick="() => Owner.SelectDciDeltaAsync(d)">
+                                        <span class="dci-feed-time">@d.OccurredDateUtc.ToString("MMM dd, yyyy h:mm tt")</span>
+                                        <span class="dci-feed-body">
+                                            <span class="dci-feed-head">
+                                                <span class="dci-chip dci-chip--@LegalPersonalInjuryDecision2.DciDeltaKindTone(d.DeltaKindCode)">@LegalPersonalInjuryDecision2.DciDeltaKindLabel(d.DeltaKindCode)</span>
+                                                @if (d.AttorneyReviewRequired)
+                                                {
+                                                    <span class="dci-chip dci-chip--danger">Review required</span>
+                                                }
+                                            </span>
+                                            <strong class="dci-feed-title">@(d.Summary ?? d.ChangeSourceLabel ?? "Decision reevaluated")</strong>
+                                            <span class="dci-feed-meta">
+                                                @d.AffectedPropositionCount propositions · @d.AffectedCandidateCount candidates · @d.AffectedEvidenceCount evidence
+                                                @if (d.FrontierChanged == true)
+                                                {
+                                                    <span> · frontier changed</span>
+                                                }
+                                            </span>
+                                        </span>
+                                        <i class="bi bi-chevron-right dci-feed-arrow"></i>
+                                    </button>
+                                }
+                            </div>
+                            break;
+
+                        case "Before vs After":
+                            @if (selected is null)
+                            {
+                                <p class="dci-muted">Select a change from the Changes feed to compare snapshots.</p>
+                            }
+                            else
+                            {
+                                <div class="dci-compare">
+                                    <div class="dci-compare-col">
+                                        <h6>@Owner.DciSnapshotLabel(selected.FromSnapshotId)</h6>
+                                        <span class="dci-compare-sub">Before</span>
+                                        <ul class="dci-compare-metrics">
+                                            <li><span>Leading outcome</span><strong>@(selected.PreviousWinnerLabel ?? "—")</strong></li>
+                                            <li><span>Margin</span><strong>@LegalPersonalInjuryDecision2.DciScore(selected.PreviousMargin)</strong></li>
+                                            <li><span>Uncertainty</span><strong>@LegalPersonalInjuryDecision2.DciScore(selected.PreviousEntropy)</strong></li>
+                                            <li><span>Readiness</span><strong>@(selected.PreviousReadinessCode ?? "—")</strong></li>
+                                        </ul>
+                                    </div>
+                                    <div class="dci-compare-arrow"><i class="bi bi-arrow-right"></i></div>
+                                    <div class="dci-compare-col dci-compare-col--after">
+                                        <h6>@Owner.DciSnapshotLabel(selected.ToSnapshotId)</h6>
+                                        <span class="dci-compare-sub">After</span>
+                                        <ul class="dci-compare-metrics">
+                                            <li><span>Leading outcome</span><strong>@(selected.CurrentWinnerLabel ?? "—")</strong></li>
+                                            <li><span>Margin</span><strong>@LegalPersonalInjuryDecision2.DciScore(selected.CurrentMargin) <em class="dci-delta">@LegalPersonalInjuryDecision2.DciDelta(selected.PreviousMargin, selected.CurrentMargin)</em></strong></li>
+                                            <li><span>Uncertainty</span><strong>@LegalPersonalInjuryDecision2.DciScore(selected.CurrentEntropy)</strong></li>
+                                            <li><span>Readiness</span><strong>@(selected.CurrentReadinessCode ?? "—")</strong></li>
+                                        </ul>
+                                    </div>
+                                </div>
+                                <p class="dci-illustrative"><i class="bi bi-info-circle"></i> Percentages are illustrative decision-state indicators, not legal win probabilities.</p>
+                            }
+                            break;
+
+                        case "Why It Changed":
+                            @if (selected is null)
+                            {
+                                <p class="dci-muted">Select a change to trace why it changed.</p>
+                            }
+                            else if (Owner._dciChangeReviewLoading)
+                            {
+                                <p class="dci-muted">Loading traceability…</p>
+                            }
+                            else if (Owner._dciChangeReview is null || Owner._dciChangeReview.Impacts.Count == 0)
+                            {
+                                <div class="dci-why">
+                                    <p class="dci-muted">@(selected.RequiredAction ?? "No detailed impact rows were recorded for this change.")</p>
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="dci-why">
+                                    @if (!string.IsNullOrWhiteSpace(Owner._dciChangeReview.ChangeEvent.SourceLabel))
+                                    {
+                                        <div class="dci-why-source"><i class="bi bi-file-earmark-text"></i> @Owner._dciChangeReview.ChangeEvent.SourceLabel</div>
+                                    }
+                                    <ul class="dci-why-chain">
+                                        @foreach (var impact in Owner._dciChangeReview.Impacts)
+                                        {
+                                            <li class="dci-why-node">
+                                                <span class="dci-chip dci-chip--info">@impact.AffectedKindCode</span>
+                                                <strong>@(impact.AffectedLabel ?? impact.AffectedKey)</strong>
+                                                <span class="dci-why-transition">@(impact.PreviousStateCode ?? "—") <i class="bi bi-arrow-right"></i> @(impact.CurrentStateCode ?? "—")</span>
+                                                @if (!string.IsNullOrWhiteSpace(impact.Rationale))
+                                                {
+                                                    <span class="dci-why-reason">@impact.Rationale</span>
+                                                }
+                                            </li>
+                                        }
+                                    </ul>
+                                </div>
+                            }
+                            break;
+
+                        case "What Matters Now":
+                            <div class="dci-frontier">
+                                <h6>Current decision frontier</h6>
+                                <p class="dci-muted">Highest-information-value propositions after the latest changes. POLOXI ranks what to investigate next.</p>
+                                @if (Owner.PropositionInfoValues.Count == 0)
+                                {
+                                    <p class="dci-muted">No proposition frontier is available yet for this matter.</p>
+                                }
+                                else
+                                {
+                                    <ul class="dci-frontier-list">
+                                        @foreach (var p in Owner.PropositionInfoValues)
+                                        {
+                                            <li class="dci-frontier-item">
+                                                <div class="dci-frontier-bar" style="width:@(Math.Round((double)(p.InformationValue / Owner.PropositionInfoValueMax) * 100))%"></div>
+                                                <div class="dci-frontier-copy">
+                                                    <strong>@p.PropositionText</strong>
+                                                    <span class="dci-frontier-meta">IV @p.InformationValue.ToString("0.00") · <span class="dci-chip dci-chip--@LegalPersonalInjuryDecision2.PropositionStateTone(p.VerificationStateCode)">@(p.VerificationStateCode ?? "Unresolved")</span></span>
+                                                </div>
+                                            </li>
+                                        }
+                                    </ul>
+                                }
+                            </div>
+                            break;
+
+                        case "Review Queue":
+                            var reviewDeltas = deltas.Where(d => d.AttorneyReviewRequired).ToArray();
+                            @if (reviewDeltas.Length == 0)
+                            {
+                                <p class="dci-muted">No material changes are currently awaiting attorney review.</p>
+                            }
+                            else
+                            {
+                                <div class="dci-queue">
+                                    @foreach (var d in reviewDeltas)
+                                    {
+                                        <div class="dci-queue-item">
+                                            <div class="dci-queue-head">
+                                                <span class="dci-chip dci-chip--danger">Material change</span>
+                                                <strong>@Owner.DciSnapshotLabel(d.ToSnapshotId)</strong>
+                                                <span class="dci-muted ms-auto">@d.OccurredDateUtc.ToString("MMM dd, yyyy h:mm tt")</span>
+                                            </div>
+                                            <p class="dci-queue-summary">@(d.Summary ?? "New evidence changed the decision state.")</p>
+                                            <p class="dci-queue-meta">@d.AffectedPropositionCount propositions · @d.AffectedCandidateCount candidate outcomes affected@(d.FrontierChanged == true ? " · decision frontier changed" : "")</p>
+                                            @if (!string.IsNullOrWhiteSpace(d.RequiredAction))
+                                            {
+                                                <p class="dci-queue-action"><i class="bi bi-arrow-return-right"></i> @d.RequiredAction</p>
+                                            }
+                                            <div class="dci-queue-actions">
+                                                <button type="button" class="dci-btn dci-btn--ghost" @onclick="() => Owner.SelectDciDeltaAsync(d)">Review evidence</button>
+                                                <button type="button" class="dci-btn dci-btn--ghost" @onclick='async () => { await Owner.SelectDciDeltaAsync(d); Owner._dciView = "Before vs After"; }'>Compare snapshots</button>
+                                            </div>
+                                        </div>
+                                    }
+                                </div>
+                            }
+                            break;
+                    }
+                </div>
+            }
+        </div>
+
+@code {
+    [Parameter] public LegalPersonalInjuryDecision2 Owner { get; set; } = default!;
+}
