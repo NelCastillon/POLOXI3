@@ -48,12 +48,15 @@ public sealed partial class LegalDecisionService(
     // universe + a candidate×branch competition matrix, matching the Wide/semantic pipeline. Selected
     // only when the Decision.Discovery.BranchFirst.Enabled feature flag is on; v1 stays the default.
     private const string DiscoveryPromptCodeV2 = "DECISION_DISCOVERY_V2";
-    // Domain Pack mode discovery template (migration 0406 → V2 in migration 0408). Stores ONLY the Domain
+    // Domain Pack mode discovery template (migration 0406 → V2 in 0408 → V3 in 0415). Stores ONLY the Domain
     // Pack mode instructions; the exact original discovery prompt (DECISION_DISCOVERY / DECISION_DISCOVERY_V2)
     // is loaded at runtime and referenced unchanged, so the two copies never diverge. V2 adds the inline,
-    // advisory-only semantic outcome-to-canonical (mappedOutcomeCodes[]) mapping instruction. Used only when
-    // DiscoveryMode == DomainPack.
-    private const string DiscoveryPromptCodeDomainPack = "DECISION_DISCOVERY_DOMAIN_PACK_V2";
+    // advisory-only semantic outcome-to-canonical (mappedOutcomeCodes[]) mapping instruction. V3 adds the
+    // JUDZ hierarchy + graph + source-faithfulness extension governing L3 → Ln generation quality only
+    // (soft MECE sibling coverage/overlap, graph relationships, atomic proposition quality, source
+    // faithfulness); Domain Pack L1/L2 ownership and all prior instructions are preserved unchanged. Used
+    // only when DiscoveryMode == DomainPack.
+    private const string DiscoveryPromptCodeDomainPack = "DECISION_DISCOVERY_DOMAIN_PACK_V3";
     private const string AnswerPromptCode = "DECISION_ANSWER";
     private const string GraphPromptCode = "DECISION_GRAPH";
     private const string VerifyPromptCode = "DECISION_VERIFY";
