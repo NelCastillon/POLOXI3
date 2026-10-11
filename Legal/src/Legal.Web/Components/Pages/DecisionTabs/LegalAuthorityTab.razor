@@ -1,5 +1,8 @@
 @namespace Legal.Web.Components.Pages.DecisionTabs
 @using Legal.Web.Components.Pages
+@using Legal.Web.Services
+@using Legal.Application.Features.Intelligence.Citator
+@inject ApiClient Api
 
 @{
         var authorities = Owner.DaAuthorities;
@@ -72,7 +75,7 @@
                     {
                         <table class="table table-sm" style="margin:0;">
                             <thead>
-                                <tr><th>Authority</th><th>Kind</th><th>Relevance</th><th>Verification</th></tr>
+                                <tr><th>Authority</th><th>Kind</th><th>Relevance</th><th>Verification</th><th>Good law (Citator)</th></tr>
                             </thead>
                             <tbody>
                                 @foreach (var a in authorities)
@@ -82,12 +85,87 @@
                                         <td>@a.Kind</td>
                                         <td>@a.Relevance</td>
                                         <td><span class="dfi-tag dfi-tag-@(string.Equals(a.VerificationStatus, "VERIFIED", StringComparison.OrdinalIgnoreCase) ? "ok" : "warn")">@a.VerificationStatus</span></td>
+                                        <td>
+                                            @{
+                                                var validity = ValidityFor(a.Name);
+                                            }
+                                            <button type="button" class="citator-flag" style="@($"background:{validity.FlagColorHex};")"
+                                                    title="@CitatorTooltip(validity)" @onclick="() => OpenCitatorPanel(a.Name)">
+                                                @validity.FlagDisplayName@(validity.TreatmentCount > 0 ? $" ({validity.TreatmentCount})" : "")
+                                            </button>
+                                        </td>
                                     </tr>
                                 }
                             </tbody>
                         </table>
                     }
                 </div>
+
+                @if (_citatorPanelAuthority is not null)
+                {
+                    <div class="dfi-panel-card citator-panel" style="margin-bottom:14px;">
+                        <div class="citator-panel-head">
+                            <h5 style="margin:0;"><i class="bi bi-journal-check" aria-hidden="true"></i> Citator — @_citatorPanelAuthority</h5>
+                            <div class="citator-panel-head-actions">
+                                <a class="dfi-tag" href="/legal/citator" target="_blank" title="Open full citator">Full citator <i class="bi bi-box-arrow-up-right"></i></a>
+                                <button type="button" class="citator-mini-btn" @onclick="CloseCitatorPanel"><i class="bi bi-x-lg"></i></button>
+                            </div>
+                        </div>
+
+                        @if (_citatorPanelError is not null)
+                        {
+                            <p class="dfi-panel-sub citator-panel-error"><i class="bi bi-exclamation-triangle"></i> @_citatorPanelError</p>
+                        }
+
+                        @if (_citatorPanelLoading)
+                        {
+                            <p class="dfi-panel-sub"><span class="spinner-border spinner-border-sm"></span> Loading treatments…</p>
+                        }
+                        else
+                        {
+                            @if (_citatorPanelTreatments.Count == 0)
+                            {
+                                <p class="dfi-panel-sub">No treatments recorded. This authority shows as <strong>Unknown</strong> until one is added.</p>
+                            }
+                            else
+                            {
+                                <table class="table table-sm" style="margin:0 0 10px;">
+                                    <thead><tr><th>Treatment</th><th>Citing authority</th><th>Date</th><th>Flag</th><th></th></tr></thead>
+                                    <tbody>
+                                        @foreach (var t in _citatorPanelTreatments)
+                                        {
+                                            <tr>
+                                                <td><strong>@t.TreatmentDisplayName</strong></td>
+                                                <td>@t.CitingAuthorityName</td>
+                                                <td>@(t.TreatmentDate?.ToString("yyyy-MM-dd") ?? "—")</td>
+                                                <td>@t.FlagLevelCode</td>
+                                                <td style="text-align:right;">
+                                                    <button type="button" class="citator-mini-btn citator-mini-btn--danger" title="Remove (soft delete)" @onclick="() => DeleteTreatmentAsync(t.CitationTreatmentId)"><i class="bi bi-trash"></i></button>
+                                                </td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            }
+
+                            <div class="citator-record">
+                                <select class="citator-record-input" @bind="_newTreatmentCode">
+                                    <option value="">— treatment —</option>
+                                    @foreach (var c in _citatorCodes)
+                                    {
+                                        <option value="@c.TreatmentCode">@c.DisplayName (@c.FlagLevelCode)</option>
+                                    }
+                                </select>
+                                <input class="citator-record-input" placeholder="Citing authority" @bind="_newCitingAuthority" />
+                                <input type="date" class="citator-record-input" @bind="_newTreatmentDate" />
+                                <button type="button" class="citator-mini-btn citator-mini-btn--primary" @onclick="RecordTreatmentAsync"
+                                        disabled="@(_citatorSaving || string.IsNullOrWhiteSpace(_newTreatmentCode))">
+                                    <i class="bi bi-plus-lg"></i> @(_citatorSaving ? "Saving…" : "Record")
+                                </button>
+                            </div>
+                        }
+                    </div>
+                }
 
                 <div class="dfi-panel-card" style="margin-bottom:14px;">
                     <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
@@ -165,12 +243,24 @@
                     <h5 style="margin-bottom:8px;"><i class="bi bi-calculator" aria-hidden="true"></i> Legal Authority scoring &amp; channel contributions</h5>
                     @if (model is not null)
                     {
-                        <ul style="margin:0 0 10px 0; padding-left:18px;">
-                            <li><code>@model.Formula.SupportFormula</code></li>
-                            <li><code>@model.Formula.QualifiedSupportFormula</code></li>
-                            <li><code>@model.Formula.ContradictionFormula</code></li>
-                            <li><code>@model.Formula.PlacementFormula</code></li>
-                        </ul>
+                        <div class="la-formula-grid">
+                            <div class="la-formula-chip la-formula-chip--pos">
+                                <span class="la-formula-chip-label">Verified support</span>
+                                <code>@model.Formula.SupportFormula</code>
+                            </div>
+                            <div class="la-formula-chip la-formula-chip--pos">
+                                <span class="la-formula-chip-label">Qualified support</span>
+                                <code>@model.Formula.QualifiedSupportFormula</code>
+                            </div>
+                            <div class="la-formula-chip la-formula-chip--neg">
+                                <span class="la-formula-chip-label">Contradiction</span>
+                                <code>@model.Formula.ContradictionFormula</code>
+                            </div>
+                            <div class="la-formula-chip la-formula-chip--neutral">
+                                <span class="la-formula-chip-label">Placement magnitude</span>
+                                <code>@model.Formula.PlacementFormula</code>
+                            </div>
+                        </div>
                     }
                     @if (contributions.Count == 0)
                     {
@@ -213,4 +303,172 @@
 
 @code {
     [Parameter] public LegalPersonalInjuryDecision2 Owner { get; set; } = default!;
+
+    // Citator validity keyed by authority name (case-insensitive). Loaded on render; absence of data
+    // yields the Unknown flag. Advisory only — never blocks the decision workspace.
+    private readonly Dictionary<string, AuthorityValidityDto> _validity = new(StringComparer.OrdinalIgnoreCase);
+    private string[] _loadedKeys = [];
+
+    private static readonly AuthorityValidityDto UnknownValidity =
+        new(string.Empty, "Unknown", "Unknown", "#6c757d", false, 0, []);
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var names = Owner.DaAuthorities
+            .Select(a => a.Name)
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        // Skip if the authority set is unchanged since the last load.
+        if (names.Length == 0 || names.SequenceEqual(_loadedKeys, StringComparer.OrdinalIgnoreCase))
+            return;
+
+        try
+        {
+            var results = await Api.GetCitatorValidityAsync(names);
+            _validity.Clear();
+            foreach (var r in results)
+                _validity[r.AuthorityIdentity] = r;
+            _loadedKeys = names;
+        }
+        catch
+        {
+            // Citator is advisory; on failure leave authorities as Unknown rather than disrupting the tab.
+            _loadedKeys = names;
+        }
+    }
+
+    private AuthorityValidityDto ValidityFor(string? name)
+        => name is not null && _validity.TryGetValue(name, out var v) ? v : UnknownValidity;
+
+    private static string CitatorTooltip(AuthorityValidityDto validity)
+    {
+        if (validity.TreatmentCount == 0)
+            return "No citator treatment data on record for this authority.";
+
+        var parts = validity.Treatments
+            .Select(t => $"{t.TreatmentDisplayName}{(string.IsNullOrWhiteSpace(t.CitingAuthorityName) ? "" : $" — {t.CitingAuthorityName}")}");
+        return string.Join("\n", parts);
+    }
+
+    // ── Inline citator management panel (opened from a validity badge) ──
+    private string? _citatorPanelAuthority;
+    private bool _citatorPanelLoading;
+    private bool _citatorSaving;
+    private string? _citatorPanelError;
+    private IReadOnlyList<AuthorityTreatmentDto> _citatorPanelTreatments = [];
+    private IReadOnlyList<CitationTreatmentCodeDto> _citatorCodes = [];
+
+    private string? _newTreatmentCode;
+    private string? _newCitingAuthority;
+    private DateTime? _newTreatmentDate = DateTime.Today;
+
+    private async Task OpenCitatorPanel(string authority)
+    {
+        _citatorPanelAuthority = authority;
+        _citatorPanelError = null;
+        _newTreatmentCode = null;
+        _newCitingAuthority = null;
+        _newTreatmentDate = DateTime.Today;
+        await RefreshCitatorPanelAsync();
+    }
+
+    private void CloseCitatorPanel() => _citatorPanelAuthority = null;
+
+    private async Task RefreshCitatorPanelAsync()
+    {
+        if (_citatorPanelAuthority is null)
+            return;
+
+        _citatorPanelLoading = true;
+        try
+        {
+            if (_citatorCodes.Count == 0)
+                _citatorCodes = await Api.GetCitatorTreatmentCodesAsync();
+
+            _citatorPanelTreatments = await Api.ListCitatorTreatmentsAsync(_citatorPanelAuthority);
+        }
+        catch (Exception ex)
+        {
+            _citatorPanelError = $"Failed to load treatments: {ex.Message}";
+        }
+        finally
+        {
+            _citatorPanelLoading = false;
+        }
+    }
+
+    private async Task RecordTreatmentAsync()
+    {
+        if (_citatorPanelAuthority is null || string.IsNullOrWhiteSpace(_newTreatmentCode))
+            return;
+
+        _citatorSaving = true;
+        _citatorPanelError = null;
+        try
+        {
+            var request = new SaveCitationTreatmentRequest(
+                null,
+                _citatorPanelAuthority,
+                _citatorPanelAuthority,
+                _newCitingAuthority,
+                null,
+                _newTreatmentCode!,
+                _newTreatmentDate is { } d ? DateOnly.FromDateTime(d) : null,
+                null,
+                "Manual",
+                null);
+
+            await Api.SaveCitatorTreatmentAsync(request);
+            _newTreatmentCode = null;
+            _newCitingAuthority = null;
+            await RefreshCitatorPanelAsync();
+            await ReloadValidityAsync();
+        }
+        catch (Exception ex)
+        {
+            _citatorPanelError = $"Save failed: {ex.Message}";
+        }
+        finally
+        {
+            _citatorSaving = false;
+        }
+    }
+
+    private async Task DeleteTreatmentAsync(Guid citationTreatmentId)
+    {
+        _citatorPanelError = null;
+        try
+        {
+            await Api.DeleteCitatorTreatmentAsync(citationTreatmentId);
+            await RefreshCitatorPanelAsync();
+            await ReloadValidityAsync();
+        }
+        catch (Exception ex)
+        {
+            _citatorPanelError = $"Delete failed: {ex.Message}";
+        }
+    }
+
+    // Re-pull validity badges after a write so the inline change is reflected immediately.
+    private async Task ReloadValidityAsync()
+    {
+        if (_loadedKeys.Length == 0)
+            return;
+
+        try
+        {
+            var results = await Api.GetCitatorValidityAsync(_loadedKeys);
+            _validity.Clear();
+            foreach (var r in results)
+                _validity[r.AuthorityIdentity] = r;
+        }
+        catch
+        {
+            // Advisory; ignore refresh failures.
+        }
+    }
+}
 }

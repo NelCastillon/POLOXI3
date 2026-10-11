@@ -341,6 +341,9 @@ internal sealed class RecordingDecisionRepository : ILegalDecisionRepository
     public Task<bool> DeleteMatterAsync(Guid tenantId, Guid userId, Guid decisionMatterId, bool includeAllTenants, CancellationToken cancellationToken = default)
         => Task.FromResult(true);
 
+    public Task<int> DeleteMattersAsync(Guid tenantId, Guid userId, IReadOnlyCollection<Guid> decisionMatterIds, bool includeAllTenants, CancellationToken cancellationToken = default)
+        => Task.FromResult(decisionMatterIds?.Count ?? 0);
+
     public Task<DecisionMatterFacetsDto> GetMatterFacetsAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => throw new NotSupportedException("Matter facets are not used on the research-loop path.");
 

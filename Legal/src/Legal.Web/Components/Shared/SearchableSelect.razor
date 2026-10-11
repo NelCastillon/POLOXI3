@@ -1,0 +1,176 @@
+@using Microsoft.AspNetCore.Components.Web
+@implements IDisposable
+
+@* Enterprise searchable dropdown: filter box + scrollable option panel, allows free-typed custom values. *@
+<div class="ss-root @(_open ? "ss-open" : null)" @onfocusout="OnFocusOut">
+    <div class="ss-control" @onclick="ToggleOpen">
+        <input class="ss-input"
+               type="text"
+               value="@_display"
+               placeholder="@Placeholder"
+               autocomplete="off"
+               @oninput="OnInput"
+               @onfocus="OpenPanel"
+               @onkeydown="OnKeyDown" />
+        <button type="button" class="ss-caret" tabindex="-1" @onclick:stopPropagation="true" @onclick="ToggleOpen" aria-label="Toggle options">
+            <i class="bi bi-chevron-down"></i>
+        </button>
+    </div>
+    @if (_open)
+    {
+        <div class="ss-panel" @onmousedown:preventDefault="true">
+            @if (_filtered.Count == 0)
+            {
+                <div class="ss-empty">
+                    @if (string.IsNullOrWhiteSpace(_query))
+                    {
+                        <span>No options available</span>
+                    }
+                    else
+                    {
+                        <span>Use "@_query"</span>
+                    }
+                </div>
+            }
+            else
+            {
+                @for (var i = 0; i < _filtered.Count; i++)
+                {
+                    var idx = i;
+                    var opt = _filtered[idx];
+                    <div class="ss-option @(idx == _activeIndex ? "ss-option--active" : null) @(string.Equals(opt, Value, StringComparison.OrdinalIgnoreCase) ? "ss-option--selected" : null)"
+                         @onclick="() => Select(opt)">
+                        <span class="ss-option-text">@opt</span>
+                        @if (string.Equals(opt, Value, StringComparison.OrdinalIgnoreCase))
+                        {
+                            <i class="bi bi-check2 ss-option-check"></i>
+                        }
+                    </div>
+                }
+            }
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public string? Value { get; set; }
+    [Parameter] public EventCallback<string?> ValueChanged { get; set; }
+    [Parameter] public IReadOnlyCollection<string> Options { get; set; } = [];
+    [Parameter] public string? Placeholder { get; set; }
+    /// When true, users may keep typed values that are not in the option list.
+    [Parameter] public bool AllowCustom { get; set; } = true;
+
+    private bool _open;
+    private string _query = string.Empty;
+    private string _display = string.Empty;
+    private int _activeIndex = -1;
+    private List<string> _filtered = [];
+
+    protected override void OnParametersSet()
+    {
+        if (!_open)
+            _display = Value ?? string.Empty;
+    }
+
+    private void OpenPanel()
+    {
+        if (_open) return;
+        _open = true;
+        _query = string.Empty;
+        _activeIndex = -1;
+        ApplyFilter();
+    }
+
+    private void ToggleOpen()
+    {
+        if (_open)
+        {
+            ClosePanel();
+        }
+        else
+        {
+            OpenPanel();
+        }
+    }
+
+    private void ClosePanel()
+    {
+        _open = false;
+        _display = Value ?? string.Empty;
+    }
+
+    private async Task OnInput(ChangeEventArgs e)
+    {
+        _open = true;
+        _query = e.Value?.ToString() ?? string.Empty;
+        _display = _query;
+        _activeIndex = -1;
+        ApplyFilter();
+        if (AllowCustom)
+            await CommitAsync(_query);
+    }
+
+    private void ApplyFilter()
+    {
+        var source = Options ?? [];
+        if (string.IsNullOrWhiteSpace(_query))
+        {
+            _filtered = source.ToList();
+        }
+        else
+        {
+            _filtered = source
+                .Where(o => o.Contains(_query, StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(o => o.StartsWith(_query, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+        }
+    }
+
+    private async Task Select(string option)
+    {
+        _open = false;
+        _display = option;
+        await CommitAsync(option);
+    }
+
+    private async Task CommitAsync(string? value)
+    {
+        if (string.Equals(value, Value, StringComparison.Ordinal)) return;
+        Value = value;
+        await ValueChanged.InvokeAsync(value);
+    }
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case "ArrowDown":
+                if (!_open) { OpenPanel(); return; }
+                if (_filtered.Count > 0)
+                    _activeIndex = Math.Min(_activeIndex + 1, _filtered.Count - 1);
+                break;
+            case "ArrowUp":
+                if (_filtered.Count > 0)
+                    _activeIndex = Math.Max(_activeIndex - 1, 0);
+                break;
+            case "Enter":
+                if (_open && _activeIndex >= 0 && _activeIndex < _filtered.Count)
+                    await Select(_filtered[_activeIndex]);
+                else
+                    ClosePanel();
+                break;
+            case "Escape":
+                ClosePanel();
+                break;
+        }
+    }
+
+    private void OnFocusOut(FocusEventArgs e)
+    {
+        // Defer close so option mousedown (which preventDefault's) can register the click.
+        _open = false;
+        _display = Value ?? string.Empty;
+    }
+
+    public void Dispose() { }
+}

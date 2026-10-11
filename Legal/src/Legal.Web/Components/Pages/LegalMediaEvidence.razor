@@ -5,28 +5,53 @@
 @inject BreadcrumbService Breadcrumbs
 @inject NavigationManager Navigation
 
-<LegalWorkspace>
-    <div class="media-page">
-        <header class="media-hero">
-            <div class="media-hero-icon"><i class="bi bi-camera-reels"></i></div>
-            <div class="media-hero-copy">
-                <span>POLOXI Legal — Media &amp; Machine Intelligence channel</span>
-                <h1>Media &amp; Machine Evidence</h1>
-                <p>Register immutable photo and audio evidence, run capability-aware extraction into anchored proposition proposals, and confirm each proposition↔anchor link. Nothing here scores or picks a winner — accepted propositions flow through the shared review funnel and POLOXI Core alone competes them.</p>
-            </div>
-        </header>
+@{
+    RenderFragment mediaBody =@<div class="media-page">
+        @if (Embedded)
+        {
+            <header class="media-tabhead">
+                <div class="media-tabhead-icon"><i class="bi bi-camera-reels"></i></div>
+                <div class="media-tabhead-copy">
+                    <h2>Media &amp; Machine Evidence</h2>
+                    <p>Register immutable photo and audio evidence, run capability-aware extraction into anchored proposition proposals, and confirm each proposition↔anchor link. Accepted propositions flow through the shared review funnel — POLOXI Core alone competes them.</p>
+                </div>
+            </header>
+        }
+        else
+        {
+            <header class="media-hero">
+                <div class="media-hero-icon"><i class="bi bi-camera-reels"></i></div>
+                <div class="media-hero-copy">
+                    <span>POLOXI Legal — Media &amp; Machine Intelligence channel</span>
+                    <h1>Media &amp; Machine Evidence</h1>
+                    <p>Register immutable photo and audio evidence, run capability-aware extraction into anchored proposition proposals, and confirm each proposition↔anchor link. Nothing here scores or picks a winner — accepted propositions flow through the shared review funnel and POLOXI Core alone competes them.</p>
+                </div>
+            </header>
+        }
 
         @if (_matter is not null)
         {
-            <div class="media-matter-banner">
-                <i class="bi bi-folder2-open"></i>
-                <div class="media-matter-banner-body">
-                    <span>Working within matter</span>
-                    <a href="@($"/legal/matters/{_matter.DecisionMatterId}")"><strong>@_matter.Title</strong></a>
+            @if (!Embedded)
+            {
+                <div class="media-matter-banner">
+                    <i class="bi bi-folder2-open"></i>
+                    <div class="media-matter-banner-body">
+                        <span>Working within matter</span>
+                        <a href="@($"/legal/matters/{_matter.DecisionMatterId}")"><strong>@_matter.Title</strong></a>
+                    </div>
+                    <a class="um-btn um-btn-ghost um-btn-sm ms-auto" href="@($"/legal/decision?matterId={_matter.DecisionMatterId}")">
+                        <i class="bi bi-signpost-split"></i> Decision
+                    </a>
                 </div>
-                <a class="um-btn um-btn-ghost um-btn-sm ms-auto" href="@($"/legal/decision?matterId={_matter.DecisionMatterId}")">
-                    <i class="bi bi-signpost-split"></i> Decision
-                </a>
+            }
+
+            <div class="media-kpi-strip">
+                <div class="media-kpi"><span class="media-kpi-value">@_assets.Count</span><span class="media-kpi-label"><i class="bi bi-collection"></i> Assets</span></div>
+                <div class="media-kpi"><span class="media-kpi-value">@_assets.Count(a => a.AssetType == MediaAssetType.Photo)</span><span class="media-kpi-label"><i class="bi bi-image"></i> Photos</span></div>
+                <div class="media-kpi"><span class="media-kpi-value">@_assets.Count(a => a.AssetType == MediaAssetType.Audio)</span><span class="media-kpi-label"><i class="bi bi-music-note-beamed"></i> Audio</span></div>
+                <div class="media-kpi"><span class="media-kpi-value">@_parkedPropositionIds.Count</span><span class="media-kpi-label"><i class="bi bi-inboxes"></i> Parked</span></div>
+                <div class="media-kpi"><span class="media-kpi-value">@PendingLinkCount</span><span class="media-kpi-label"><i class="bi bi-hourglass-split"></i> Pending review</span></div>
+                <div class="media-kpi"><span class="media-kpi-value">@ConfirmedLinkCount</span><span class="media-kpi-label"><i class="bi bi-check2-circle"></i> Confirmed</span></div>
             </div>
         }
 
@@ -252,10 +277,31 @@
                 </div>
             </section>
         }
-    </div>
-</LegalWorkspace>
+    </div>;
+}
+
+@if (Embedded)
+{
+    @mediaBody
+}
+else
+{
+    <LegalWorkspace>
+        @mediaBody
+    </LegalWorkspace>
+}
 
 @code {
+    // When true, the component is hosted inside the decision cockpit tab and must NOT
+    // wrap itself in <LegalWorkspace> (the cockpit already provides the shell).
+    [Parameter]
+    public bool Embedded { get; set; }
+
+    // Allow the host (decision cockpit) to supply the matter id directly in addition to
+    // the standalone query-string route.
+    [Parameter]
+    public Guid? MatterIdParam { get; set; }
+
     [Parameter, SupplyParameterFromQuery(Name = "matterId")]
     public Guid? MatterId { get; set; }
 
@@ -270,6 +316,10 @@
     private Legal.Application.Abstractions.Intelligence.MediaProcessingResult? _lastProcessing;
     private readonly List<Guid> _parkedPropositionIds = [];
     private readonly Dictionary<Guid, IReadOnlyList<PropositionEvidenceLink>> _evidenceLinks = [];
+
+    // Enterprise KPI counters derived from the parked proposition evidence links.
+    private int PendingLinkCount => _evidenceLinks.Values.Sum(links => links.Count(l => l.ReviewStatus == EvidenceLinkReviewStatus.Pending));
+    private int ConfirmedLinkCount => _evidenceLinks.Values.Sum(links => links.Count(l => l.ReviewStatus == EvidenceLinkReviewStatus.Confirmed));
 
     private bool _busy;
     private string? _loadError;
@@ -295,10 +345,12 @@
 
     protected override async Task OnInitializedAsync()
     {
-        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Intelligence", "/intelligence"), new("Media & Machine Evidence", "/legal/media-evidence"));
+        if (!Embedded)
+            Breadcrumbs.SetCrumbs(new("Home", "/"), new("Intelligence", "/intelligence"), new("Media & Machine Evidence", "/legal/media-evidence"));
         try
         {
-            if (MatterId is Guid mid)
+            var effectiveMatterId = MatterIdParam ?? MatterId;
+            if (effectiveMatterId is Guid mid)
             {
                 _matter = await Api.GetLegalDecisionMatterAsync(mid);
                 if (_matter is not null)

@@ -295,6 +295,16 @@ public static class ServiceCollectionExtensions
         // POLOXI Legal Decision Intelligence (/legal/decision) — self-contained module.
         services.AddScoped<ILegalDecisionRepository, LegalDecisionRepository>();
 
+        // Judz Run & Assessment Management (/legal/runassessment) — execution ledger read slice.
+        services.AddScoped<Legal.Application.Abstractions.Intelligence.IAnalysisRunLedgerRepository, AnalysisRunLedgerRepository>();
+        services.AddScoped<Legal.Application.Abstractions.Intelligence.IAnalysisRunLedgerService, Legal.Application.Features.Intelligence.RunManagement.AnalysisRunLedgerService>();
+        services.AddScoped<Legal.Application.Abstractions.Intelligence.IAnalysisRunLedgerWriter, AnalysisRunLedgerWriter>();
+        services.AddScoped<Legal.Application.Abstractions.Intelligence.IWideRunResultRepository, WideRunResultRepository>();
+
+        // Judz Citator — authority treatment & good-law validity.
+        services.AddScoped<Legal.Application.Abstractions.Intelligence.ICitatorRepository, CitatorRepository>();
+        services.AddScoped<Legal.Application.Abstractions.Intelligence.ICitatorService, Legal.Application.Features.Intelligence.Citator.CitatorService>();
+
         // Judz Matter Lifecycle — reusable operational stage engine (separate from POLOXI Core).
         services.AddScoped<Legal.Application.Abstractions.Persistence.IMatterLifecycleRepository, MatterLifecycleRepository>();
         services.AddScoped<Legal.Application.Abstractions.Services.IMatterLifecycleService, Legal.Application.MatterLifecycleService>();

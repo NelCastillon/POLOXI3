@@ -1100,6 +1100,16 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
         return deleted ? NoContent() : NotFound();
     }
 
+    [HttpPost("matters/bulk-delete")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> DeleteMatters([FromBody] DecisionMatterBulkDeleteRequest request, CancellationToken cancellationToken)
+    {
+        if (request?.MatterIds is null || request.MatterIds.Count == 0)
+            return BadRequest("At least one matter must be selected.");
+        var deleted = await service.DeleteMattersAsync(TenantId, ActorUserId, request.MatterIds, AuthenticatedRequestContext.IsSystemAdmin(User), cancellationToken);
+        return Ok(new { deleted });
+    }
+
     // Decision-history timeline for a session (sourced from POLOXI.Legal_DecisionEvent).
     [HttpGet("sessions/{sessionId:guid}/timeline")]
     [Authorize(Policy = IntelligencePolicies.Search)]

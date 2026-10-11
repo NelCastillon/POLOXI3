@@ -1,0 +1,287 @@
+@namespace Legal.Web.Components.Pages.DecisionTabs
+@using Legal.Application.Features.Intelligence.RunManagement
+@using Legal.Web.Services
+@inject ApiClient Api
+
+@* ── Matter-scoped Run History tab. Reads the same DB-backed run ledger as the standalone
+     /legal/runassessment page, but scoped to the open matter in the decision cockpit. ── *@
+
+<div class="ram-root">
+
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger ram-alert" role="alert">
+            <i class="bi bi-exclamation-triangle"></i> @_loadError
+        </div>
+    }
+
+    <header class="ram-header">
+        <div class="ram-header-text">
+            <h1>Run history</h1>
+            <p>Every execution for this matter. Each input preserved. One published assessment.</p>
+        </div>
+        <div class="dfi-topbar-actions" style="gap:8px;">
+            <button type="button" class="ram-btn ram-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+                <i class="bi bi-arrow-clockwise"></i> Refresh
+            </button>
+            <a class="ram-btn ram-btn-primary" href="/legal/runassessment" title="Open the full Run &amp; Assessment Management workspace">
+                <i class="bi bi-box-arrow-up-right"></i> Full workspace
+            </a>
+        </div>
+    </header>
+
+    @if (_loading)
+    {
+        <div class="ram-loading"><span class="spinner-border"></span> Loading run ledger…</div>
+    }
+    else if (MatterId is null || MatterId == Guid.Empty)
+    {
+        <div class="ram-placeholder">
+            <i class="bi bi-folder2-open"></i>
+            <h2>No matter selected</h2>
+            <p>Open a matter to view its run and assessment history.</p>
+        </div>
+    }
+    else if (_page is null)
+    {
+        <div class="ram-placeholder">
+            <i class="bi bi-folder2-open"></i>
+            <h2>No runs yet</h2>
+            <p>Run an analysis for this matter and it will appear here.</p>
+        </div>
+    }
+    else
+    {
+        @if (_page.CurrentAssessment is { } current)
+        {
+            <section class="ram-current" aria-label="Current assessment">
+                <div class="ram-current-main">
+                    <span class="ram-current-label">Current assessment</span>
+                    <div class="ram-current-id">@current.AssessmentLabel &middot; Run @current.RunLabel</div>
+                    <div class="ram-current-meta">
+                        Evaluated @current.PublishedUtc.ToLocalTime().ToString("MMM d, h:mm tt")@(string.IsNullOrWhiteSpace(current.ReviewStateText) ? null : $" · {current.ReviewStateText}")
+                    </div>
+                </div>
+                <div class="ram-current-side">
+                    @if (!string.IsNullOrWhiteSpace(current.FreshnessNote))
+                    {
+                        <span class="ram-freshness">@current.FreshnessNote</span>
+                    }
+                    <button type="button" class="ram-btn ram-btn-ghost" @onclick="() => _selectedRunId = current.AnalysisRunId">
+                        View run
+                    </button>
+                </div>
+            </section>
+        }
+
+        <div class="ram-grid">
+
+            @* ── Left: run ledger ── *@
+            <aside class="ram-ledger" aria-label="Run ledger">
+                <div class="ram-ledger-head">
+                    <h2>Run ledger</h2>
+                    <span class="ram-count">@_page.Runs.Count runs</span>
+                </div>
+
+                @if (_page.Runs.Count == 0)
+                {
+                    <div class="ram-ledger-empty">No runs recorded yet.</div>
+                }
+                else
+                {
+                    <ul class="ram-ledger-list">
+                        @foreach (var run in _page.Runs)
+                        {
+                            <li>
+                                <button type="button"
+                                        class="ram-run @(run.AnalysisRunId == _selectedRunId ? "ram-run--active" : null)"
+                                        @onclick="() => _selectedRunId = run.AnalysisRunId">
+                                    <div class="ram-run-top">
+                                        <span class="ram-run-label">@run.RunLabel</span>
+                                        <span class="ram-run-status ram-run-status--@run.ExecutionStatusCode.ToLowerInvariant()">@run.ExecutionStatusCode</span>
+                                    </div>
+                                    <div class="ram-run-title">@run.Title</div>
+                                    <div class="ram-run-meta">
+                                        @run.RequestedUtc.ToLocalTime().ToString("MMM d, h:mm tt")
+                                        @if (run.DurationSeconds is int secs)
+                                        {
+                                            <span> · @DurationText(secs)</span>
+                                        }
+                                        <span> · @PublishStateText(run)</span>
+                                    </div>
+                                </button>
+                            </li>
+                        }
+                    </ul>
+                }
+            </aside>
+
+            @* ── Right: run detail ── *@
+            <section class="ram-detail" aria-label="Run detail">
+                @if (SelectedRun is { } selected)
+                {
+                    <div class="ram-detail-head">
+                        <div>
+                            <h2>@selected.RunLabel &mdash; @selected.Title</h2>
+                            <div class="ram-detail-sub">
+                                @selected.RunTypeCode
+                                @if (!string.IsNullOrWhiteSpace(selected.PackLabel))
+                                {
+                                    <span> · @selected.PackLabel</span>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(selected.InputSnapshotLabel))
+                                {
+                                    <span> · Input @selected.InputSnapshotLabel</span>
+                                }
+                            </div>
+                        </div>
+                        <span class="ram-run-status ram-run-status--@selected.ExecutionStatusCode.ToLowerInvariant()">@selected.ExecutionStatusCode</span>
+                    </div>
+
+                    @if (!string.IsNullOrWhiteSpace(selected.ExecutionBanner))
+                    {
+                        <div class="alert alert-warning ram-alert" role="alert">
+                            <i class="bi bi-exclamation-triangle"></i> @selected.ExecutionBanner
+                        </div>
+                    }
+
+                    @* ── Execution steps ── *@
+                    <ol class="ram-steps">
+                        @foreach (var step in selected.Steps)
+                        {
+                            <li class="ram-step ram-step--@step.StatusCode.ToLowerInvariant()">
+                                <div class="ram-step-head">
+                                    <span class="ram-step-name">@step.DisplayName</span>
+                                    <span class="ram-step-status">@(step.StatusLabel ?? step.StatusCode)</span>
+                                </div>
+                                @if (!string.IsNullOrWhiteSpace(step.Description))
+                                {
+                                    <div class="ram-step-desc">@step.Description</div>
+                                }
+                                @if (step.Attempts.Count > 0)
+                                {
+                                    <ul class="ram-attempts">
+                                        @foreach (var attempt in step.Attempts)
+                                        {
+                                            <li>@attempt.DisplayText</li>
+                                        }
+                                    </ul>
+                                }
+                            </li>
+                        }
+                    </ol>
+
+                    @* ── Immutable input snapshot ── *@
+                    @if (selected.InputSnapshot is { } snapshot)
+                    {
+                        <div class="ram-snapshot">
+                            <h3>Input snapshot @snapshot.SnapshotLabel</h3>
+                            <dl class="ram-snapshot-grid">
+                                @if (!string.IsNullOrWhiteSpace(snapshot.Query))
+                                {
+                                    <dt>Query</dt>
+                                    <dd>@snapshot.Query</dd>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(snapshot.ContextCode))
+                                {
+                                    <dt>Context</dt>
+                                    <dd>@snapshot.ContextCode</dd>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(snapshot.ModelCode))
+                                {
+                                    <dt>Model</dt>
+                                    <dd>@snapshot.ModelCode</dd>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(snapshot.DiscoveryModeCode))
+                                {
+                                    <dt>Discovery</dt>
+                                    <dd>@snapshot.DiscoveryModeCode</dd>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(snapshot.ClarificationAnswer))
+                                {
+                                    <dt>Clarification</dt>
+                                    <dd>@snapshot.ClarificationAnswer</dd>
+                                }
+                            </dl>
+                        </div>
+                    }
+                }
+                else
+                {
+                    <div class="ram-placeholder">
+                        <i class="bi bi-arrow-left-circle"></i>
+                        <p>Select a run to view its execution steps and input snapshot.</p>
+                    </div>
+                }
+            </section>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public Guid? MatterId { get; set; }
+
+    private RunAssessmentPageDto? _page;
+    private Guid? _selectedRunId;
+    private bool _loading;
+    private string? _loadError;
+    private Guid? _loadedMatterId;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (MatterId != _loadedMatterId)
+        {
+            _loadedMatterId = MatterId;
+            _selectedRunId = null;
+            await LoadAsync();
+        }
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            if (MatterId is not { } matterId || matterId == Guid.Empty)
+            {
+                _page = null;
+                return;
+            }
+
+            _page = await Api.GetLegalRunAssessmentPageAsync(matterId);
+
+            if (_page is not null && _selectedRunId is null)
+                _selectedRunId = _page.CurrentAssessment?.AnalysisRunId ?? _page.Runs.FirstOrDefault()?.AnalysisRunId;
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Unable to load run history: {ex.Message}";
+            _page = null;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private AnalysisRunDto? SelectedRun =>
+        _page?.Runs.FirstOrDefault(r => r.AnalysisRunId == _selectedRunId);
+
+    private static string PublishStateText(AnalysisRunDto run) => run.PublicationStatusCode switch
+    {
+        "Published" => "Published",
+        "Stale" => "Stale",
+        "Historical" => "Historical",
+        "NotPublished" => "Not published",
+        _ => run.PublicationStatusCode
+    };
+
+    private static string DurationText(int seconds)
+    {
+        if (seconds < 60)
+            return $"{seconds} sec";
+        var span = TimeSpan.FromSeconds(seconds);
+        return span.Seconds == 0 ? $"{span.Minutes} min" : $"{span.Minutes} min {span.Seconds:00} sec";
+    }
+}

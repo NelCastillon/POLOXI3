@@ -1,7 +1,7 @@
 @page "/legal/runassessment"
-@using Legal.Web.Services
+@using Legal.Application.Features.Intelligence.RunManagement
 @inject NavigationManager Navigation
-@inject ActiveMatterContext ActiveMatter
+@inject Legal.Web.Services.ApiClient Api
 @rendermode RenderMode.InteractiveServer
 
 <PageTitle>Run &amp; Assessment Management</PageTitle>
@@ -9,13 +9,26 @@
 <LegalWorkspace ExtraClass="intel-compact">
     <div class="ram-root">
 
+        @if (_loadError is not null)
+        {
+            <div class="alert alert-danger ram-alert" role="alert">
+                <i class="bi bi-exclamation-triangle"></i> @_loadError
+            </div>
+        }
+
         @* ── Breadcrumb ── *@
         <nav class="ram-breadcrumb" aria-label="Breadcrumb">
-            <span>@_matter.Caption</span>
-            <i class="bi bi-chevron-right"></i>
-            <span>@_matter.Reference</span>
-            <i class="bi bi-chevron-right"></i>
-            <span class="ram-breadcrumb-current">@_matter.Stage</span>
+            <span>@(_page?.MatterTitle ?? "Matter")</span>
+            @if (!string.IsNullOrWhiteSpace(_page?.MatterReference))
+            {
+                <i class="bi bi-chevron-right"></i>
+                <span>@_page!.MatterReference</span>
+            }
+            @if (!string.IsNullOrWhiteSpace(_page?.MatterStage))
+            {
+                <i class="bi bi-chevron-right"></i>
+                <span class="ram-breadcrumb-current">@_page!.MatterStage</span>
+            }
         </nav>
 
         @* ── Page header ── *@
@@ -24,228 +37,500 @@
                 <h1>Analysis history</h1>
                 <p>Every execution. Every input. One published assessment.</p>
             </div>
-            <button type="button" class="ram-btn ram-btn-primary" @onclick="StartNewAnalysis">
-                <i class="bi bi-plus-lg"></i> New analysis
-            </button>
+            <div class="ram-header-actions">
+                <a class="ram-btn ram-btn-ghost" href="/legal/matters">
+                    <i class="bi bi-folder2-open"></i> Matters
+                </a>
+                <button type="button" class="ram-btn ram-btn-primary" @onclick="StartNewAnalysis" disabled="@(_page is null)">
+                    <i class="bi bi-plus-lg"></i> New analysis
+                </button>
+            </div>
         </header>
 
-        @* ── Current assessment banner ── *@
-        <section class="ram-current" aria-label="Current assessment">
-            <div class="ram-current-main">
-                <span class="ram-current-label">Current assessment</span>
-                <div class="ram-current-id">@_current.AssessmentId &middot; Run @_current.RunId</div>
-                <div class="ram-current-meta">
-                    Evaluated @_current.EvaluatedOn &middot; @_current.ReviewState
-                </div>
-            </div>
-            <div class="ram-current-side">
-                @if (!string.IsNullOrEmpty(_current.FreshnessNote))
-                {
-                    <span class="ram-freshness">@_current.FreshnessNote</span>
-                }
-                <button type="button" class="ram-btn ram-btn-ghost" @onclick="() => ViewRun(_current.RunId)">
-                    View run
-                </button>
-            </div>
-        </section>
-
-        @* ── Primary sub-tabs ── *@
-        <nav class="ram-subtabs" role="tablist" aria-label="Run and assessment views">
-            @foreach (var tab in _subTabs)
-            {
-                <button type="button"
-                        role="tab"
-                        class="ram-subtab @(tab == _activeSubTab ? "ram-subtab--active" : null)"
-                        aria-selected="@(tab == _activeSubTab)"
-                        @onclick="() => _activeSubTab = tab">
-                    @tab
-                </button>
-            }
-        </nav>
-
-        @if (_activeSubTab == "Run ledger")
+        @if (_loading)
         {
-            <div class="ram-grid">
-
-                @* ── Left: run ledger ── *@
-                <aside class="ram-ledger" aria-label="Run ledger">
-                    <div class="ram-ledger-head">
-                        <h2>Run ledger</h2>
-                        <span class="ram-count">@_runs.Count runs</span>
-                    </div>
-
-                    <div class="ram-filter">
-                        <label for="ram-exec-status">Execution status</label>
-                        <select id="ram-exec-status" class="ram-select" @bind="_statusFilter">
-                            <option value="All">All executions</option>
-                            <option value="Succeeded">Succeeded</option>
-                            <option value="Failed">Failed</option>
-                            <option value="Cancelled">Cancelled</option>
-                        </select>
-                    </div>
-
-                    <div class="ram-run-list">
-                        @foreach (var run in FilteredRuns)
-                        {
-                            <button type="button"
-                                    class="ram-run-card @(run.RunId == _selectedRunId ? "ram-run-card--active" : null)"
-                                    @onclick="() => _selectedRunId = run.RunId">
-                                <div class="ram-run-card-top">
-                                    <span class="ram-run-id">@run.RunId</span>
-                                    <span class="ram-status ram-status--@run.Status.ToLowerInvariant()">@run.Status</span>
-                                </div>
-                                <div class="ram-run-title">@run.Title</div>
-                                <div class="ram-run-sub">
-                                    @run.Time &middot; @run.Pack &middot; @run.PublishState
-                                </div>
-                            </button>
-                        }
-                    </div>
-
-                    <p class="ram-ledger-foot">Execution and publication are separate.</p>
-                </aside>
-
-                @* ── Right: run detail ── *@
-                <section class="ram-detail" aria-label="Run detail">
-                    @if (SelectedRun is { } r)
-                    {
-                        <div class="ram-detail-head">
-                            <div>
-                                <span class="ram-detail-eyebrow">@r.RunId &middot; Matter analysis</span>
-                                <h2>@r.Title</h2>
-                            </div>
-                            <span class="ram-duration">@r.Duration</span>
-                        </div>
-
-                        <div class="ram-chips">
-                            <span class="ram-chip ram-chip--@r.Status.ToLowerInvariant()">@r.Status</span>
-                            <span class="ram-chip">@r.PublishState</span>
-                            <span class="ram-chip ram-chip--pack">@r.Pack</span>
-                        </div>
-
-                        <div class="ram-detail-meta">
-                            <div>
-                                <span class="ram-meta-label">Trigger</span>
-                                <span class="ram-meta-value">@r.Trigger</span>
-                            </div>
-                            <div>
-                                <span class="ram-meta-label">Requested</span>
-                                <span class="ram-meta-value">@r.Requested</span>
-                            </div>
-                            <div>
-                                <span class="ram-meta-label">Input snapshot</span>
-                                <span class="ram-meta-value">@r.InputSnapshot</span>
-                            </div>
-                        </div>
-
-                        <nav class="ram-inner-tabs" role="tablist" aria-label="Run detail sections">
-                            @foreach (var inner in _innerTabs)
-                            {
-                                <button type="button"
-                                        role="tab"
-                                        class="ram-inner-tab @(inner == _activeInnerTab ? "ram-inner-tab--active" : null)"
-                                        aria-selected="@(inner == _activeInnerTab)"
-                                        @onclick="() => _activeInnerTab = inner">
-                                    @inner
-                                </button>
-                            }
-                        </nav>
-
-                        @if (_activeInnerTab == "Execution")
-                        {
-                            @if (!string.IsNullOrEmpty(r.ExecutionBanner))
-                            {
-                                <div class="ram-banner">@r.ExecutionBanner</div>
-                            }
-
-                            <ol class="ram-steps">
-                                @foreach (var step in r.Steps)
-                                {
-                                    <li class="ram-step">
-                                        <span class="ram-step-marker ram-step-marker--@step.State.ToLowerInvariant()">
-                                            @switch (step.State)
-                                            {
-                                                case "Completed":
-                                                    <i class="bi bi-check"></i>
-                                                    break;
-                                                case "Failed":
-                                                    <i class="bi bi-exclamation"></i>
-                                                    break;
-                                                default:
-                                                    @step.Order
-                                                    break;
-                                            }
-                                        </span>
-                                        <div class="ram-step-body">
-                                            <div class="ram-step-name">@step.Name</div>
-                                            <div class="ram-step-desc">@step.Description</div>
-                                            @if (step.Attempts.Count > 0)
-                                            {
-                                                <div class="ram-step-attempts">
-                                                    @foreach (var attempt in step.Attempts)
-                                                    {
-                                                        <span class="ram-attempt">@attempt</span>
-                                                    }
-                                                </div>
-                                            }
-                                        </div>
-                                        <span class="ram-step-state ram-step-state--@step.State.ToLowerInvariant()">
-                                            @step.StateLabel
-                                        </span>
-                                    </li>
-                                }
-                            </ol>
-                        }
-                        else
-                        {
-                            <div class="ram-inner-empty">
-                                <i class="bi bi-archive"></i>
-                                <p>@_activeInnerTab content is restored from the run's sealed snapshot.</p>
-                            </div>
-                        }
-
-                        <footer class="ram-detail-foot">
-                            <span class="ram-detail-foot-note">@r.FooterNote</span>
-                            <div class="ram-detail-foot-actions">
-                                <button type="button" class="ram-btn ram-btn-ghost" @onclick="() => OpenSavedCockpit(r.RunId)">
-                                    Open saved cockpit
-                                </button>
-                                <button type="button" class="ram-btn ram-btn-outline" @onclick="() => RerunWithCurrentInputs(r.RunId)">
-                                    Rerun with current inputs
-                                </button>
-                            </div>
-                        </footer>
-                    }
-                    else
-                    {
-                        <div class="ram-inner-empty">
-                            <i class="bi bi-clock-history"></i>
-                            <p>Select a run from the ledger to inspect its execution.</p>
-                        </div>
-                    }
-                </section>
+            <div class="ram-loading"><span class="spinner-border"></span> Loading run ledger…</div>
+        }
+        else if (_page is null)
+        {
+            <div class="ram-placeholder">
+                <i class="bi bi-folder2-open"></i>
+                <h2>No matter selected</h2>
+                <p>Open a matter to view its run and assessment history.</p>
+                <a class="ram-btn ram-btn-primary" href="/legal/matters"><i class="bi bi-folder2-open"></i> Open a matter</a>
             </div>
         }
         else
         {
-            <div class="ram-placeholder">
-                <i class="bi bi-layers"></i>
-                <h2>@_activeSubTab</h2>
-                <p>This view reads retained snapshots for the selected matter. Historical content is reproduced from sealed records &mdash; not recomputed from current data.</p>
-            </div>
+            @* ── Current assessment banner ── *@
+            @if (_page.CurrentAssessment is { } current)
+            {
+                <section class="ram-current" aria-label="Current assessment">
+                    <div class="ram-current-main">
+                        <span class="ram-current-label">Current assessment</span>
+                        <div class="ram-current-id">@current.AssessmentLabel &middot; Run @current.RunLabel</div>
+                        <div class="ram-current-meta">
+                            Evaluated @current.PublishedUtc.ToLocalTime().ToString("MMM d, h:mm tt")@(string.IsNullOrWhiteSpace(current.ReviewStateText) ? null : $" · {current.ReviewStateText}")
+                        </div>
+                    </div>
+                    <div class="ram-current-side">
+                        @if (!string.IsNullOrWhiteSpace(current.FreshnessNote))
+                        {
+                            <span class="ram-freshness">@current.FreshnessNote</span>
+                        }
+                        <button type="button" class="ram-btn ram-btn-ghost" @onclick="() => ViewRun(current.AnalysisRunId)">
+                            View run
+                        </button>
+                    </div>
+                </section>
+            }
+
+            @* ── Primary sub-tabs ── *@
+            <nav class="ram-subtabs" role="tablist" aria-label="Run and assessment views">
+                @foreach (var tab in _subTabs)
+                {
+                    <button type="button"
+                            role="tab"
+                            class="ram-subtab @(tab == _activeSubTab ? "ram-subtab--active" : null)"
+                            aria-selected="@(tab == _activeSubTab)"
+                            @onclick="() => _activeSubTab = tab">
+                        @tab
+                    </button>
+                }
+            </nav>
+
+            @if (_activeSubTab == "Run ledger")
+            {
+                <div class="ram-grid">
+
+                    @* ── Left: run ledger ── *@
+                    <aside class="ram-ledger" aria-label="Run ledger">
+                        <div class="ram-ledger-head">
+                            <h2>Run ledger</h2>
+                            <span class="ram-count">@_page.Runs.Count runs</span>
+                        </div>
+
+                        <div class="ram-filter">
+                            <label for="ram-exec-status">Execution status</label>
+                            <select id="ram-exec-status" class="ram-select" @bind="_statusFilter">
+                                <option value="All">All executions</option>
+                                <option value="Succeeded">Succeeded</option>
+                                <option value="Failed">Failed</option>
+                                <option value="Cancelled">Cancelled</option>
+                            </select>
+                        </div>
+
+                        @if (FilteredRuns.Count == 0)
+                        {
+                            <div class="ram-ledger-empty">
+                                <i class="bi bi-clock-history"></i>
+                                <p>No runs recorded for this matter yet.</p>
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="ram-run-list">
+                                @foreach (var run in FilteredRuns)
+                                {
+                                    <button type="button"
+                                            class="ram-run-card @(run.AnalysisRunId == _selectedRunId ? "ram-run-card--active" : null)"
+                                            @onclick="() => _selectedRunId = run.AnalysisRunId">
+                                        <div class="ram-run-card-top">
+                                            <span class="ram-run-id">@run.RunLabel</span>
+                                            <span class="ram-status ram-status--@run.ExecutionStatusCode.ToLowerInvariant()">@run.ExecutionStatusCode</span>
+                                        </div>
+                                        <div class="ram-run-title">@run.Title</div>
+                                        <div class="ram-run-sub">
+                                            @run.RequestedUtc.ToLocalTime().ToString("h:mm tt")@(string.IsNullOrWhiteSpace(run.PackLabel) ? null : $" · {run.PackLabel}") &middot; @PublishStateText(run)
+                                        </div>
+                                    </button>
+                                }
+                            </div>
+                        }
+
+                        <p class="ram-ledger-foot">Execution and publication are separate.</p>
+                    </aside>
+
+                    @* ── Right: run detail ── *@
+                    <section class="ram-detail" aria-label="Run detail">
+                        @if (SelectedRun is { } r)
+                        {
+                            <div class="ram-detail-head">
+                                <div>
+                                    <span class="ram-detail-eyebrow">@r.RunLabel &middot; Matter analysis</span>
+                                    <h2>@r.Title</h2>
+                                </div>
+                                <span class="ram-duration">@DurationText(r)</span>
+                            </div>
+
+                            <div class="ram-chips">
+                                <span class="ram-chip ram-chip--@r.ExecutionStatusCode.ToLowerInvariant()">@r.ExecutionStatusCode</span>
+                                <span class="ram-chip">@PublishStateText(r)</span>
+                                @if (!string.IsNullOrWhiteSpace(r.PackLabel))
+                                {
+                                    <span class="ram-chip ram-chip--pack">@r.PackLabel</span>
+                                }
+                            </div>
+
+                            <div class="ram-detail-meta">
+                                <div>
+                                    <span class="ram-meta-label">Trigger</span>
+                                    <span class="ram-meta-value">@(r.TriggerText ?? r.TriggerTypeCode ?? "—")</span>
+                                </div>
+                                <div>
+                                    <span class="ram-meta-label">Requested</span>
+                                    <span class="ram-meta-value">@r.RequestedUtc.ToLocalTime().ToString("MMM d · h:mm tt")</span>
+                                </div>
+                                <div>
+                                    <span class="ram-meta-label">Input snapshot</span>
+                                    <span class="ram-meta-value">@(r.InputSnapshotLabel ?? "—")</span>
+                                </div>
+                            </div>
+
+                            <nav class="ram-inner-tabs" role="tablist" aria-label="Run detail sections">
+                                @foreach (var inner in _innerTabs)
+                                {
+                                    <button type="button"
+                                            role="tab"
+                                            class="ram-inner-tab @(inner == _activeInnerTab ? "ram-inner-tab--active" : null)"
+                                            aria-selected="@(inner == _activeInnerTab)"
+                                            @onclick="() => _activeInnerTab = inner">
+                                        @inner
+                                    </button>
+                                }
+                            </nav>
+
+                            @if (_activeInnerTab == "Execution")
+                            {
+                                @if (!string.IsNullOrWhiteSpace(r.ExecutionBanner))
+                                {
+                                    <div class="ram-banner">@r.ExecutionBanner</div>
+                                }
+
+                                @if (r.Steps.Count == 0)
+                                {
+                                    <div class="ram-inner-empty">
+                                        <i class="bi bi-list-check"></i>
+                                        <p>No execution steps were recorded for this run.</p>
+                                    </div>
+                                }
+                                else
+                                {
+                                    <ol class="ram-steps">
+                                        @foreach (var step in r.Steps)
+                                        {
+                                            <li class="ram-step">
+                                                <span class="ram-step-marker ram-step-marker--@step.StatusCode.ToLowerInvariant()">
+                                                    @switch (step.StatusCode)
+                                                    {
+                                                        case "Completed":
+                                                            <i class="bi bi-check"></i>
+                                                            break;
+                                                        case "Failed":
+                                                            <i class="bi bi-exclamation"></i>
+                                                            break;
+                                                        default:
+                                                            @step.Sequence
+                                                            break;
+                                                    }
+                                                </span>
+                                                <div class="ram-step-body">
+                                                    <div class="ram-step-name">@step.DisplayName</div>
+                                                    <div class="ram-step-desc">@step.Description</div>
+                                                    @if (step.Attempts.Count > 0)
+                                                    {
+                                                        <div class="ram-step-attempts">
+                                                            @foreach (var attempt in step.Attempts)
+                                                            {
+                                                                <span class="ram-attempt">@attempt.DisplayText</span>
+                                                            }
+                                                        </div>
+                                                    }
+                                                </div>
+                                                <span class="ram-step-state ram-step-state--@step.StatusCode.ToLowerInvariant()">
+                                                    @(step.StatusLabel ?? step.StatusCode)
+                                                </span>
+                                            </li>
+                                        }
+                                    </ol>
+                                }
+                            }
+                            else if (_activeInnerTab == "Input snapshot")
+                            {
+                                @if (r.InputSnapshot is null)
+                                {
+                                    <div class="ram-inner-empty">
+                                        <i class="bi bi-archive"></i>
+                                        <p>No input snapshot was recorded for this run.</p>
+                                    </div>
+                                }
+                                else
+                                {
+                                    <div class="ram-snapshot">
+                                        <div class="ram-snapshot-head">
+                                            <span class="ram-snapshot-label">@r.InputSnapshot.SnapshotLabel</span>
+                                            <span class="ram-snapshot-captured">Sealed @r.InputSnapshot.CapturedUtc.ToString("yyyy-MM-dd HH:mm 'UTC'")</span>
+                                        </div>
+                                        <dl class="ram-snapshot-grid">
+                                            <dt>Query</dt>
+                                            <dd>@(string.IsNullOrWhiteSpace(r.InputSnapshot.Query) ? "—" : r.InputSnapshot.Query)</dd>
+                                            <dt>Context</dt>
+                                            <dd>@(r.InputSnapshot.ContextCode ?? "—")</dd>
+                                            <dt>Mode</dt>
+                                            <dd>@(r.InputSnapshot.ModeCode ?? "—")</dd>
+                                            <dt>Model</dt>
+                                            <dd>@(r.InputSnapshot.ModelCode ?? "Auto")</dd>
+                                            <dt>Domain Pack</dt>
+                                            <dd>@(r.InputSnapshot.DomainPackCode ?? "Original")</dd>
+                                            <dt>Discovery mode</dt>
+                                            <dd>@(r.InputSnapshot.DiscoveryModeCode ?? "—")</dd>
+                                            <dt>Jurisdiction</dt>
+                                            <dd>@(r.InputSnapshot.Jurisdiction ?? "—")</dd>
+                                            <dt>Governing law</dt>
+                                            <dd>@(r.InputSnapshot.GoverningLaw ?? "—")</dd>
+                                            <dt>Court / forum</dt>
+                                            <dd>@(r.InputSnapshot.CourtOrForum ?? "—")</dd>
+                                            <dt>Posture</dt>
+                                            <dd>@(r.InputSnapshot.Posture ?? "—")</dd>
+                                            <dt>Motion target</dt>
+                                            <dd>@(r.InputSnapshot.MotionTarget ?? "—")</dd>
+                                            @if (!string.IsNullOrWhiteSpace(r.InputSnapshot.CounterfactualAssumption))
+                                            {
+                                                <dt>Counterfactual</dt>
+                                                <dd>@r.InputSnapshot.CounterfactualAssumption</dd>
+                                            }
+                                            @if (!string.IsNullOrWhiteSpace(r.InputSnapshot.ClarificationAnswer))
+                                            {
+                                                <dt>Clarification answer</dt>
+                                                <dd>@r.InputSnapshot.ClarificationAnswer</dd>
+                                            }
+                                            <dt>POLOXI engine</dt>
+                                            <dd>@(r.InputSnapshot.UsedDependencyGraph == true ? "Enabled" : "Disabled")</dd>
+                                        </dl>
+                                        <p class="ram-snapshot-note">Reproduced verbatim from the sealed input snapshot &mdash; not recomputed from current matter configuration.</p>
+                                    </div>
+                                }
+                            }
+                            else
+                            {
+                                <div class="ram-inner-empty">
+                                    <i class="bi bi-archive"></i>
+                                    <p>@_activeInnerTab content is restored from the run's sealed snapshot.</p>
+                                </div>
+                            }
+
+                            <footer class="ram-detail-foot">
+                                <span class="ram-detail-foot-note">@(r.FooterNote ?? "Execution and publication are separate.")</span>
+                                <div class="ram-detail-foot-actions">
+                                    <button type="button" class="ram-btn ram-btn-primary" @onclick="() => ViewDecision2Results(r.AnalysisRunId)">
+                                        <i class="bi bi-window-stack"></i> View Original Complete Run
+                                    </button>
+                                    <button type="button" class="ram-btn ram-btn-ghost" @onclick="() => OpenSavedCockpit(r.AnalysisRunId)">
+                                        Open saved cockpit
+                                    </button>
+                                    <button type="button" class="ram-btn ram-btn-outline" @onclick="() => RerunWithCurrentInputs(r.AnalysisRunId)">
+                                        Rerun with current inputs
+                                    </button>
+                                    <button type="button" class="ram-btn ram-btn-danger" @onclick="() => RequestDeleteRun(r)">
+                                        <i class="bi bi-trash"></i> Delete history
+                                    </button>
+                                </div>
+                            </footer>
+                        }
+                        else
+                        {
+                            <div class="ram-inner-empty">
+                                <i class="bi bi-clock-history"></i>
+                                <p>Select a run from the ledger to inspect its execution.</p>
+                            </div>
+                        }
+                    </section>
+                </div>
+            }
+            else if (_activeSubTab == "Saved cockpit")
+            {
+                <section class="ram-tabview" aria-label="Saved cockpit">
+                    <div class="ram-tabview-head">
+                        <div>
+                            <h2><i class="bi bi-window-stack"></i> Saved cockpit</h2>
+                            <p>Reopen the retained presentation snapshot for a published run exactly as it was evaluated &mdash; reproduced from sealed records, not recomputed from current data.</p>
+                        </div>
+                    </div>
+                    @if (_page.CurrentAssessment is { } savedCurrent)
+                    {
+                        <div class="ram-tabview-card">
+                            <div class="ram-tabview-card-main">
+                                <span class="ram-current-label">Current assessment</span>
+                                <div class="ram-current-id">@savedCurrent.AssessmentLabel &middot; Run @savedCurrent.RunLabel</div>
+                                <div class="ram-current-meta">Evaluated @savedCurrent.PublishedUtc.ToLocalTime().ToString("MMM d, h:mm tt")</div>
+                            </div>
+                            <button type="button" class="ram-btn ram-btn-primary" @onclick="() => OpenSavedCockpit(savedCurrent.AnalysisRunId)">
+                                <i class="bi bi-box-arrow-up-right"></i> Open saved cockpit
+                            </button>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="ram-inner-empty">
+                            <i class="bi bi-window-stack"></i>
+                            <p>No assessment has been published for this matter yet. Publish a run from the ledger to retain a cockpit snapshot.</p>
+                        </div>
+                    }
+                    @if (_page.Runs.Count > 0)
+                    {
+                        <h3 class="ram-tabview-subhead">Published runs</h3>
+                        <div class="ram-tabview-list">
+                            @foreach (var run in _page.Runs.Where(r => r.PublicationStatusCode is "Published" or "Historical" or "Stale"))
+                            {
+                                <div class="ram-tabview-row">
+                                    <div>
+                                        <span class="ram-run-id">@run.RunLabel</span>
+                                        <span class="ram-run-title">@run.Title</span>
+                                    </div>
+                                    <div class="ram-tabview-row-actions">
+                                        <span class="ram-chip">@PublishStateText(run)</span>
+                                        <button type="button" class="ram-btn ram-btn-ghost" @onclick="() => OpenSavedCockpit(run.AnalysisRunId)">Open</button>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    }
+                </section>
+            }
+            else if (_activeSubTab == "Change impact")
+            {
+                <section class="ram-tabview" aria-label="Change impact">
+                    <div class="ram-tabview-head">
+                        <div>
+                            <h2><i class="bi bi-shield-check"></i> Change impact</h2>
+                            <p>When new evidence arrives, the historical decision is preserved while reliance today is tracked separately. Review whether a published conclusion is still supported by the matter's current evidence.</p>
+                        </div>
+                        <a class="ram-btn ram-btn-primary" href="@($"/legal/decision/change-review/{_page.MatterId}")">
+                            <i class="bi bi-box-arrow-up-right"></i> Open change review
+                        </a>
+                    </div>
+                    @if (_page.CurrentAssessment is { FreshnessNote: { Length: > 0 } note } ciCurrent)
+                    {
+                        <div class="ram-tabview-card">
+                            <div class="ram-tabview-card-main">
+                                <span class="ram-current-label">@ciCurrent.AssessmentLabel &middot; Run @ciCurrent.RunLabel</span>
+                                <div class="ram-current-meta">@note</div>
+                            </div>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="ram-inner-empty">
+                            <i class="bi bi-shield-check"></i>
+                            <p>No change activity detected against the current assessment. Open change review for the full reliance timeline.</p>
+                        </div>
+                    }
+                </section>
+            }
+            else if (_activeSubTab == "Assessment comparison")
+            {
+                <section class="ram-tabview" aria-label="Assessment comparison">
+                    <div class="ram-tabview-head">
+                        <div>
+                            <h2><i class="bi bi-layout-split"></i> Assessment comparison</h2>
+                            <p>Compare runs side by side to see how inputs, execution, and outcomes diverged across executions of this matter.</p>
+                        </div>
+                    </div>
+                    @if (_page.Runs.Count < 2)
+                    {
+                        <div class="ram-inner-empty">
+                            <i class="bi bi-layout-split"></i>
+                            <p>At least two runs are required to compare. This matter has @_page.Runs.Count run@(_page.Runs.Count == 1 ? null : "s") recorded.</p>
+                        </div>
+                    }
+                    else
+                    {
+                        <table class="ram-compare-table">
+                            <thead>
+                                <tr>
+                                    <th>Run</th>
+                                    <th>Status</th>
+                                    <th>Publication</th>
+                                    <th>Input snapshot</th>
+                                    <th>Requested</th>
+                                    <th>Duration</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var run in _page.Runs)
+                                {
+                                    <tr>
+                                        <td><span class="ram-run-id">@run.RunLabel</span> @run.Title</td>
+                                        <td><span class="ram-chip ram-chip--@run.ExecutionStatusCode.ToLowerInvariant()">@run.ExecutionStatusCode</span></td>
+                                        <td>@PublishStateText(run)</td>
+                                        <td>@(run.InputSnapshotLabel ?? "—")</td>
+                                        <td>@run.RequestedUtc.ToLocalTime().ToString("MMM d · h:mm tt")</td>
+                                        <td>@DurationText(run)</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    }
+                </section>
+            }
+            else if (_activeSubTab == "Contract drafting")
+            {
+                <DecisionContractWorkspace MatterId="_page.MatterId" />
+            }
+            else
+            {
+                <div class="ram-placeholder">
+                    <i class="bi bi-layers"></i>
+                    <h2>@_activeSubTab</h2>
+                    <p>This view reads retained snapshots for the selected matter. Historical content is reproduced from sealed records &mdash; not recomputed from current data.</p>
+                </div>
+            }
         }
     </div>
+
+    @if (_pendingDeleteRun is { } del)
+    {
+        <div class="ram-modal-backdrop" @onclick="CancelDeleteRun">
+            <div class="ram-confirm-dialog" @onclick:stopPropagation="true">
+                <div class="ram-confirm-icon ram-confirm-icon--danger">
+                    <i class="bi bi-exclamation-triangle"></i>
+                </div>
+                <h3 class="ram-confirm-title">Delete analysis history?</h3>
+                <p class="ram-confirm-text">
+                    This permanently removes the run <strong>@del.RunLabel</strong>@(string.IsNullOrWhiteSpace(del.Title) ? null : $" — {del.Title}") and its saved analysis from this matter's history. This action cannot be undone.
+                </p>
+                @if (!string.IsNullOrWhiteSpace(_deleteError))
+                {
+                    <div class="alert alert-danger ram-alert" role="alert" style="border-left: 4px solid #dc3545;">
+                        <i class="bi bi-exclamation-triangle"></i> @_deleteError
+                    </div>
+                }
+                <div class="ram-confirm-footer">
+                    <button type="button" class="ram-btn ram-btn-ghost" @onclick="CancelDeleteRun" disabled="@_deleting">Cancel</button>
+                    <button type="button" class="ram-btn ram-btn-danger" @onclick="ConfirmDeleteRun" disabled="@_deleting">
+                        @if (_deleting)
+                        {
+                            <span class="spinner-border spinner-border-sm"></span>
+                        }
+                        else
+                        {
+                            <i class="bi bi-trash"></i>
+                        }
+                        Delete
+                    </button>
+                </div>
+            </div>
+        </div>
+    }
 </LegalWorkspace>
 
 @code {
-    private readonly MatterContext _matter = new("DOE v. ACME", "PI-2026-0142", "LITIGATION");
+    [SupplyParameterFromQuery(Name = "matterId")]
+    public Guid? MatterId { get; set; }
 
-    private readonly CurrentAssessment _current = new(
-        AssessmentId: "A-104",
-        RunId: "R-104",
-        EvaluatedOn: "Oct 10, 2:05 PM",
-        ReviewState: "Attorney reviewed",
-        FreshnessNote: "New evidence awaiting evaluation");
+    private bool _loading = true;
+    private string? _loadError;
+    private RunAssessmentPageDto? _page;
 
     private readonly string[] _subTabs =
     {
@@ -260,99 +545,162 @@
     private string _activeInnerTab = "Execution";
 
     private string _statusFilter = "All";
-    private string _selectedRunId = "R-105";
+    private Guid? _selectedRunId;
 
-    private readonly List<RunLedgerItem> _runs = new()
+    private AnalysisRunDto? _pendingDeleteRun;
+    private bool _deleting;
+    private string? _deleteError;
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
     {
-        new RunLedgerItem(
-            RunId: "R-105",
-            Title: "Evidence update analysis",
-            Time: "2:18 PM",
-            Pack: "Domain Pack",
-            PublishState: "Not published",
-            Status: "Failed",
-            Duration: "42 sec",
-            Trigger: "New witness statement",
-            Requested: "Oct 10 · 2:18 PM",
-            InputSnapshot: "S-105",
-            ExecutionBanner: "Verification failed after two attempts. The current assessment was preserved.",
-            FooterNote: "Failed run retained. Published assessment unchanged.",
-            Steps: new List<RunStep>
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var matterId = MatterId;
+            if (matterId is null)
             {
-                new("1", "Information intake", "Source versions registered and anchored.", "Completed", "Completed", new()),
-                new("2", "Decision discovery", "Candidate outcomes and shared hierarchy proposed.", "Completed", "Completed", new()),
-                new("3", "Evidence verification", "Source processing service unavailable.", "Failed", "Failed",
-                    new() { "Attempt 1: Timeout", "Attempt 2: Service unavailable" }),
-                new("4", "LPI integration", "Not executed.", "Pending", "Not started", new()),
-                new("5", "POLOXI evaluation", "Not executed.", "Pending", "Not started", new()),
-            }),
-        new RunLedgerItem("R-104", "Attorney-reviewed assessment", "2:05 PM", "Domain Pack", "Published", "Succeeded",
-            "1 min 12 sec", "Evidence review", "Oct 10 · 2:05 PM", "S-104",
-            "", "Published assessment. This run is the current baseline.",
-            new List<RunStep>
+                // Default to the most recently touched matter when none is supplied.
+                var matters = await Api.GetLegalDecisionMattersAsync();
+                matterId = matters
+                    .OrderByDescending(m => m.ModifiedDateUtc ?? m.CreatedDateUtc)
+                    .Select(m => (Guid?)m.DecisionMatterId)
+                    .FirstOrDefault();
+            }
+
+            if (matterId is null)
             {
-                new("1", "Information intake", "Source versions registered and anchored.", "Completed", "Completed", new()),
-                new("2", "Decision discovery", "Candidate outcomes and shared hierarchy proposed.", "Completed", "Completed", new()),
-                new("3", "Evidence verification", "Sources verified and anchored.", "Completed", "Completed", new()),
-                new("4", "LPI integration", "Accepted propositions integrated with lineage.", "Completed", "Completed", new()),
-                new("5", "POLOXI evaluation", "Candidate competition evaluated and published.", "Completed", "Completed", new()),
-            }),
-        new RunLedgerItem("R-103", "Earlier evidence review", "1:42 PM", "Domain Pack", "Stale", "Succeeded",
-            "58 sec", "Document upload", "Oct 10 · 1:42 PM", "S-103",
-            "", "Superseded by a newer published assessment.",
-            new List<RunStep>
-            {
-                new("1", "Information intake", "Source versions registered and anchored.", "Completed", "Completed", new()),
-                new("2", "Decision discovery", "Candidate outcomes and shared hierarchy proposed.", "Completed", "Completed", new()),
-                new("3", "Evidence verification", "Sources verified and anchored.", "Completed", "Completed", new()),
-                new("4", "LPI integration", "Accepted propositions integrated with lineage.", "Completed", "Completed", new()),
-                new("5", "POLOXI evaluation", "Candidate competition evaluated.", "Completed", "Completed", new()),
-            }),
-        new RunLedgerItem("R-102", "Cancelled discovery", "1:20 PM", "Original", "Not published", "Cancelled",
-            "19 sec", "Manual request", "Oct 10 · 1:20 PM", "S-102",
-            "Run cancelled by user before evaluation completed.", "Cancelled run retained for audit.",
-            new List<RunStep>
-            {
-                new("1", "Information intake", "Source versions registered and anchored.", "Completed", "Completed", new()),
-                new("2", "Decision discovery", "Cancelled before completion.", "Pending", "Cancelled", new()),
-                new("3", "Evidence verification", "Not executed.", "Pending", "Not started", new()),
-                new("4", "LPI integration", "Not executed.", "Pending", "Not started", new()),
-                new("5", "POLOXI evaluation", "Not executed.", "Pending", "Not started", new()),
-            }),
-        new RunLedgerItem("R-101", "Initial matter analysis", "12:55 PM", "Original", "Historical", "Succeeded",
-            "1 min 04 sec", "Matter created", "Oct 10 · 12:55 PM", "S-101",
-            "", "First analysis of this matter. Retained as legacy history.",
-            new List<RunStep>
-            {
-                new("1", "Information intake", "Source versions registered and anchored.", "Completed", "Completed", new()),
-                new("2", "Decision discovery", "Candidate outcomes and shared hierarchy proposed.", "Completed", "Completed", new()),
-                new("3", "Evidence verification", "Sources verified and anchored.", "Completed", "Completed", new()),
-                new("4", "LPI integration", "Accepted propositions integrated with lineage.", "Completed", "Completed", new()),
-                new("5", "POLOXI evaluation", "Candidate competition evaluated and published.", "Completed", "Completed", new()),
-            }),
+                _page = null;
+                return;
+            }
+
+            _page = await Api.GetLegalRunAssessmentPageAsync(matterId.Value);
+
+            if (_page is not null && _selectedRunId is null)
+                _selectedRunId = _page.CurrentAssessment?.AnalysisRunId ?? _page.Runs.FirstOrDefault()?.AnalysisRunId;
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Unable to load run history: {ex.Message}";
+            _page = null;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private IReadOnlyList<AnalysisRunDto> FilteredRuns =>
+        _page is null
+            ? []
+            : (_statusFilter == "All"
+                ? _page.Runs
+                : _page.Runs.Where(r => string.Equals(r.ExecutionStatusCode, _statusFilter, StringComparison.OrdinalIgnoreCase)).ToList());
+
+    private AnalysisRunDto? SelectedRun =>
+        _page?.Runs.FirstOrDefault(r => r.AnalysisRunId == _selectedRunId);
+
+    private static string PublishStateText(AnalysisRunDto run) => run.PublicationStatusCode switch
+    {
+        "Published" => "Published",
+        "Stale" => "Stale",
+        "Historical" => "Historical",
+        "NotPublished" => "Not published",
+        _ => run.PublicationStatusCode
     };
 
-    private IEnumerable<RunLedgerItem> FilteredRuns =>
-        _statusFilter == "All" ? _runs : _runs.Where(r => r.Status == _statusFilter);
+    private static string DurationText(AnalysisRunDto run)
+    {
+        if (run.DurationSeconds is not int seconds)
+            return "—";
+        if (seconds < 60)
+            return $"{seconds} sec";
+        var span = TimeSpan.FromSeconds(seconds);
+        return span.Seconds == 0 ? $"{span.Minutes} min" : $"{span.Minutes} min {span.Seconds:00} sec";
+    }
 
-    private RunLedgerItem? SelectedRun =>
-        _runs.FirstOrDefault(r => r.RunId == _selectedRunId);
+    // Select a run in the ledger and make sure the Run ledger view is active so it is visible.
+    private void ViewRun(Guid runId)
+    {
+        _activeSubTab = "Run ledger";
+        _selectedRunId = runId;
+    }
 
-    private void StartNewAnalysis() { /* Phase 1: wires to run coordinator when backend is available. */ }
-    private void ViewRun(string runId) => _selectedRunId = runId;
-    private void OpenSavedCockpit(string runId) { /* Opens retained presentation snapshot. */ }
-    private void RerunWithCurrentInputs(string runId) { /* Creates a linked run with a fresh input snapshot. */ }
+    // Open the matter's decision cockpit to configure inputs and launch a fresh analysis.
+    private void StartNewAnalysis()
+    {
+        if (_page is null)
+            return;
+        Navigation.NavigateTo($"/legal/personalinjury_decision2?matterId={_page.MatterId}");
+    }
 
-    private sealed record MatterContext(string Caption, string Reference, string Stage);
+    // Open the decision cockpit for the selected run's retained snapshot.
+    private void OpenSavedCockpit(Guid runId)
+    {
+        if (_page is null)
+            return;
+        Navigation.NavigateTo($"/legal/personalinjury_decision2?matterId={_page.MatterId}&runId={runId}");
+    }
 
-    private sealed record CurrentAssessment(
-        string AssessmentId, string RunId, string EvaluatedOn, string ReviewState, string FreshnessNote);
+    // Open the full Decision2 Display in read-only saved-run mode, rehydrated from the captured Wide result.
+    private void ViewDecision2Results(Guid runId)
+    {
+        if (_page is null)
+            return;
+        Navigation.NavigateTo($"/legal/personalinjury_decision2?matterId={_page.MatterId}&runId={runId}&readonly=1");
+    }
 
-    private sealed record RunLedgerItem(
-        string RunId, string Title, string Time, string Pack, string PublishState, string Status,
-        string Duration, string Trigger, string Requested, string InputSnapshot,
-        string ExecutionBanner, string FooterNote, List<RunStep> Steps);
+    // Re-run the analysis using the current matter inputs, seeded from the selected run.
+    private void RerunWithCurrentInputs(Guid runId)
+    {
+        if (_page is null)
+            return;
+        Navigation.NavigateTo($"/legal/personalinjury_decision2?matterId={_page.MatterId}&rerunFrom={runId}");
+    }
 
-    private sealed record RunStep(
-        string Order, string Name, string Description, string State, string StateLabel, List<string> Attempts);
+    // Open the delete-history confirmation for the selected run.
+    private void RequestDeleteRun(AnalysisRunDto run)
+    {
+        _deleteError = null;
+        _pendingDeleteRun = run;
+    }
+
+    // Dismiss the delete-history confirmation without deleting.
+    private void CancelDeleteRun()
+    {
+        if (_deleting)
+            return;
+        _pendingDeleteRun = null;
+        _deleteError = null;
+    }
+
+    // Soft-delete the confirmed run and its history, then refresh the ledger.
+    private async Task ConfirmDeleteRun()
+    {
+        if (_pendingDeleteRun is not { } run || _deleting)
+            return;
+
+        _deleting = true;
+        _deleteError = null;
+        try
+        {
+            await Api.DeleteLegalRunAsync(run.AnalysisRunId);
+
+            if (_selectedRunId == run.AnalysisRunId)
+                _selectedRunId = null;
+
+            _pendingDeleteRun = null;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _deleteError = $"Delete failed: {ex.Message}";
+        }
+        finally
+        {
+            _deleting = false;
+        }
+    }
 }

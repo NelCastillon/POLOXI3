@@ -1,0 +1,312 @@
+@page "/legal/citator"
+@using Legal.Application.Features.Intelligence.Citator
+@inject Legal.Web.Services.ApiClient Api
+@rendermode RenderMode.InteractiveServer
+
+<PageTitle>Citator — Authority Treatments</PageTitle>
+
+<LegalWorkspace ExtraClass="intel-compact">
+    <div class="cit-root">
+
+        @if (_loadError is not null)
+        {
+            <div class="alert alert-danger cit-alert" role="alert">
+                <i class="bi bi-exclamation-triangle"></i> @_loadError
+            </div>
+        }
+
+        <header class="cit-header">
+            <div class="cit-header-text">
+                <h1>Citator</h1>
+                <p>Record how later authorities have treated a cited authority, and keep good-law validity current.</p>
+            </div>
+        </header>
+
+        @* ── Authority lookup ── *@
+        <section class="cit-panel">
+            <label class="cit-label" for="cit-authority">Cited authority</label>
+            <div class="cit-lookup-row">
+                <input id="cit-authority" class="cit-input" @bind="_authority" @bind:event="oninput"
+                       placeholder="e.g. Palsgraf v. Long Island R.R. Co." />
+                <button type="button" class="cit-btn cit-btn-primary" @onclick="LoadTreatmentsAsync"
+                        disabled="@(string.IsNullOrWhiteSpace(_authority) || _loading)">
+                    <i class="bi bi-search"></i> Load treatments
+                </button>
+                <button type="button" class="cit-btn" @onclick="BeginCreate"
+                        disabled="@string.IsNullOrWhiteSpace(_authority)">
+                    <i class="bi bi-plus-lg"></i> Record treatment
+                </button>
+            </div>
+        </section>
+
+        @if (_loading)
+        {
+            <div class="cit-loading"><span class="spinner-border"></span> Loading…</div>
+        }
+        else if (_loadedAuthority is not null)
+        {
+            <section class="cit-panel">
+                <h2 class="cit-subtitle">Treatments for “@_loadedAuthority” (@_treatments.Count)</h2>
+
+                @if (_treatments.Count == 0)
+                {
+                    <p class="cit-empty">No treatments recorded yet. This authority shows as <strong>Unknown</strong> until a treatment is added.</p>
+                }
+                else
+                {
+                    <table class="table table-sm cit-table">
+                        <thead>
+                            <tr>
+                                <th>Treatment</th><th>Citing authority</th><th>Date</th>
+                                <th>Jurisdiction</th><th>Flag</th><th></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var t in _treatments)
+                            {
+                                <tr>
+                                    <td><strong>@t.TreatmentDisplayName</strong></td>
+                                    <td>@t.CitingAuthorityName @(string.IsNullOrWhiteSpace(t.CitingAuthorityRef) ? "" : $"({t.CitingAuthorityRef})")</td>
+                                    <td>@(t.TreatmentDate?.ToString("yyyy-MM-dd") ?? "—")</td>
+                                    <td>@(string.IsNullOrWhiteSpace(t.Jurisdiction) ? "—" : t.Jurisdiction)</td>
+                                    <td>@t.FlagLevelCode</td>
+                                    <td class="cit-row-actions">
+                                        <button type="button" class="cit-btn cit-btn-sm" @onclick="() => BeginEdit(t)"><i class="bi bi-pencil"></i></button>
+                                        <button type="button" class="cit-btn cit-btn-sm cit-btn-danger" @onclick="() => AskDelete(t)"><i class="bi bi-trash"></i></button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+            </section>
+        }
+
+        @* ── Create / edit dialog ── *@
+        @if (_showForm)
+        {
+            <div class="cit-modal-backdrop">
+                <div class="cit-modal">
+                    <div class="cit-modal-header">
+                        <i class="bi bi-journal-check"></i>
+                        <span>@(_form.CitationTreatmentId is null ? "Record treatment" : "Edit treatment")</span>
+                        <button type="button" class="cit-btn cit-btn-ghost cit-btn-sm ms-auto" @onclick="() => _showForm = false"><i class="bi bi-x-lg"></i></button>
+                    </div>
+                    <div class="cit-modal-body">
+                        @if (_formError is not null)
+                        {
+                            <div class="alert alert-danger cit-alert" role="alert"><i class="bi bi-exclamation-triangle"></i> @_formError</div>
+                        }
+                        <div class="cit-form-grid">
+                            <div class="cit-field">
+                                <label>Cited authority</label>
+                                <input class="cit-input" @bind="_form.CitedAuthorityName" />
+                            </div>
+                            <div class="cit-field">
+                                <label>Treatment</label>
+                                <select class="cit-input" @bind="_form.TreatmentCode">
+                                    <option value="">— select —</option>
+                                    @foreach (var c in _codes)
+                                    {
+                                        <option value="@c.TreatmentCode">@c.DisplayName (@c.FlagLevelCode)</option>
+                                    }
+                                </select>
+                            </div>
+                            <div class="cit-field">
+                                <label>Citing authority</label>
+                                <input class="cit-input" @bind="_form.CitingAuthorityName" />
+                            </div>
+                            <div class="cit-field">
+                                <label>Citing authority reference</label>
+                                <input class="cit-input" @bind="_form.CitingAuthorityRef" />
+                            </div>
+                            <div class="cit-field">
+                                <label>Treatment date</label>
+                                <input type="date" class="cit-input" @bind="_form.TreatmentDate" />
+                            </div>
+                            <div class="cit-field">
+                                <label>Jurisdiction</label>
+                                <input class="cit-input" @bind="_form.Jurisdiction" />
+                            </div>
+                            <div class="cit-field cit-field-wide">
+                                <label>Notes</label>
+                                <textarea class="cit-input" rows="3" @bind="_form.Notes"></textarea>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="cit-modal-footer">
+                        <button type="button" class="cit-btn" @onclick="() => _showForm = false">Cancel</button>
+                        <button type="button" class="cit-btn cit-btn-primary" @onclick="SaveAsync" disabled="@_saving">
+                            <i class="bi bi-check-lg"></i> @(_saving ? "Saving…" : "Save")
+                        </button>
+                    </div>
+                </div>
+            </div>
+        }
+
+        @* ── Delete confirm ── *@
+        @if (_pendingDelete is not null)
+        {
+            <div class="cit-modal-backdrop">
+                <div class="cit-confirm-dialog">
+                    <div class="cit-confirm-icon cit-confirm-icon--danger"><i class="bi bi-exclamation-triangle"></i></div>
+                    <p>Remove the <strong>@_pendingDelete.TreatmentDisplayName</strong> treatment by @_pendingDelete.CitingAuthorityName? This is a soft delete and preserves history.</p>
+                    <div class="cit-modal-footer">
+                        <button type="button" class="cit-btn" @onclick="() => _pendingDelete = null">Cancel</button>
+                        <button type="button" class="cit-btn cit-btn-danger" @onclick="ConfirmDeleteAsync">Remove</button>
+                    </div>
+                </div>
+            </div>
+        }
+    </div>
+</LegalWorkspace>
+
+@code {
+    private string _authority = string.Empty;
+    private string? _loadedAuthority;
+    private IReadOnlyList<AuthorityTreatmentDto> _treatments = [];
+    private IReadOnlyList<CitationTreatmentCodeDto> _codes = [];
+
+    private bool _loading;
+    private bool _saving;
+    private string? _loadError;
+    private string? _formError;
+
+    private bool _showForm;
+    private TreatmentForm _form = new();
+    private AuthorityTreatmentDto? _pendingDelete;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _codes = await Api.GetCitatorTreatmentCodesAsync();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load treatment vocabulary: {ex.Message}";
+        }
+    }
+
+    private async Task LoadTreatmentsAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_authority))
+            return;
+
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            _treatments = await Api.ListCitatorTreatmentsAsync(_authority.Trim());
+            _loadedAuthority = _authority.Trim();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load treatments: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void BeginCreate()
+    {
+        _formError = null;
+        _form = new TreatmentForm
+        {
+            CitedAuthorityName = _authority.Trim(),
+            TreatmentDate = DateTime.Today
+        };
+        _showForm = true;
+    }
+
+    private void BeginEdit(AuthorityTreatmentDto t)
+    {
+        _formError = null;
+        _form = new TreatmentForm
+        {
+            CitationTreatmentId = t.CitationTreatmentId,
+            CitedAuthorityName = t.CitedAuthorityName ?? t.CitedAuthorityIdentity,
+            CitingAuthorityName = t.CitingAuthorityName,
+            CitingAuthorityRef = t.CitingAuthorityRef,
+            TreatmentCode = t.TreatmentCode,
+            TreatmentDate = t.TreatmentDate?.ToDateTime(TimeOnly.MinValue),
+            Jurisdiction = t.Jurisdiction,
+            Notes = t.Notes
+        };
+        _showForm = true;
+    }
+
+    private async Task SaveAsync()
+    {
+        _formError = null;
+        if (string.IsNullOrWhiteSpace(_form.TreatmentCode))
+        {
+            _formError = "Select a treatment.";
+            return;
+        }
+
+        var identity = (_loadedAuthority ?? _authority).Trim();
+        _saving = true;
+        try
+        {
+            var request = new SaveCitationTreatmentRequest(
+                _form.CitationTreatmentId,
+                identity,
+                string.IsNullOrWhiteSpace(_form.CitedAuthorityName) ? identity : _form.CitedAuthorityName!.Trim(),
+                _form.CitingAuthorityName,
+                _form.CitingAuthorityRef,
+                _form.TreatmentCode!,
+                _form.TreatmentDate is { } d ? DateOnly.FromDateTime(d) : null,
+                _form.Jurisdiction,
+                "Manual",
+                _form.Notes);
+
+            await Api.SaveCitatorTreatmentAsync(request);
+            _showForm = false;
+            _authority = identity;
+            await LoadTreatmentsAsync();
+        }
+        catch (Exception ex)
+        {
+            _formError = $"Save failed: {ex.Message}";
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void AskDelete(AuthorityTreatmentDto t) => _pendingDelete = t;
+
+    private async Task ConfirmDeleteAsync()
+    {
+        if (_pendingDelete is null)
+            return;
+
+        var target = _pendingDelete;
+        _pendingDelete = null;
+        try
+        {
+            await Api.DeleteCitatorTreatmentAsync(target.CitationTreatmentId);
+            await LoadTreatmentsAsync();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Delete failed: {ex.Message}";
+        }
+    }
+
+    private sealed class TreatmentForm
+    {
+        public Guid? CitationTreatmentId { get; set; }
+        public string? CitedAuthorityName { get; set; }
+        public string? CitingAuthorityName { get; set; }
+        public string? CitingAuthorityRef { get; set; }
+        public string? TreatmentCode { get; set; }
+        public DateTime? TreatmentDate { get; set; }
+        public string? Jurisdiction { get; set; }
+        public string? Notes { get; set; }
+    }
+}

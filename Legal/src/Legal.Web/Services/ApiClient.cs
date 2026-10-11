@@ -89,6 +89,16 @@ public sealed class ApiClient(HttpClient httpClient)
 
     public async Task<bool> GetSearch2ShowPipelineAsync(CancellationToken token=default)=>await TryGetShowPipelineAsync("api/intelligence_wide2/show-pipeline",token);
 
+    // Analysis History read-only rehydration: fetch the complete saved Decision2/Wide result for an analysis
+    // run. Returns null when the run has no captured result (legacy runs or non-Wide runs).
+    public async Task<WideSearchResponse?> GetSavedWideResultAsync(Guid analysisRunId,CancellationToken token=default)
+    {
+        var message=await _httpClient.GetAsync($"api/intelligence_wide2/result/{analysisRunId}",token);
+        if(message.StatusCode==System.Net.HttpStatusCode.NotFound)return null;
+        message.EnsureSuccessStatusCode();
+        return await message.Content.ReadFromJsonAsync<WideSearchResponse>(cancellationToken:token);
+    }
+
     // POLOXI Legal Decision Intelligence (/legal/decision) — self-contained module.
     public async Task<Legal.Application.Features.Intelligence.Decision.DecisionSearchResponse?> LegalDecideAsync(Legal.Application.Features.Intelligence.Decision.DecisionSearchRequest request,CancellationToken token=default)
     {
@@ -113,6 +123,24 @@ public sealed class ApiClient(HttpClient httpClient)
         // POLOXI Legal Decision cockpit — matter dashboard + timeline.
         public async Task<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.DecisionMatterDto>> GetLegalDecisionMattersAsync(CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.DecisionMatterDto>>("api/legal_decision/matters",token)??[];
         public async Task<Legal.Application.Features.Intelligence.Decision.DecisionMatterFacetsDto> GetLegalDecisionMatterFacetsAsync(CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<Legal.Application.Features.Intelligence.Decision.DecisionMatterFacetsDto>("api/legal_decision/matters/facets",token)??new([],[],[]);
+        // Judz Run & Assessment Management — per-matter execution ledger + current assessment pointer.
+        public Task<Legal.Application.Features.Intelligence.RunManagement.RunAssessmentPageDto?> GetLegalRunAssessmentPageAsync(Guid matterId,CancellationToken token=default)=>_httpClient.GetFromJsonAsync<Legal.Application.Features.Intelligence.RunManagement.RunAssessmentPageDto>($"api/legal_runs/matters/{matterId}",token);
+        // Soft-deletes a single run and its dependent history for the matter. Tenant-scoped.
+        public async Task DeleteLegalRunAsync(Guid analysisRunId,CancellationToken token=default){var response=await _httpClient.DeleteAsync($"api/legal_runs/runs/{analysisRunId}",token);response.EnsureSuccessStatusCode();}
+        // Judz Citator — good-law validity flags for cited authorities.
+        public async Task<IReadOnlyList<Legal.Application.Features.Intelligence.Citator.AuthorityValidityDto>> GetCitatorValidityAsync(IReadOnlyList<string> authorityIdentities,CancellationToken token=default)
+        {
+            var response=await _httpClient.PostAsJsonAsync("api/legal_citator/validity",new{AuthorityIdentities=authorityIdentities},token);
+            response.EnsureSuccessStatusCode();
+            return await response.Content.ReadFromJsonAsync<IReadOnlyList<Legal.Application.Features.Intelligence.Citator.AuthorityValidityDto>>(cancellationToken:token)??[];
+        }
+        // Judz Citator — treatment management (DB-backed vocabulary + tenant-scoped writes).
+        public async Task<IReadOnlyList<Legal.Application.Features.Intelligence.Citator.CitationTreatmentCodeDto>> GetCitatorTreatmentCodesAsync(CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyList<Legal.Application.Features.Intelligence.Citator.CitationTreatmentCodeDto>>("api/legal_citator/treatment-codes",token)??[];
+        public async Task<IReadOnlyList<Legal.Application.Features.Intelligence.Citator.AuthorityTreatmentDto>> ListCitatorTreatmentsAsync(string authority,CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyList<Legal.Application.Features.Intelligence.Citator.AuthorityTreatmentDto>>($"api/legal_citator/treatments?authority={Uri.EscapeDataString(authority)}",token)??[];
+        public async Task SaveCitatorTreatmentAsync(Legal.Application.Features.Intelligence.Citator.SaveCitationTreatmentRequest request,CancellationToken token=default)
+        { using var r=await _httpClient.PostAsJsonAsync("api/legal_citator/treatments",request,token); await EnsureSuccessWithDetailAsync(r,token); }
+        public async Task DeleteCitatorTreatmentAsync(Guid citationTreatmentId,CancellationToken token=default)
+        { using var r=await _httpClient.DeleteAsync($"api/legal_citator/treatments/{citationTreatmentId}",token); await EnsureSuccessWithDetailAsync(r,token); }
         public Task<Legal.Application.Features.Intelligence.Decision.DecisionDomainPackDto?> GetLegalDecisionDomainPackAsync(string packCode,CancellationToken token=default)=>_httpClient.GetFromJsonAsync<Legal.Application.Features.Intelligence.Decision.DecisionDomainPackDto>($"api/legal_decision/domainpacks/{packCode}",token);
         public async Task<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.DecisionDomainPackDto>> GetLegalDecisionDomainPacksAsync(CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.DecisionDomainPackDto>>("api/legal_decision/domainpacks",token)??[];
         // Domain Pack CRUD (tenant-scoped writes).
@@ -404,6 +432,14 @@ public sealed class ApiClient(HttpClient httpClient)
             using var response=await _httpClient.DeleteAsync($"api/legal_decision/matters/{matterId}",token);
             await EnsureSuccessWithDetailAsync(response,token);
         }
+        public async Task<int> DeleteLegalDecisionMattersAsync(IReadOnlyCollection<Guid> matterIds,CancellationToken token=default)
+        {
+            using var response=await _httpClient.PostAsJsonAsync("api/legal_decision/matters/bulk-delete",new Legal.Application.Features.Intelligence.Decision.DecisionMatterBulkDeleteRequest(matterIds),token);
+            await EnsureSuccessWithDetailAsync(response,token);
+            var result=await response.Content.ReadFromJsonAsync<BulkDeleteResult>(token);
+            return result?.Deleted??0;
+        }
+        private sealed record BulkDeleteResult(int Deleted);
         // POLOXI Legal Decision — Personal Injury manual matter wizard (profile + child aggregates).
         public async Task<Legal.Application.Features.Intelligence.Decision.PersonalInjuryOptionsDto> GetLegalDecisionPersonalInjuryOptionsAsync(CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<Legal.Application.Features.Intelligence.Decision.PersonalInjuryOptionsDto>("api/legal_decision/personalinjury/options",token)??new();
         public Task<Legal.Application.Features.Intelligence.Decision.PersonalInjuryProfileDto?> GetLegalDecisionPersonalInjuryProfileAsync(Guid matterId,CancellationToken token=default)=>_httpClient.GetFromJsonAsync<Legal.Application.Features.Intelligence.Decision.PersonalInjuryProfileDto>($"api/legal_decision/matters/{matterId}/personalinjury",token);

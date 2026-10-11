@@ -590,6 +590,7 @@ internal static class RollbackFixture
             new TestExecutionEnvironment(),
             new UnusedAiProviderRouter(),
             new EmptyChannelContributionProjectionService(),
+            new NoOpAnalysisRunLedgerWriter(),
             NullLogger<LegalDecisionService>.Instance);
 }
 
@@ -752,4 +753,20 @@ internal sealed class UnusedAiProviderRouter : IAiProviderRouter
 
     public Task<AiEmbeddingResult> CreateEmbeddingAsync(Guid tenantId, string featureCode, IReadOnlyCollection<string> inputs, string correlationId, CancellationToken cancellationToken = default)
         => throw new NotSupportedException("AI provider router must not be called on the research-loop path.");
+}
+
+// Fail-soft ledger writer stub: the rollback/loop tests do not exercise run-ledger persistence.
+internal sealed class NoOpAnalysisRunLedgerWriter : IAnalysisRunLedgerWriter
+{
+    public Task<Guid?> RecordDecisionRunAsync(
+        Legal.Application.Features.Intelligence.Decision.DecisionSearchRequest request,
+        Legal.Application.Features.Intelligence.Decision.DecisionSearchResponse response,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult<Guid?>(null);
+
+    public Task<Guid?> RecordWideRunAsync(
+        Legal.Application.Features.Intelligence.WideSearchRequest request,
+        Legal.Application.Features.Intelligence.WideSearchResponse response,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult<Guid?>(null);
 }

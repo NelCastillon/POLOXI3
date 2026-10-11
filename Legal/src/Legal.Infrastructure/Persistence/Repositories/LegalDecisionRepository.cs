@@ -2813,6 +2813,35 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
         return affected > 0;
     }
 
+    public async Task<int> DeleteMattersAsync(Guid tenantId, Guid userId, IReadOnlyCollection<Guid> decisionMatterIds, bool includeAllTenants, CancellationToken cancellationToken = default)
+    {
+        var ids = (decisionMatterIds ?? [])
+            .Where(id => id != Guid.Empty)
+            .Distinct()
+            .ToArray();
+        if (ids.Length == 0)
+            return 0;
+
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var affected = await connection.ExecuteAsync(new CommandDefinition(
+            $"""
+            UPDATE POLOXI.Legal_DecisionMatter
+            SET IsDeleted = 1,
+                ModifiedDateUtc = SYSUTCDATETIME(),
+                ModifiedByUserId = @UserId
+            WHERE IsDeleted = 0 AND DecisionMatterId IN @DecisionMatterIds
+                  {(includeAllTenants ? string.Empty : "AND TenantId = @TenantId")};
+            """,
+            new
+            {
+                TenantId = tenantId,
+                DecisionMatterIds = ids,
+                UserId = userId == Guid.Empty ? (Guid?)null : userId
+            },
+            cancellationToken: cancellationToken));
+        return affected;
+    }
+
     public async Task<DecisionMatterFacetsDto> GetMatterFacetsAsync(Guid tenantId, CancellationToken cancellationToken = default)
     {
         using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
@@ -2882,6 +2911,14 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
                 SELECT LTRIM(RTRIM(m.GoverningLaw)), 1000000 FROM POLOXI.Legal_DecisionMatter m
                     WHERE m.IsDeleted = 0 AND m.TenantId = @TenantId AND NULLIF(LTRIM(RTRIM(m.GoverningLaw)), N'') IS NOT NULL
             ) t GROUP BY Value ORDER BY MIN(Ord), Value;
+            SELECT Value FROM (
+                SELECT o.Value, o.SortOrder AS Ord FROM POLOXI.Legal_DecisionMatterOption o
+                    WHERE o.IsDeleted = 0 AND o.IsActive = 1 AND o.FieldCode = N'COUNTY'
+                    AND (o.TenantId IS NULL OR o.TenantId = @TenantId)
+                UNION
+                SELECT LTRIM(RTRIM(m.County)), 1000000 FROM POLOXI.Legal_DecisionMatter m
+                    WHERE m.IsDeleted = 0 AND m.TenantId = @TenantId AND NULLIF(LTRIM(RTRIM(m.County)), N'') IS NOT NULL
+            ) t GROUP BY Value ORDER BY MIN(Ord), Value;
             SELECT o.Value FROM POLOXI.Legal_DecisionMatterOption o
                 WHERE o.IsDeleted = 0 AND o.IsActive = 1 AND o.FieldCode = N'PRACTICE_AREA'
                 AND (o.TenantId IS NULL OR o.TenantId = @TenantId)
@@ -2915,6 +2952,7 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
         var states = (await multi.ReadAsync<string>()).ToArray();
         var courtLevels = (await multi.ReadAsync<string>()).ToArray();
         var governingLaws = (await multi.ReadAsync<string>()).ToArray();
+        var counties = (await multi.ReadAsync<string>()).ToArray();
         var practiceAreas = (await multi.ReadAsync<string>()).ToArray();
         var piMatterTypes = (await multi.ReadAsync<string>()).ToArray();
         var piClaimTypes = (await multi.ReadAsync<string>()).ToArray();
@@ -2924,6 +2962,7 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
             CourtSystems = courtSystems,
             States = states,
             CourtLevels = courtLevels,
+            Counties = counties,
             GoverningLaws = governingLaws,
             PracticeAreas = practiceAreas,
             PiMatterTypes = piMatterTypes,

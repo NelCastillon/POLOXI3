@@ -46,9 +46,9 @@
                         MATTERS / @DfiPracticeAreaLabel / DECISION INTELLIGENCE
                         @if (_matter is not null)
                         {
-                            <a class="dfi-crumbs-matter-link" href="@($"/legal/matters/{_matter.DecisionMatterId}")">
+                            <button type="button" class="dfi-crumbs-matter-link" @onclick="() => _showMatterDetails = true">
                                 <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> @_matter.Title
-                            </a>
+                            </button>
                         }
                     </div>
                 </div>
@@ -285,6 +285,9 @@
                                             case "Legal Authority":
                                     <LegalAuthorityTab Owner="this" />
                                     break;
+                                            case "Run History":
+                                    <RunHistoryTab MatterId="EffectiveMatterId" />
+                                    break;
                                             case "Channel Scoring (LPI)":
                                     <ChannelScoringLpiTab Owner="this" />
                                     break;
@@ -332,6 +335,16 @@
                                 case "Document Intelligence":
                                     <DocumentIntelligenceTab Owner="this" />
                                                             break;
+                                case "Media & Machine Evidence":
+                                @if (_matter is not null)
+                                {
+                                    <LegalMediaEvidence Embedded="true" MatterIdParam="_matter.DecisionMatterId" />
+                                }
+                                else
+                                {
+                                    <div class="dfi-panel-card"><p class="dfi-panel-sub">Select a matter to register and process media evidence.</p></div>
+                                }
+                                break;
                                                         case "Audit":
                                                             <div class="dfi-panel-card">
                                                                 <h4>Execution audit</h4>
@@ -383,6 +396,9 @@
                     <strong>@_documents.Count document(s)</strong>
                 </div>
                 <InputFile OnChange="UploadDocumentAsync" disabled="@_uploading" multiple class="form-control form-control-sm ms-auto" style="max-width: 320px" />
+                <button type="button" class="um-btn um-btn-light um-btn-sm" @onclick='() => _dfiTab = "Media & Machine Evidence"' title="Open the Media & Machine Evidence workspace">
+                    <i class="bi bi-camera-reels"></i> Media &amp; Machine Evidence
+                </button>
                 @if (_uploading)
                 {
                     <span class="decision-chip">@(_uploadTotal > 1 ? $"Scanning and extracting {_uploadIndex}/{_uploadTotal}…" : "Scanning and extracting…")</span>
@@ -434,6 +450,22 @@
             }
         }
 
+        @if (IsSavedRunView)
+        {
+            <section class="alert alert-info d-flex align-items-center gap-2" role="status">
+                <i class="bi bi-clock-history"></i>
+                <div>
+                    <strong>Viewing saved run results</strong>
+                    <div>These Decision2 results are reproduced read-only from the saved run snapshot &mdash; not recomputed.</div>
+                </div>
+            </section>
+            @if (_savedRunError is not null)
+            {
+                <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_savedRunError</div>
+            }
+        }
+        else
+        {
         <section class="poloxi-composer" aria-label="Wide enterprise question">
             <div class="poloxi-composer-input">
                 <i class="bi bi-search" aria-hidden="true"></i>
@@ -467,6 +499,7 @@
                 <button class="um-btn um-btn-primary" @onclick="SearchAsync" disabled="@(_loading||string.IsNullOrWhiteSpace(_query))"><i class="bi bi-stars"></i> Disambiguate &amp; Answer</button>
             </div>
         </section>
+        }
 
         @if (_loading)
         {
@@ -1173,7 +1206,7 @@
                     <div class="poloxi-panel-header"><div class="poloxi-panel-title"><span class="poloxi-panel-icon"><i class="bi bi-trophy"></i></span><div><span>Candidate × Branch competition · ranked by surviving interpretations</span><h2>POLOXI Answer ranking</h2></div></div><span class="poloxi-status" title="POLOXI Journey: interpretations explored → evidence-supported → final dimensions → ranked candidates">@_response.Branches.Count → @SurvivingBranches.Count → @ActiveBranchCount → @_response.Candidates.Count</span></div>
                     @foreach (var candidate in _response.Candidates)
                     {
-                        <article class="poloxi-evidence @(candidate.IsConstraintViolation ? "poloxi-branch-unsupported" : null)">
+                        <article class="poloxi-evidence poloxi-evidence-clickable @(candidate.IsConstraintViolation ? "poloxi-branch-unsupported" : null)" @onclick="() => _detailCandidate = candidate" title="Click to view all fields for this candidate.">
                             <span class="poloxi-rank">@candidate.RankNumber</span>
                             <div class="poloxi-evidence-main">
                                 <strong>@candidate.DisplayName</strong>
@@ -1287,6 +1320,267 @@
 
         }
     </div>
+
+    @if (_showMatterDetails && _matter is { } md)
+    {
+        <div class="um-modal-backdrop" @onclick="() => _showMatterDetails = false">
+            <div class="um-modal um-modal--lg" @onclick:stopPropagation="true">
+                <div class="um-modal-header">
+                    <i class="bi bi-briefcase"></i>
+                    <span>Matter — @md.Title</span>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showMatterDetails = false"><i class="bi bi-x-lg"></i></button>
+                </div>
+                <div class="um-modal-body">
+                    <div class="dfi-matter-details">
+                        <section class="dfi-matter-group">
+                            <h3 class="dfi-matter-group-title"><i class="bi bi-info-circle"></i> Identity</h3>
+                            <dl class="dfi-matter-grid">
+                                <dt>Matter ID</dt><dd>@md.DecisionMatterId</dd>
+                                <dt>Title</dt><dd>@md.Title</dd>
+                                <dt>Status</dt><dd>@MatterField(md.StatusCode)</dd>
+                                <dt>Description</dt><dd>@MatterField(md.Description)</dd>
+                            </dl>
+                        </section>
+
+                        <section class="dfi-matter-group">
+                            <h3 class="dfi-matter-group-title"><i class="bi bi-tags"></i> Practice Area &amp; Classification</h3>
+                            <dl class="dfi-matter-grid">
+                                <dt>Practice Area</dt><dd>@MatterField(md.PracticeAreaCode)</dd>
+                                <dt>Claim Type</dt><dd>@MatterField(md.ClaimTypeCode)</dd>
+                                <dt>Domain Pack</dt><dd>@MatterField(md.DomainPackCode)</dd>
+                                <dt>Matter Type</dt><dd>@MatterField(md.MatterTypeCode)</dd>
+                                <dt>Subtype</dt><dd>@MatterField(md.Subtype)</dd>
+                            </dl>
+                        </section>
+
+                        <section class="dfi-matter-group">
+                            <h3 class="dfi-matter-group-title"><i class="bi bi-bank"></i> Jurisdiction</h3>
+                            <dl class="dfi-matter-grid">
+                                <dt>Jurisdiction</dt><dd>@MatterField(md.Jurisdiction)</dd>
+                                <dt>Court System</dt><dd>@MatterField(md.CourtSystem)</dd>
+                                <dt>Court Level</dt><dd>@MatterField(md.CourtLevel)</dd>
+                                <dt>State</dt><dd>@MatterField(md.State)</dd>
+                                <dt>County</dt><dd>@MatterField(md.County)</dd>
+                                <dt>Governing Law</dt><dd>@MatterField(md.GoverningLaw)</dd>
+                                <dt>Subject-Matter Jurisdiction</dt><dd>@MatterField(md.SubjectMatterJurisdiction)</dd>
+                                <dt>Personal / Territorial Jurisdiction</dt><dd>@MatterField(md.PersonalTerritorialJurisdiction)</dd>
+                                <dt>Procedural Law</dt><dd>@MatterField(md.ProceduralLaw)</dd>
+                                <dt>Authority Cutoff Date</dt><dd>@(md.AuthorityCutoffDate?.ToString("MMM d, yyyy") ?? "—")</dd>
+                            </dl>
+                        </section>
+
+                        <section class="dfi-matter-group">
+                            <h3 class="dfi-matter-group-title"><i class="bi bi-diagram-2"></i> Procedural Posture</h3>
+                            <dl class="dfi-matter-grid">
+                                <dt>Posture</dt><dd>@MatterField(md.Posture)</dd>
+                                <dt>Moving Party</dt><dd>@MatterField(md.MovingParty)</dd>
+                                <dt>Responding Party</dt><dd>@MatterField(md.RespondingParty)</dd>
+                                <dt>Motion Target</dt><dd>@MatterField(md.MotionTarget)</dd>
+                                <dt>Requested Disposition</dt><dd>@MatterField(md.RequestedDisposition)</dd>
+                            </dl>
+                        </section>
+
+                        <section class="dfi-matter-group">
+                            <h3 class="dfi-matter-group-title"><i class="bi bi-graph-up"></i> Latest Decision</h3>
+                            <dl class="dfi-matter-grid">
+                                <dt>Latest Session ID</dt><dd>@(md.LatestSessionId?.ToString() ?? "—")</dd>
+                                <dt>Current Outcome</dt><dd>@MatterField(md.CurrentOutcome)</dd>
+                                <dt>Decision Status</dt><dd>@MatterField(md.DecisionStatusCode)</dd>
+                                <dt>Critical Flip Points</dt><dd>@md.CriticalFlipPointCount</dd>
+                                <dt>Last Decided</dt><dd>@(md.LastDecidedUtc?.ToLocalTime().ToString("MMM d, yyyy h:mm tt") ?? "—")</dd>
+                            </dl>
+                        </section>
+
+                        <section class="dfi-matter-group">
+                            <h3 class="dfi-matter-group-title"><i class="bi bi-clock-history"></i> Audit</h3>
+                            <dl class="dfi-matter-grid">
+                                <dt>Created</dt><dd>@md.CreatedDateUtc.ToLocalTime().ToString("MMM d, yyyy h:mm tt")</dd>
+                                <dt>Modified</dt><dd>@(md.ModifiedDateUtc?.ToLocalTime().ToString("MMM d, yyyy h:mm tt") ?? "—")</dd>
+                            </dl>
+                        </section>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <a class="um-btn um-btn-secondary" href="@($"/legal/matters/{md.DecisionMatterId}")">
+                        <i class="bi bi-box-arrow-up-right"></i> Open full matter
+                    </a>
+                    <button type="button" class="um-btn um-btn-primary" @onclick="() => _showMatterDetails = false">Close</button>
+                </div>
+            </div>
+        </div>
+    }
+
+    @if (_detailCandidate is { } dc)
+    {
+        <div class="um-modal-backdrop" @onclick="() => _detailCandidate = null">
+            <div class="um-modal um-modal--lg" @onclick:stopPropagation="true">
+                <div class="um-modal-header">
+                    <i class="bi bi-trophy"></i>
+                    <span>Candidate #@dc.RankNumber — @dc.DisplayName</span>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _detailCandidate = null"><i class="bi bi-x-lg"></i></button>
+                </div>
+                <div class="um-modal-body">
+                    <div class="dfi-matter-details">
+                        <section class="dfi-matter-group">
+                            <h3 class="dfi-matter-group-title"><i class="bi bi-info-circle"></i> Identity</h3>
+                            <dl class="dfi-matter-grid">
+                                <dt>Candidate ID</dt><dd>@dc.WideCandidateId</dd>
+                                <dt>Rank</dt><dd>@dc.RankNumber</dd>
+                                <dt>Display Name</dt><dd>@dc.DisplayName</dd>
+                                <dt>Detail</dt><dd>@MatterField(dc.Detail)</dd>
+                            </dl>
+                        </section>
+
+                        <section class="dfi-matter-group">
+                            <h3 class="dfi-matter-group-title"><i class="bi bi-graph-up"></i> Scoring</h3>
+                            <dl class="dfi-matter-grid">
+                                <dt>Composite Score</dt><dd>@dc.CompositeScore.ToString("P0")</dd>
+                                <dt>Quality Score</dt><dd>@dc.QualityScore.ToString("P0")</dd>
+                                <dt>Evidence Confidence</dt><dd>@dc.EvidenceConfidence.ToString("P0")</dd>
+                                <dt>Evidence Coverage</dt><dd>@dc.EvidenceCoverage.ToString("P0")</dd>
+                                <dt>Constraint Violation</dt><dd>@(dc.IsConstraintViolation ? "Yes — ruled out" : "No")</dd>
+                            </dl>
+                        </section>
+
+                        <section class="dfi-matter-group">
+                            <h3 class="dfi-matter-group-title"><i class="bi bi-shield-check"></i> Admission &amp; Support</h3>
+                            <dl class="dfi-matter-grid">
+                                <dt>Admission Mode</dt><dd>@MatterField(dc.AdmissionModeCode)</dd>
+                                <dt>Support Tier</dt><dd>@MatterField(dc.SupportTierCode)</dd>
+                                <dt>Interpretive Support</dt><dd>@dc.InterpretiveSupportCount</dd>
+                                <dt>Evidence Host Support</dt><dd>@dc.EvidenceHostSupportCount</dd>
+                                <dt>Total Support</dt><dd>@dc.TotalSupportCount</dd>
+                            </dl>
+                        </section>
+
+                        <section class="dfi-matter-group">
+                            <h3 class="dfi-matter-group-title"><i class="bi bi-cash-coin"></i> Advisory Estimates</h3>
+                            <dl class="dfi-matter-grid">
+                                <dt>Estimated Resolution</dt><dd>@MatterField(dc.EstimatedResolutionLabel)</dd>
+                                <dt>Estimated Cost Band</dt><dd>@MatterField(dc.EstimatedCostBand)</dd>
+                            </dl>
+                        </section>
+
+                        @if (dc.BranchScores.Count > 0)
+                        {
+                            <section class="dfi-matter-group">
+                                <h3 class="dfi-matter-group-title"><i class="bi bi-diagram-2"></i> Candidate × Branch scores</h3>
+                                <div class="dfi-grid-scroll">
+                                    <table class="dfi-grid">
+                                        <thead>
+                                            <tr><th>Branch / dimension</th><th>Evidence score</th><th>Direct score</th><th>Sub-criteria</th></tr>
+                                        </thead>
+                                        <tbody>
+                                            @foreach (var score in dc.BranchScores)
+                                            {
+                                                <tr>
+                                                    <td>@score.BranchDisplayName</td>
+                                                    <td>@score.EvidenceScore.ToString("P0")</td>
+                                                    <td>@(score.DirectScore?.ToString("P0") ?? "—")</td>
+                                                    <td>@(score.ChildScores.Count > 0 ? string.Join(" · ", score.ChildScores.Select(c => $"{c.BranchDisplayName} {c.EvidenceScore:P0}")) : "—")</td>
+                                                </tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </section>
+                        }
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-primary" @onclick="() => _detailCandidate = null">Close</button>
+                </div>
+            </div>
+        </div>
+    }
+
+    @if (_detailFactor is { } df)
+    {
+        <div class="um-modal-backdrop" @onclick="() => _detailFactor = null">
+            <div class="um-modal um-modal--lg" @onclick:stopPropagation="true">
+                <div class="um-modal-header">
+                    <i class="bi bi-grid-3x3-gap"></i>
+                    <span>Factor — @df.FactorName</span>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _detailFactor = null"><i class="bi bi-x-lg"></i></button>
+                </div>
+                <div class="um-modal-body">
+                    <div class="dfi-matter-details">
+                        <section class="dfi-matter-group">
+                            <h3 class="dfi-matter-group-title"><i class="bi bi-info-circle"></i> Identity</h3>
+                            <dl class="dfi-matter-grid">
+                                <dt>Factor ID</dt><dd>@df.FactorId</dd>
+                                <dt>Factor Name</dt><dd>@df.FactorName</dd>
+                                <dt>Factor Type</dt><dd>@MatterField(df.FactorType)</dd>
+                                <dt>Node Kind</dt><dd>@MatterField(df.NodeKind)</dd>
+                                <dt>Requirement</dt><dd>@MatterField(df.Requirement)</dd>
+                            </dl>
+                        </section>
+
+                        <section class="dfi-matter-group">
+                            <h3 class="dfi-matter-group-title"><i class="bi bi-database"></i> Value &amp; Source</h3>
+                            <dl class="dfi-matter-grid">
+                                <dt>Actual Value</dt><dd>@MatterField(df.ActualValue)</dd>
+                                <dt>Source</dt><dd>@MatterField(df.Source)</dd>
+                                <dt>Value Source</dt><dd>@MatterField(df.ValueSource)</dd>
+                                <dt>Source Location</dt><dd>@MatterField(df.SourceLocation)</dd>
+                                <dt>Matter Provenance</dt><dd>@MatterField(df.MatterProvenance)</dd>
+                                <dt>Missing Information</dt><dd>@MatterField(df.MissingInformation)</dd>
+                            </dl>
+                        </section>
+
+                        <section class="dfi-matter-group">
+                            <h3 class="dfi-matter-group-title"><i class="bi bi-shield-check"></i> Availability &amp; Verification</h3>
+                            <dl class="dfi-matter-grid">
+                                <dt>Availability</dt><dd>@MatterField(df.Availability)</dd>
+                                <dt>Verification Status</dt><dd>@MatterField(df.VerificationStatus)</dd>
+                                <dt>Validation Status</dt><dd>@MatterField(df.ValidationStatus)</dd>
+                                <dt>Evidence Admission State</dt><dd>@MatterField(df.EvidenceAdmissionState)</dd>
+                                <dt>Counts Toward Evidence Score</dt><dd>@(df.CountsTowardEvidenceScore ? "Yes" : "No")</dd>
+                                <dt>Binding Admissibility</dt><dd>@MatterField(df.BindingAdmissibility)</dd>
+                                <dt>Verification Obligation</dt><dd>@MatterField(df.VerificationObligation)</dd>
+                            </dl>
+                        </section>
+
+                        <section class="dfi-matter-group">
+                            <h3 class="dfi-matter-group-title"><i class="bi bi-diagram-3"></i> Relationships</h3>
+                            <dl class="dfi-matter-grid">
+                                <dt>Relationships</dt><dd>@(df.Relationships.Count > 0 ? string.Join(", ", df.Relationships) : "—")</dd>
+                                <dt>Contradictions</dt><dd>@(df.Contradictions.Count > 0 ? string.Join(" · ", df.Contradictions) : "—")</dd>
+                            </dl>
+                        </section>
+
+                        @if (df.References.Count > 0)
+                        {
+                            <section class="dfi-matter-group">
+                                <h3 class="dfi-matter-group-title"><i class="bi bi-link-45deg"></i> References</h3>
+                                <div class="dfi-grid-scroll">
+                                    <table class="dfi-grid">
+                                        <thead>
+                                            <tr><th>Kind</th><th>Label</th><th>Reference</th><th>Verification</th></tr>
+                                        </thead>
+                                        <tbody>
+                                            @foreach (var r in df.References)
+                                            {
+                                                <tr>
+                                                    <td>@r.KindCode</td>
+                                                    <td>@r.Label</td>
+                                                    <td>@MatterField(r.Reference)</td>
+                                                    <td>@MatterField(r.VerificationState)</td>
+                                                </tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </section>
+                        }
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-primary" @onclick="() => _detailFactor = null">Close</button>
+                </div>
+            </div>
+        </div>
+    }
 
     @if (_analysisPopupOutcome is { } cfa)
     {
@@ -1519,7 +1813,34 @@
     [Parameter, SupplyParameterFromQuery(Name = "matterId")]
     public Guid? MatterId { get; set; }
 
+    // When present, the page opens a previously captured Decision2/Wide run in read-only "view saved run"
+    // mode: the full saved WideSearchResponse is rehydrated and search/edit controls are suppressed.
+    [Parameter, SupplyParameterFromQuery(Name = "runId")]
+    public Guid? RunId { get; set; }
+
+    [Parameter, SupplyParameterFromQuery(Name = "readonly")]
+    public string? ReadOnlyFlag { get; set; }
+
+    // Deep-link into a specific cockpit tab (e.g. ?tab=Media%20%26%20Machine%20Evidence) so entry
+    // points such as the matter-detail "Media & Machine Evidence" action open directly on that tab.
+    [Parameter, SupplyParameterFromQuery(Name = "tab")]
+    public string? InitialTab { get; set; }
+
+    // True only when Analysis History opened this page to view a saved run's complete results read-only.
+    private bool IsSavedRunView => RunId is { } rid && rid != Guid.Empty
+        && (string.Equals(ReadOnlyFlag, "1", StringComparison.Ordinal) || string.Equals(ReadOnlyFlag, "true", StringComparison.OrdinalIgnoreCase));
+
+    private string? _savedRunError;
+
     private DecisionMatterDto? _matter;
+    private bool _showMatterDetails;
+
+    // Enterprise detail popups for the Candidate × Branch competition and Factor Matrix sections.
+    internal WideCandidateDto? _detailCandidate;
+    internal WideFactorDto? _detailFactor;
+
+    // Renders a matter field value, falling back to an em dash when null/blank.
+    private static string MatterField(string? value) => string.IsNullOrWhiteSpace(value) ? "—" : value;
     internal IReadOnlyCollection<LegalDocumentDto> _documents = [];
 
     // The matter id to carry into cross-page links (Command Center, Provider Portal).
@@ -3788,45 +4109,7 @@
                                                 }
                                                 @if (factor is not null && factor.References is { Count: > 0 })
                                                 {
-                                                    <div class="poloxi-factorcheck-item-refs">
-                                                        @foreach (var reference in factor.References)
-                                                        {
-                                                            var refIcon = reference.KindCode switch
-                                                            {
-                                                                "MATTER_FIELD" => "bi-journal-text",
-                                                                "PROFILE_FIELD" => "bi-person-badge",
-                                                                "DOCUMENT" => "bi-file-earmark-text",
-                                                                "EVIDENCE" => "bi-paperclip",
-                                                                "LEGAL_AUTHORITY" => "bi-bank",
-                                                                "CHANNEL" => "bi-broadcast",
-                                                                _ => "bi-link-45deg"
-                                                            };
-                                                            var refKindLabel = reference.KindCode switch
-                                                            {
-                                                                "MATTER_FIELD" => "Matter",
-                                                                "PROFILE_FIELD" => "Profile",
-                                                                "DOCUMENT" => "Doc",
-                                                                "EVIDENCE" => "Evidence",
-                                                                "LEGAL_AUTHORITY" => "Authority",
-                                                                "CHANNEL" => "Channel",
-                                                                _ => reference.KindCode
-                                                            };
-                                                            var refState = (reference.VerificationState ?? "UNVERIFIED").ToLowerInvariant();
-                                                            var refTitle = string.IsNullOrWhiteSpace(reference.Reference) ? reference.Label : reference.Reference;
-                                                            if (!string.IsNullOrWhiteSpace(reference.NavigationRoute))
-                                                            {
-                                                                <a class="poloxi-factor-ref poloxi-factor-ref--@refState" href="@reference.NavigationRoute" title="@refTitle">
-                                                                    <i class="bi @refIcon"></i><span class="poloxi-factor-ref-kind">@refKindLabel:</span> @reference.Label
-                                                                </a>
-                                                            }
-                                                            else
-                                                            {
-                                                                <span class="poloxi-factor-ref poloxi-factor-ref--@refState" title="@refTitle">
-                                                                    <i class="bi @refIcon"></i><span class="poloxi-factor-ref-kind">@refKindLabel:</span> @reference.Label
-                                                                </span>
-                                                            }
-                                                        }
-                                                    </div>
+                                                    <FactorReferenceChips References="factor.References" OnReferenceSelected="OpenReferenceDetail" />
                                                 }
                                             </div>
                                         </li>
@@ -6526,7 +6809,7 @@
 
     // ── Decision Intelligence console (reads existing response + matter fields only) ──
     internal string _dfiTab = "Overview";
-    private static readonly string[] DfiTabs = ["Overview", "Decision Analysis", "Decision Contract", "Hierarchy", "Hierarchy Details", "Factor Matrix", "Evidence", "Document Intelligence", "Legal Authority", "Competition", "Readiness", "Decision Change Intelligence (DCI)", "Continuous Decision Calibration (CDC)", "Channel Scoring (LPI)", "Human Intelligence", "Investigation", "Audit"];
+    private static readonly string[] DfiTabs = ["Overview", "Decision Analysis", "Decision Contract", "Hierarchy", "Hierarchy Details", "Factor Matrix", "Evidence", "Document Intelligence", "Media & Machine Evidence", "Legal Authority", "Competition", "Readiness", "Decision Change Intelligence (DCI)", "Continuous Decision Calibration (CDC)", "Channel Scoring (LPI)", "Human Intelligence", "Investigation", "Run History", "Audit"];
 
     private void SelectDfiTab(string tab)
     {
@@ -7932,6 +8215,13 @@
         _dfiTab = "Hierarchy";
     }
 
+    // Opens the enterprise Factor detail popup listing every field for the selected factor.
+    internal void OpenFactorDetail(WideFactorDto f)
+    {
+        _dfiSelectedFactorId = f.FactorId;
+        _detailFactor = f;
+    }
+
     private WideCandidateFactorRelationDto? DfiRelationFor(WideFactorDto f) =>
         DfiRelations.FirstOrDefault(r => r.FactorId == f.FactorId);
 
@@ -8433,6 +8723,14 @@
     {
         Breadcrumbs.SetCrumbs(new("Home", "/"), new("Intelligence", "/intelligence"), new("Personal Injury Decision 2", "/legal/personalinjury_decision2"));
 
+        // Honor a deep-linked starting tab (?tab=) when it matches a known cockpit tab.
+        if (!string.IsNullOrWhiteSpace(InitialTab))
+        {
+            var match = DfiTabs.FirstOrDefault(t => string.Equals(t, InitialTab, StringComparison.OrdinalIgnoreCase));
+            if (match is not null)
+                _dfiTab = match;
+        }
+
         // Keep the full-page loading overlay up until the API host is reachable. When the backend is
         // still starting (connection refused / socket error), wait for it instead of flashing an empty
         // page, mirroring the loading behavior on the matters list pages.
@@ -8462,6 +8760,23 @@
             // Candidate Full Analysis drill-down shows exactly what the user was viewing
             // instead of a blank page. The cache is circuit-scoped working memory.
             _response = OverviewState.TryGet(matterId);
+
+            // Analysis History "View Decision2 results": rehydrate the full saved Wide run read-only.
+            if (IsSavedRunView && RunId is { } savedRunId)
+            {
+                try
+                {
+                    var saved = await Api.GetSavedWideResultAsync(savedRunId);
+                    if (saved is not null)
+                        _response = saved;
+                    else
+                        _savedRunError = "This run has no saved Decision2 results to display.";
+                }
+                catch (Exception ex)
+                {
+                    _savedRunError = $"Unable to load saved results: {ex.Message}";
+                }
+            }
             try
             {
                 // Matter, documents and calibration are all keyed only on matterId (not on each other),

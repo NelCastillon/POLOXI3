@@ -38,6 +38,7 @@ public sealed partial class LegalDecisionService(
     IExecutionEnvironment executionEnvironment,
     Abstractions.Intelligence.IAiProviderRouter aiProviderRouter,
     Features.Intelligence.Decision.Channels.IChannelContributionProjectionService channelProjectionService,
+    Abstractions.Intelligence.IAnalysisRunLedgerWriter analysisRunLedgerWriter,
     ILogger<LegalDecisionService> logger) : ILegalDecisionService
 {
     private const string DiscoveryPromptCode = "DECISION_DISCOVERY";
@@ -663,6 +664,9 @@ public sealed partial class LegalDecisionService(
     public Task<bool> DeleteMatterAsync(Guid tenantId, Guid userId, Guid decisionMatterId, bool includeAllTenants, CancellationToken cancellationToken = default)
         => repository.DeleteMatterAsync(tenantId, userId, decisionMatterId, includeAllTenants, cancellationToken);
 
+    public Task<int> DeleteMattersAsync(Guid tenantId, Guid userId, IReadOnlyCollection<Guid> decisionMatterIds, bool includeAllTenants, CancellationToken cancellationToken = default)
+        => repository.DeleteMattersAsync(tenantId, userId, decisionMatterIds, includeAllTenants, cancellationToken);
+
     public Task<DecisionMatterFacetsDto> GetMatterFacetsAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => repository.GetMatterFacetsAsync(tenantId, cancellationToken);
 
@@ -979,6 +983,31 @@ public sealed partial class LegalDecisionService(
     }
 
     public async Task<DecisionSearchResponse> DecideAsync(DecisionSearchRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await DecideCoreAsync(request, cancellationToken);
+        await RecordAnalysisRunLedgerAsync(request, response, cancellationToken);
+        return response;
+    }
+
+    // Best-effort Run & Assessment Management ledger write. Records the completed decision execution as
+    // a persisted AnalysisRun with response-derived steps. Fail-soft by design: any failure here is
+    // logged and swallowed so the decision result is never altered or broken.
+    private async Task RecordAnalysisRunLedgerAsync(
+        DecisionSearchRequest request, DecisionSearchResponse response, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await analysisRunLedgerWriter.RecordDecisionRunAsync(request, response, cancellationToken);
+        }
+        catch (Exception ledgerEx)
+        {
+            logger.LogWarning(ledgerEx,
+                "Run & Assessment ledger write failed for session {SessionId}; decision unaffected.",
+                response.DecisionSessionId);
+        }
+    }
+
+    private async Task<DecisionSearchResponse> DecideCoreAsync(DecisionSearchRequest request, CancellationToken cancellationToken = default)
     {
         var timer = Stopwatch.StartNew();
         var sessionId = Guid.NewGuid();

@@ -1,5 +1,6 @@
 using Legal.Api.Security;
 using Legal.Api.Services;
+using Legal.Application.Abstractions.Intelligence;
 using Legal.Application.Abstractions.Services;
 using Legal.Application.Features.Intelligence;
 using Legal.Application.Features.Saas;
@@ -12,7 +13,7 @@ namespace Legal.Api.Controllers;
 // api/intelligence/search/poloxi endpoint so the wide path can evolve independently.
 [ApiController]
 [Route("api/intelligence_wide2")]
-public sealed class IntelligenceWide2Controller(IIntelligenceWide2Service service,Wide2SearchOperationStore operationStore,IIntelligenceExecutionService executionService):ControllerBase
+public sealed class IntelligenceWide2Controller(IIntelligenceWide2Service service,Wide2SearchOperationStore operationStore,IIntelligenceExecutionService executionService,IWideRunResultRepository runResultRepository):ControllerBase
 {
     private const string CapabilityCode=JudzCapabilities.GeneralSearch;
     private Guid TenantId=>AuthenticatedRequestContext.GetTenantId(User)??throw new UnauthorizedAccessException("An authenticated tenant context is required.");
@@ -72,5 +73,12 @@ public sealed class IntelligenceWide2Controller(IIntelligenceWide2Service servic
     [HttpGet("show-pipeline")]
     [Authorize(Policy=IntelligencePolicies.Search)]
     public async Task<IActionResult> ShowPipeline(CancellationToken cancellationToken)=>Ok(new{showPipeline=await service.GetShowPipelineAsync(cancellationToken)});
+
+    // Read-only rehydration for Analysis History: returns the complete saved WideSearchResponse captured for
+    // a given analysis run so the Decision2 Display can be reopened read-only. 404 for runs without capture.
+    [HttpGet("result/{analysisRunId:guid}")]
+    [Authorize(Policy=IntelligencePolicies.Search)]
+    public async Task<IActionResult> SavedResult(Guid analysisRunId,CancellationToken cancellationToken)
+        =>await runResultRepository.GetByAnalysisRunAsync(TenantId,analysisRunId,cancellationToken)is{}response?Ok(response):NotFound();
 }
 

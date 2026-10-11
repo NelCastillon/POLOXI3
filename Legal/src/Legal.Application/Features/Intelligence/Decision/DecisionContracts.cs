@@ -882,6 +882,10 @@ public static class DecisionDomainPackCodes
 public sealed record DecisionMatterStatusUpdateRequest(
     [Required, StringLength(60)] string StatusCode);
 
+// Request to soft-delete multiple matters in a single tenant-scoped operation.
+public sealed record DecisionMatterBulkDeleteRequest(
+    [Required, MinLength(1)] IReadOnlyCollection<Guid> MatterIds);
+
 // Matter lifecycle status codes (POLOXI.Legal_DecisionMatter.StatusCode).
 public static class DecisionMatterStatusCodes
 {
@@ -920,6 +924,7 @@ public sealed record DecisionMatterFacetsDto(
     public IReadOnlyCollection<string> CourtSystems { get; init; } = [];
     public IReadOnlyCollection<string> States { get; init; } = [];
     public IReadOnlyCollection<string> CourtLevels { get; init; } = [];
+    public IReadOnlyCollection<string> Counties { get; init; } = [];
     public IReadOnlyCollection<string> GoverningLaws { get; init; } = [];
 
     // ── Practice-area classification option lists (DB-backed, e.g. Personal Injury). ──

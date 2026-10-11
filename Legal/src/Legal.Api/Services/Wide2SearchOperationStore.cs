@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using Legal.Api.Security;
+using Legal.Application.Abstractions.Intelligence;
 using Legal.Application.Abstractions.Services;
 using Legal.Application.Features.Intelligence;
 
@@ -36,6 +37,20 @@ public sealed class Wide2SearchOperationStore(IServiceScopeFactory scopeFactory,
                 var service=scope.ServiceProvider.GetRequiredService<IIntelligenceWide2Service>();
                 var response=await service.SearchDynamicAsync(request,operation.Token);
                 operation.Complete(response);
+
+                // Best-effort Run & Assessment Management ledger write. Records the completed cockpit
+                // execution as a persisted AnalysisRun for the matter so the Run History surfaces it.
+                // Fail-soft by design: any failure here is logged and swallowed so the search result is
+                // never altered. Only matter-scoped executions are recorded (the writer gates on MatterId).
+                try
+                {
+                    var ledgerWriter=scope.ServiceProvider.GetRequiredService<IAnalysisRunLedgerWriter>();
+                    await ledgerWriter.RecordWideRunAsync(request,response,CancellationToken.None);
+                }
+                catch(Exception ledgerEx)
+                {
+                    logger.LogWarning(ledgerEx,"Run & Assessment ledger write failed for Wide operation {OperationId}; result unaffected.",operationId);
+                }
             }
             catch(OperationCanceledException)when(operation.Token.IsCancellationRequested)
             {

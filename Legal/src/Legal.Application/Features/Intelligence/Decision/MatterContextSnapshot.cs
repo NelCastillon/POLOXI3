@@ -196,6 +196,43 @@ public static class MatterContextSnapshotBuilder
             AddCount(evidence, "Demands", profile.Demands.Count);
             AddCount(evidence, "Settlements", profile.Settlements.Count);
             AddCount(evidence, "Witnesses", profile.Witnesses.Count);
+
+            // Per-entry projection — every child record is emitted as its OWN provenance-tagged field so a
+            // factor/proposition can bind to EACH medical bill, lien, demand, injury, etc. individually, the
+            // same way the pipeline loops over every admitted document. Without this, multi-row collections
+            // collapsed into a single count and only one entry (or none) could ever match a factor. Each
+            // entry keeps the collection's semantic token in its label (so FieldMatchesFactor can match it)
+            // and a human-readable descriptor as its value. Builder still performs NO inference.
+            AddEntries(evidence, "Insurance Policy", profile.InsurancePolicies, p => JoinParts(
+                p.Carrier, p.CoverageTypeCode, p.PolicyNumber, p.ClaimNumber, p.CoverageStatusCode, p.Notes));
+            AddEntries(evidence, "Injury", profile.Injuries, i => JoinParts(
+                i.BodyAreaCode, i.Diagnosis, i.SeverityCode, i.InitialSymptoms, i.Notes));
+            AddEntries(evidence, "Treatment", profile.Treatments, t => JoinParts(
+                t.Provider, t.Specialty, t.StatusCode, t.Notes));
+            AddEntries(evidence, "Medical Bill", profile.MedicalBills, b => JoinParts(
+                b.Provider, b.Payer, b.LienStatusCode,
+                b.AmountBilled?.ToString("0.##"), b.OutstandingBalance?.ToString("0.##"), b.Notes));
+            AddEntries(evidence, "Damage", profile.Damages, d => JoinParts(
+                d.DamageTypeCode, d.Description, d.ClaimedAmount?.ToString("0.##"), d.Notes));
+            AddEntries(evidence, "Lien", profile.Liens, l => JoinParts(
+                l.Lienholder, l.LienTypeCode, l.StatusCode,
+                l.AssertedAmount?.ToString("0.##"), l.FinalPayoffAmount?.ToString("0.##"), l.Notes));
+            AddEntries(evidence, "Demand", profile.Demands, d => JoinParts(
+                d.Recipient, d.StatusCode, d.DemandAmount?.ToString("0.##"),
+                d.DemandDate?.ToString("yyyy-MM-dd"), d.Notes));
+            AddEntries(evidence, "Negotiation", profile.Negotiations, n => JoinParts(
+                n.Source, n.IsOffer ? "Offer" : "Counter", n.Amount?.ToString("0.##"),
+                n.EventDate?.ToString("yyyy-MM-dd"), n.Conditions, n.Notes));
+            AddEntries(evidence, "Settlement", profile.Settlements, s => JoinParts(
+                s.StatusCode, s.GrossRecovery?.ToString("0.##"), s.NetToClient?.ToString("0.##"),
+                s.SettlementDate?.ToString("yyyy-MM-dd"), s.Notes));
+            AddEntries(evidence, "Deadline", profile.Deadlines, d => JoinParts(
+                d.DeadlineTypeCode, d.CandidateDate?.ToString("yyyy-MM-dd"), d.RuleSourceCode,
+                d.VerificationState, d.Notes));
+            AddEntries(evidence, "Incident Vehicle", profile.IncidentVehicles, v => JoinParts(
+                v.RoleCode, v.Description, v.Owner, v.Driver, v.ImpactType, v.Citation, v.Notes));
+            AddEntries(evidence, "Witness", profile.Witnesses, w => JoinParts(
+                w.Name, w.ContactInfo, w.StatementSummary, w.Notes));
         }
 
         return new MatterContextSnapshot(
@@ -219,5 +256,39 @@ public static class MatterContextSnapshotBuilder
     {
         if (count > 0)
             target.Add(new MatterContextField(label, count.ToString(), MatterFieldProvenance.Supplied));
+    }
+
+    // Projects every entry of a child collection into its own provenance-tagged field so each record can be
+    // matched against factors/propositions individually — mirroring how the pipeline loops over every
+    // admitted document. Entries with no descriptive content are skipped (never fabricated). When more than
+    // one entry exists the label is numbered (e.g. "Medical Bill 2") so distinct values are not collapsed,
+    // while keeping the singular collection token in the label for FieldMatchesFactor token overlap.
+    private static void AddEntries<T>(
+        List<MatterContextField> target,
+        string singularLabel,
+        IReadOnlyCollection<T> items,
+        Func<T, string?> describe)
+    {
+        if (items.Count == 0)
+            return;
+        var index = 0;
+        foreach (var item in items)
+        {
+            index++;
+            var value = describe(item);
+            if (string.IsNullOrWhiteSpace(value))
+                continue;
+            var label = items.Count > 1 ? $"{singularLabel} {index}" : singularLabel;
+            target.Add(new MatterContextField(label, value.Trim(), MatterFieldProvenance.Supplied));
+        }
+    }
+
+    // Joins the non-empty descriptive parts of a child record into a single, bounded, human/LLM-readable
+    // value. Keeps field identity flat — no inference, no derivation — only present values are included.
+    private static string? JoinParts(params string?[] parts)
+    {
+        var present = parts.Where(p => !string.IsNullOrWhiteSpace(p)).Select(p => p!.Trim());
+        var joined = string.Join(" · ", present);
+        return string.IsNullOrWhiteSpace(joined) ? null : joined;
     }
 }
