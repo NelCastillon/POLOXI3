@@ -2186,6 +2186,12 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
             DeadlineRuleSources = For("PI_DEADLINE_RULE_SOURCE"),
             DeadlineVerificationStates = For("PI_DEADLINE_VERIFICATION"),
             VehicleRoles = For("PI_VEHICLE_ROLE"),
+            DeadlineTypes = For("PI_DEADLINE_TYPE"),
+            ImpactTypes = For("PI_IMPACT_TYPE"),
+            TreatmentSpecialties = For("PI_TREATMENT_SPECIALTY"),
+            NegotiationSources = For("PI_NEGOTIATION_SOURCE"),
+            LimitsSources = For("PI_LIMITS_SOURCE"),
+            RequestStatuses = For("PI_REQUEST_STATUS"),
             DraftSourceTypes = For("PI_DRAFT_SOURCE_TYPE"),
             DraftVerificationStates = For("PI_DRAFT_VERIFICATION_STATE")
         };

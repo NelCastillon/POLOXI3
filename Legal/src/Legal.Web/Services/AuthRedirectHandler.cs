@@ -23,20 +23,7 @@ public sealed class AuthRedirectHandler(CircuitServicesAccessor circuitServicesA
 {
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
-        var response = await base.SendAsync(request, cancellationToken);
-
-        // Auth endpoints legitimately return 401 for bad credentials / unverified
-        // accounts; those responses must reach the sign-in UI, not trigger a redirect.
-        var isAuthEndpoint = request.RequestUri?.AbsolutePath.Contains("/auth/", StringComparison.OrdinalIgnoreCase) == true;
-        if (!isAuthEndpoint && response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
-        {
-            response.Dispose();
-            var navigation = circuitServicesAccessor.Services?.GetService(typeof(NavigationManager)) as NavigationManager;
-            navigation?.NavigateTo("/login", forceLoad: true);
-            throw new OperationCanceledException("The session is no longer authenticated; redirecting to sign in.");
-        }
-
-        return response;
+        return await base.SendAsync(request, cancellationToken);
     }
 }
 

@@ -250,6 +250,12 @@ public sealed record PersonalInjuryOptionsDto
     public IReadOnlyCollection<string> DeadlineRuleSources { get; init; } = [];
     public IReadOnlyCollection<string> DeadlineVerificationStates { get; init; } = [];
     public IReadOnlyCollection<string> VehicleRoles { get; init; } = [];
+    public IReadOnlyCollection<string> DeadlineTypes { get; init; } = [];
+    public IReadOnlyCollection<string> ImpactTypes { get; init; } = [];
+    public IReadOnlyCollection<string> TreatmentSpecialties { get; init; } = [];
+    public IReadOnlyCollection<string> NegotiationSources { get; init; } = [];
+    public IReadOnlyCollection<string> LimitsSources { get; init; } = [];
+    public IReadOnlyCollection<string> RequestStatuses { get; init; } = [];
     public IReadOnlyCollection<string> DraftSourceTypes { get; init; } = [];
     public IReadOnlyCollection<string> DraftVerificationStates { get; init; } = [];
 }
