@@ -23,13 +23,14 @@ public partial class LegalPersonalInjuryDecision2
 {
     // Expand/collapse state for the synthesis-first candidate assessment cards (by candidate index). The
     // synthesis is always visible; the supporting detail (13 facets + original branch interpretations) is
-    // revealed on demand so attorneys can inspect the exact reasoning and lineage beneath the synthesis.
-    private readonly HashSet<int> _ovAssessmentExpanded = [];
-    internal bool IsAssessmentExpanded(int index) => _ovAssessmentExpanded.Contains(index);
+    // EXPANDED BY DEFAULT so attorneys immediately see the full reasoning and lineage. We track the
+    // explicitly COLLAPSED indices so the default (absent from the set) renders expanded.
+    private readonly HashSet<int> _ovAssessmentCollapsed = [];
+    internal bool IsAssessmentExpanded(int index) => !_ovAssessmentCollapsed.Contains(index);
     internal void ToggleAssessment(int index)
     {
-        if (!_ovAssessmentExpanded.Remove(index))
-            _ovAssessmentExpanded.Add(index);
+        if (!_ovAssessmentCollapsed.Remove(index))
+            _ovAssessmentCollapsed.Add(index);
     }
 
     // Whether the reusable Matter Analysis block is expanded on the Overview tab (collapsed by default).

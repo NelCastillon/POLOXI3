@@ -131,6 +131,60 @@ public sealed class AnalysisRunLedgerRepository(ISqlConnectionFactory connection
                 row.ReviewStateText, row.FreshnessStatusCode, row.FreshnessNote, row.PublishedUtc);
     }
 
+    public async Task<IReadOnlyDictionary<Guid, RunQualitySignals>> GetRunQualitySignalsAsync(
+        Guid tenantId, Guid matterId, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+
+        // Per-run execution quality metrics plus the aggregated candidate landscape, joined through the
+        // authoritative AnalysisRunId -> WideExecutionId bridge in Legal_WideRunResult. Candidate counts
+        // and composite-score aggregates come from Legal_WideCandidate. All reads are tenant-scoped and
+        // restricted to non-deleted rows; runs without a decision execution simply return no row.
+        var rows = (await connection.QueryAsync<QualityRow>(new CommandDefinition(
+            """
+            SELECT r.AnalysisRunId,
+                   r.StatusCode,
+                   r.AnswerVerificationCode,
+                   COALESCE(r.FinalConfidence, CAST(0 AS DECIMAL(9,4))) AS FinalConfidence,
+                   COALESCE(r.DecisionConfidence, CAST(0 AS DECIMAL(9,4))) AS DecisionConfidence,
+                   COALESCE(r.EvidenceCoverage, CAST(0 AS DECIMAL(9,4))) AS EvidenceCoverage,
+                   COALESCE(r.DecisionEvidenceCoverage, CAST(0 AS DECIMAL(9,4))) AS DecisionEvidenceCoverage,
+                   COALESCE(r.WinnerStability, CAST(0 AS DECIMAL(9,4))) AS WinnerStability,
+                   COALESCE(r.TopKStability, CAST(0 AS DECIMAL(9,4))) AS TopKStability,
+                   COALESCE(cand.CandidateCount, 0) AS CandidateCount,
+                   COALESCE(cand.ViableCandidateCount, 0) AS ViableCandidateCount,
+                   COALESCE(cand.TopCompositeScore, CAST(0 AS DECIMAL(9,4))) AS TopCompositeScore,
+                   COALESCE(cand.MeanViableCompositeScore, CAST(0 AS DECIMAL(9,4))) AS MeanViableCompositeScore
+            FROM POLOXI.Legal_WideRunResult r
+            OUTER APPLY (
+                SELECT COUNT(*) AS CandidateCount,
+                       SUM(CASE WHEN c.IsConstraintViolation = 0 THEN 1 ELSE 0 END) AS ViableCandidateCount,
+                       MAX(c.CompositeScore) AS TopCompositeScore,
+                       AVG(CASE WHEN c.IsConstraintViolation = 0 THEN c.CompositeScore END) AS MeanViableCompositeScore
+                FROM POLOXI.Legal_WideCandidate c
+                WHERE c.WideExecutionId = r.WideExecutionId AND c.TenantId = @TenantId AND c.IsDeleted = 0
+            ) cand
+            WHERE r.TenantId = @TenantId AND r.MatterId = @MatterId AND r.IsDeleted = 0;
+            """,
+            new { TenantId = tenantId, MatterId = matterId },
+            cancellationToken: cancellationToken))).ToList();
+
+        return rows
+            .GroupBy(r => r.AnalysisRunId)
+            .ToDictionary(
+                g => g.Key,
+                g =>
+                {
+                    var r = g.First();
+                    return new RunQualitySignals(
+                        r.AnalysisRunId, r.StatusCode, r.AnswerVerificationCode,
+                        r.FinalConfidence, r.DecisionConfidence, r.EvidenceCoverage,
+                        r.DecisionEvidenceCoverage, r.WinnerStability, r.TopKStability,
+                        r.CandidateCount, r.ViableCandidateCount, r.TopCompositeScore,
+                        r.MeanViableCompositeScore);
+                });
+    }
+
     public async Task<int> SoftDeleteRunAsync(
         Guid tenantId, Guid analysisRunId, Guid? modifiedByUserId, CancellationToken cancellationToken = default)
     {
@@ -199,4 +253,11 @@ public sealed class AnalysisRunLedgerRepository(ISqlConnectionFactory connection
         string? Jurisdiction, string? GoverningLaw, string? CourtOrForum, string? Posture, string? MotionTarget,
         string? CounterfactualAssumption, string? ClarificationAnswer, bool? UsedDependencyGraph,
         string ContractJson, DateTime CapturedUtc);
+
+    private sealed record QualityRow(
+        Guid AnalysisRunId, string? StatusCode, string? AnswerVerificationCode,
+        decimal FinalConfidence, decimal DecisionConfidence, decimal EvidenceCoverage,
+        decimal DecisionEvidenceCoverage, decimal WinnerStability, decimal TopKStability,
+        int CandidateCount, int ViableCandidateCount, decimal TopCompositeScore,
+        decimal MeanViableCompositeScore);
 }

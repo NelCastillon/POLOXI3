@@ -13,6 +13,11 @@ public interface IAnalysisRunLedgerRepository
     Task<CurrentAssessmentDto?> GetCurrentAssessmentAsync(
         Guid tenantId, Guid matterId, CancellationToken cancellationToken = default);
 
+    // The raw, DB-backed decision-quality signals per run for a matter, keyed by AnalysisRunId.
+    // Runs without a scored decision execution are simply absent from the result.
+    Task<IReadOnlyDictionary<Guid, RunQualitySignals>> GetRunQualitySignalsAsync(
+        Guid tenantId, Guid matterId, CancellationToken cancellationToken = default);
+
     // Soft-deletes a single run and its dependent history (steps, attempts, input snapshots,
     // current-assessment pointer, and saved Wide result) for the matter. Tenant-scoped, write-once.
     // Returns the number of run rows affected (0 when the run does not exist for the tenant).

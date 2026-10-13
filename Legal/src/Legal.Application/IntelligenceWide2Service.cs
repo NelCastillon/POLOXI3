@@ -2400,7 +2400,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             foreach(var branch in candidate.BranchScores.Take(8))
                 builder.Append("    \u2022 ").Append(Truncate(branch.BranchDisplayName,160)).Append(" = ").Append(branch.EvidenceScore.ToString("0.000")).Append('\n');
         }
-        builder.Append("\nReturn JSON ONLY matching the schema. Produce a substantive narrative for EVERY candidate above, keep candidate names and identities verbatim, and never introduce new facts, authorities, scores, or rankings.");
+        builder.Append("\nReturn JSON ONLY matching the schema. Produce a substantive, individualized narrative for EVERY candidate above. Each candidate IS a distinct Decision Outcome: anchor its overviewNarrative and fullAnalysis to that candidate's OWN identity, OWN composite/quality/supportTier values, and OWN per-branch (Cs) scores listed under it above. Do NOT reuse another candidate's numbers or write a single generic leader/landscape summary across outcomes. Make each narrative explicitly differential so no two candidates could be swapped without the text becoming wrong. Keep candidate names and identities verbatim, and never introduce new facts, authorities, scores, or rankings.");
         return builder.ToString();
     }
 

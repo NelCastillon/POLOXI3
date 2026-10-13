@@ -7391,16 +7391,34 @@
         }
     }
 
+    // Identity-safe resolver for a Candidate Landscape narrative by candidate display name. A candidate
+    // must NEVER inherit another candidate's narrative. Resolution order: (1) exact case-insensitive name
+    // match; (2) substring match ONLY when it is UNAMBIGUOUS (exactly one candidate matches). When zero or
+    // multiple candidates match ambiguously, return null so the UI fails soft rather than attaching the
+    // wrong candidate's analysis. This replaces the prior FirstOrDefault fuzzy match that could collapse
+    // several outcomes onto the first overlapping landscape entry.
+    private WideCandidateNarrativeDto? OvCandidateMatch(string displayName)
+    {
+        var candidates = _response?.CandidateLandscape?.Candidates;
+        if (candidates is null || string.IsNullOrWhiteSpace(displayName)) return null;
+
+        var exact = candidates.FirstOrDefault(c =>
+            string.Equals(c.CandidateName, displayName, StringComparison.OrdinalIgnoreCase));
+        if (exact is not null) return exact;
+
+        var fuzzy = candidates.Where(c =>
+            !string.IsNullOrWhiteSpace(c.CandidateName)
+            && (c.CandidateName.Contains(displayName, StringComparison.OrdinalIgnoreCase)
+                || displayName.Contains(c.CandidateName, StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+        return fuzzy.Count == 1 ? fuzzy[0] : null;
+    }
+
     // Resolves the candidate-landscape overview narrative for a candidate display name from the Wide
     // response (fail-soft: null when the composer did not run or produced nothing for this candidate).
     private string? OvNarrativeFor(string displayName)
     {
-        var candidates = _response?.CandidateLandscape?.Candidates;
-        if (candidates is null || string.IsNullOrWhiteSpace(displayName)) return null;
-        var match = candidates.FirstOrDefault(c =>
-            string.Equals(c.CandidateName, displayName, StringComparison.OrdinalIgnoreCase)
-            || c.CandidateName.Contains(displayName, StringComparison.OrdinalIgnoreCase)
-            || displayName.Contains(c.CandidateName, StringComparison.OrdinalIgnoreCase));
+        var match = OvCandidateMatch(displayName);
         return string.IsNullOrWhiteSpace(match?.OverviewNarrative) ? null : match!.OverviewNarrative;
     }
 
@@ -7410,12 +7428,7 @@
     // empty when the composer did not run, produced no mapping, or the candidate is unmatched.
     private IReadOnlyList<(string Code, string Name)> OvMappedOutcomesFor(string displayName)
     {
-        var candidates = _response?.CandidateLandscape?.Candidates;
-        if (candidates is null || string.IsNullOrWhiteSpace(displayName)) return [];
-        var match = candidates.FirstOrDefault(c =>
-            string.Equals(c.CandidateName, displayName, StringComparison.OrdinalIgnoreCase)
-            || c.CandidateName.Contains(displayName, StringComparison.OrdinalIgnoreCase)
-            || displayName.Contains(c.CandidateName, StringComparison.OrdinalIgnoreCase));
+        var match = OvCandidateMatch(displayName);
         var mapped = match?.MappedOutcomes;
         if (mapped is null || mapped.Count == 0) return [];
         return mapped
@@ -7435,12 +7448,7 @@
     private OvLifecycle OvLifecycleFor(string displayName)
     {
         var defaultLifecycle = new OvLifecycle("Prospective pathway · Assessment pending", "info", false);
-        var candidates = _response?.CandidateLandscape?.Candidates;
-        if (candidates is null || string.IsNullOrWhiteSpace(displayName)) return defaultLifecycle;
-        var match = candidates.FirstOrDefault(c =>
-            string.Equals(c.CandidateName, displayName, StringComparison.OrdinalIgnoreCase)
-            || c.CandidateName.Contains(displayName, StringComparison.OrdinalIgnoreCase)
-            || displayName.Contains(c.CandidateName, StringComparison.OrdinalIgnoreCase));
+        var match = OvCandidateMatch(displayName);
         var mapped = match?.MappedOutcomes;
         if (mapped is null || mapped.Count == 0) return defaultLifecycle;
         // A single mapped outcome whose authoritative role is historical/asserted OR that requires
@@ -7462,12 +7470,7 @@
     // below the short one. Fail-soft: empty list when the composer did not run or produced nothing.
     private IReadOnlyList<(string Label, string Text)> OvFullNarrativeFor(string displayName)
     {
-        var candidates = _response?.CandidateLandscape?.Candidates;
-        if (candidates is null || string.IsNullOrWhiteSpace(displayName)) return [];
-        var match = candidates.FirstOrDefault(c =>
-            string.Equals(c.CandidateName, displayName, StringComparison.OrdinalIgnoreCase)
-            || c.CandidateName.Contains(displayName, StringComparison.OrdinalIgnoreCase)
-            || displayName.Contains(c.CandidateName, StringComparison.OrdinalIgnoreCase));
+        var match = OvCandidateMatch(displayName);
         var fa = match?.FullAnalysis;
         if (fa is null) return [];
         var sections = new List<(string Label, string Text)>();
