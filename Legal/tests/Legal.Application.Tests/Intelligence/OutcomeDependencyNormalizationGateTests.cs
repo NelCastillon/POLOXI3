@@ -242,4 +242,50 @@ public sealed class OutcomeDependencyNormalizationGateTests
         Assert.DoesNotContain("C2", gate.Plan.EligibleCandidateSemanticIds);
         Assert.DoesNotContain(gate.NormalizedProposal, c => c.SemanticCandidateId == "C2");
     }
+
+    // ── Evidence/record/imaging artifact firewall (§3): facts and documentary artifacts are NEVER
+    //    tribunal-reachable dispositions. They classify as DependencyProposition so the deterministic
+    //    outcome firewall withholds them from the competition basis, regardless of gate mode. ──────────
+    [Theory]
+    [InlineData("Lumbar MRI")]
+    [InlineData("Perioperative records")]
+    [InlineData("Operative report")]
+    [InlineData("Discharge summary")]
+    [InlineData("Radiograph of the cervical spine")]
+    [InlineData("Billing ledger")]
+    [InlineData("Deposition transcript")]
+    [InlineData("Reported lumbar disc herniation")]
+    [InlineData("Rotator cuff tear")]
+    [InlineData("Cervical strain")]
+    [InlineData("Medical bill statement")]
+    [InlineData("Treatment photo log")]
+    public void ClassifyCandidate_EvidenceAndRecordArtifacts_AreDependencyPropositions_NotOutcomes(string artifact) =>
+        Assert.Equal(
+            LegalDecisionService.CandidateSemanticRole.DependencyProposition,
+            LegalDecisionService.ClassifyCandidate(artifact, null));
+
+    [Theory]
+    [InlineData("Confidential negotiated settlement")]
+    [InlineData("Defense verdict after trial")]
+    [InlineData("Grant the motion for summary judgment")]
+    [InlineData("Dismiss the complaint with prejudice")]
+    [InlineData("Enter a temporary restraining order")]
+    [InlineData("Resolve the dialog over disputed terms")]
+    public void ClassifyCandidate_GenuineDispositions_RemainCompetingOutcomes(string disposition)
+    {
+        var role = LegalDecisionService.ClassifyCandidate(disposition, null);
+        Assert.True(
+            role is LegalDecisionService.CandidateSemanticRole.SubstantiveResolution
+                or LegalDecisionService.CandidateSemanticRole.ConditionalResolution
+                or LegalDecisionService.CandidateSemanticRole.ProceduralConsequence,
+            $"Expected a competing-disposition role for '{disposition}', got {role}.");
+    }
+
+    [Fact]
+    public void ClassifyCandidate_DispositionMentioningFacts_IsPreservedAsResolution() =>
+        // A genuine disposition that references a fact (an injury artifact word) must survive because the
+        // disposition signal overrides the artifact keyword detector.
+        Assert.NotEqual(
+            LegalDecisionService.CandidateSemanticRole.DependencyProposition,
+            LegalDecisionService.ClassifyCandidate("Deny the motion because the injury claim is time-barred", null));
 }

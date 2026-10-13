@@ -76,9 +76,6 @@ public sealed class NextBestActionService(
     private static readonly HashSet<string> ResolvedFactStates =
         new(StringComparer.OrdinalIgnoreCase) { LegalFactStates.Established, LegalFactStates.Invalidated };
 
-    // Decision-materiality floor: below this, a proposition is not worth an action even if unresolved.
-    private const decimal DecisionMaterialityFloor = 0.20m;
-
     // Generic, non-targeted action phrasing that is never admissible — an action must seek SPECIFIC
     // information tied to an unresolved decision-structure condition, not a catch-all like "do discovery".
     private static readonly string[] GenericActionMarkers =
@@ -161,7 +158,7 @@ public sealed class NextBestActionService(
     {
         var requirements = new List<ResolutionRequirement>();
         foreach (var p in scored.Propositions
-                     .Where(p => IsUnresolved(p.FactStateCode) && p.DecisionImpact >= DecisionMaterialityFloor)
+                     .Where(p => IsUnresolved(p.FactStateCode))
                      .OrderByDescending(p => p.InformationValue))
         {
             propositionById.TryGetValue(p.PropositionId, out var graphProp);

@@ -15,7 +15,7 @@ namespace Legal.Application;
 // Isolated clone of the POLOXI search orchestration used by /intelligence/search/poloxi_wide.
 // Intentionally duplicates IntelligenceService.SearchWithPoloxiAsync so this "Wide" path can be
 // tweaked freely without changing /intelligence/search/poloxi behavior.
-public sealed partial class IntelligenceWide2Service(IIntelligenceRepository repository,IIntelligenceWide2Repository wideRepository,IAiProviderRouter aiProviderRouter,IExternalKnowledgeProvider externalKnowledgeProvider,ILegalRetriever legalRetriever,IPromptCatalog promptCatalog,IAdaptiveRetriever adaptiveRetriever,IAbvResolutionEngine abvEngine,ILegalDecisionRepository legalDecisionRepository,IErrorLogService errorLog,ILogger<IntelligenceWide2Service> logger,IWide2ProgressPublisher? progressPublisher=null,ILegalHierarchyExecutionRepository? hierarchyExecutionRepository=null,Features.Intelligence.Decision.Channels.IChannelContributionProjectionService? channelProjectionService=null,ILegalDecisionContractRepository? decisionContractRepository=null,Features.Intelligence.Decision.Channels.IDecisionChannelOrchestrator? channelOrchestrator=null,Abstractions.Intelligence.ILegalAuthorityOrchestrationService? legalAuthorityOrchestration=null,Abstractions.Intelligence.IDecisionRevisionResolver? decisionRevisionResolver=null,Abstractions.Persistence.IChannelContributionRepository? channelContributionRepository=null):IIntelligenceWide2Service
+public sealed partial class IntelligenceWide2Service(IIntelligenceRepository repository,IIntelligenceWide2Repository wideRepository,IAiProviderRouter aiProviderRouter,IExternalKnowledgeProvider externalKnowledgeProvider,ILegalRetriever legalRetriever,IPromptCatalog promptCatalog,IAdaptiveRetriever adaptiveRetriever,IAbvResolutionEngine abvEngine,ILegalDecisionRepository legalDecisionRepository,IErrorLogService errorLog,ILegalDocumentCorpusRepository documentCorpusRepository,ILogger<IntelligenceWide2Service> logger,IWide2ProgressPublisher? progressPublisher=null,ILegalHierarchyExecutionRepository? hierarchyExecutionRepository=null,Features.Intelligence.Decision.Channels.IChannelContributionProjectionService? channelProjectionService=null,ILegalDecisionContractRepository? decisionContractRepository=null,Features.Intelligence.Decision.Channels.IDecisionChannelOrchestrator? channelOrchestrator=null,Abstractions.Intelligence.ILegalAuthorityOrchestrationService? legalAuthorityOrchestration=null,Abstractions.Intelligence.IDecisionRevisionResolver? decisionRevisionResolver=null,Abstractions.Persistence.IChannelContributionRepository? channelContributionRepository=null):IIntelligenceWide2Service
 {
     // Real-time cockpit KPI feed. Optional so hosts without SignalR (or tests) run unchanged. Publishing
     // is fully fail-soft: a broken/absent transport must never affect grounding, scoring, or readiness.
@@ -1044,6 +1044,31 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 }
                 catch(Exception)when(!cancellationToken.IsCancellationRequested){/* reuse is an optimization; never blocks the run */}
             }
+            // ── Matter-corpus evidence merge (fail-soft) ─────────────────────────────────────────────
+            // Wide2 already grounds the Matter Context Snapshot as enterprise evidence, but the uploaded-
+            // document evidence graph (verified fact-propositions surfaced in the Evidence tab) lives in a
+            // SEPARATE data plane and never reached scoring. Project those propositions into attributed
+            // snippets and merge them so BOTH sources vote through the SAME scoring chain below. URL de-dup
+            // prevents double-counting an authority already present in the external pool. Matter-scoped only.
+            if(request.MatterId is {} corpusMatterId)
+            {
+                try
+                {
+                    var evidenceGraph=await documentCorpusRepository.GetMatterEvidenceGraphAsync(request.TenantId,corpusMatterId,cancellationToken);
+                    var corpusSnippets=WideCorpusEvidenceProjection.Project(evidenceGraph,survivorsFinal,DateTime.UtcNow);
+                    if(corpusSnippets.Count>0)
+                    {
+                        var existingUrls=externalKnowledge.Select(snippet=>snippet.Url).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                        var freshCorpus=corpusSnippets.Where(snippet=>!existingUrls.Contains(snippet.Url)).ToArray();
+                        if(freshCorpus.Length>0)
+                        {
+                            externalKnowledge=externalKnowledge.Concat(freshCorpus).ToArray();
+                            logger.LogInformation("LEGAL-TRACE stage=corpus-merge matterId={MatterId} propositions={Propositions} projectedSnippets={Projected} merged={Merged}",corpusMatterId,evidenceGraph.Propositions?.Count??0,corpusSnippets.Count,freshCorpus.Length);
+                        }
+                    }
+                }
+                catch(Exception ex)when(!cancellationToken.IsCancellationRequested){logger.LogWarning(ex,"LEGAL-TRACE stage=corpus-merge matterId={MatterId} failed; continuing with external-only evidence",corpusMatterId);}
+            }
             // V2.1 three-score model: Interpretation Prior (LLM), Evidence Support (deterministic, from
             // enterprise evidence and matched external snippets), POLOXI Confidence (weighted combination).
             // Matter-fact grounding: Wide2 is knowledge-only, so the enterprise `evidence` pool was always
@@ -1560,6 +1585,31 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 else
                 {
                     _normalizationGateStatus="SKIPPED (no projectable dispositions or fail-soft skip)";
+                }
+            }
+            // Deterministic outcome firewall: on a legal EVALUATE run the competition basis must contain ONLY
+            // candidates that name a disposition the tribunal can reach. When the normalization gate is in
+            // SHADOW/DISABLED mode, is SKIPPED, or yields a PLAN_INVALID result, the raw harvested
+            // candidateUniverse flows through unchanged - which is how evidence/record/imaging artifacts
+            // (e.g. "Lumbar MRI", "Perioperative records") were reaching the Competing Outcome cards with 0%
+            // support. Re-classify each basis name with the SHARED gate classifier and drop any whose semantic
+            // role is not a competing disposition (substantive/conditional resolution or terminating procedural
+            // consequence). Canonical DB-backed pack outcomes are always preserved (they are appended just
+            // below and whitelisted here), and genuine noun-form dispositions survive because the classifier
+            // defaults unknown legal text to SubstantiveResolution. Fail-soft: never empties a non-empty basis.
+            if(IsLegalDecisionEvaluationRun)
+            {
+                var canonicalOutcomeNames=_canonicalOutcomeCandidates is{Count:>0}
+                    ? _canonicalOutcomeCandidates.Select(o=>o.Name).Where(n=>!string.IsNullOrWhiteSpace(n)).ToHashSet(StringComparer.OrdinalIgnoreCase)
+                    : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var filteredBasis=competitionBasis
+                    .Where(name=>canonicalOutcomeNames.Contains(name)||IsEligibleDispositionName(name))
+                    .ToArray();
+                if(filteredBasis.Length>0&&filteredBasis.Length<competitionBasis.Count)
+                {
+                    var removed=competitionBasis.Where(n=>!filteredBasis.Contains(n,StringComparer.OrdinalIgnoreCase)).ToArray();
+                    logger.LogInformation("Wide2 outcome firewall for matter {MatterId}: withheld {Count} non-disposition artifact(s) from the competition basis ({Names}). These remain available as dependency/evidence inputs.",_matterContext?.MatterId,removed.Length,string.Join(", ",removed));
+                    competitionBasis=filteredBasis;
                 }
             }
             var effectiveContractCount=EffectiveRankingContractCount(configuration,queryContract,rankingCompletionRequired);
@@ -2435,7 +2485,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     // Deterministic projection of the composer proposal into the presentation DTO. Preserves candidate
     // identity (only candidate names matching the authoritative set are kept) and drops the whole result
     // when no usable narrative survives, so the standard POLOXI cards are shown instead of a partial hybrid.
-    private static WideCandidateLandscapeDto? MapCandidateLandscape(CandidateLandscapeProposal? proposal,string executionId,IReadOnlyCollection<WideCandidateDto> candidates,string presentationState,IReadOnlyDictionary<string,string> canonicalOutcomeMap)
+    private static WideCandidateLandscapeDto? MapCandidateLandscape(CandidateLandscapeProposal? proposal,string executionId,IReadOnlyCollection<WideCandidateDto> candidates,string presentationState,IReadOnlyDictionary<string,DecisionDomainPackOutcomeCandidateDto> canonicalOutcomeMap)
     {
         if(proposal?.Candidates is null||proposal.Candidates.Count==0)return null;
         var known=candidates.ToDictionary(c=>c.DisplayName.Trim(),StringComparer.OrdinalIgnoreCase);
@@ -2493,18 +2543,18 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     // normalization, or the C5/C9 verification gates. Everything is fail-soft: an absent pack, an empty
     // map, or invalid codes simply yield no sub-line, and the outcome card is unchanged.
 
-    // Builds a case-insensitive OutcomeCode -> canonical Name lookup from the resolved DB-backed pack.
-    // Only populated in UseDomainPack mode with a resolved pack; empty otherwise so the OFF path and
-    // non-pack runs carry no mapping.
-    private IReadOnlyDictionary<string,string> ResolveCanonicalOutcomeMap()
+    // Builds a case-insensitive OutcomeCode -> canonical OutcomeCandidate lookup from the resolved DB-backed
+    // pack (carrying Name + RoleCode + RequiresVerification for lifecycle labeling). Only populated in
+    // UseDomainPack mode with a resolved pack; empty otherwise so the OFF path and non-pack runs carry no mapping.
+    private IReadOnlyDictionary<string,DecisionDomainPackOutcomeCandidateDto> ResolveCanonicalOutcomeMap()
     {
         if(!_useDomainPack||_canonicalOutcomeCandidates is not{Count:>0})
-            return new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
-        var map=new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
+            return new Dictionary<string,DecisionDomainPackOutcomeCandidateDto>(StringComparer.OrdinalIgnoreCase);
+        var map=new Dictionary<string,DecisionDomainPackOutcomeCandidateDto>(StringComparer.OrdinalIgnoreCase);
         foreach(var outcome in _canonicalOutcomeCandidates)
         {
             if(string.IsNullOrWhiteSpace(outcome.OutcomeCode)||string.IsNullOrWhiteSpace(outcome.Name))continue;
-            map[outcome.OutcomeCode.Trim()]=outcome.Name.Trim();
+            map[outcome.OutcomeCode.Trim()]=outcome;
         }
         return map;
     }
@@ -2534,7 +2584,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     // lookup: keeps only codes that exist in the pack (dedup, order-preserving), drops anything invented
     // or blank, and projects to (code, name) pairs. Empty when nothing valid maps — the outcome card then
     // shows the muted "No canonical Domain Pack outcome" line.
-    private static IReadOnlyCollection<WideCandidateOutcomeMappingDto> ResolveMappedOutcomes(IReadOnlyList<string>? proposedCodes,IReadOnlyDictionary<string,string> canonicalOutcomeMap)
+    private static IReadOnlyCollection<WideCandidateOutcomeMappingDto> ResolveMappedOutcomes(IReadOnlyList<string>? proposedCodes,IReadOnlyDictionary<string,DecisionDomainPackOutcomeCandidateDto> canonicalOutcomeMap)
     {
         if(proposedCodes is null||proposedCodes.Count==0||canonicalOutcomeMap.Count==0)return [];
         var seen=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -2543,9 +2593,12 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         {
             if(string.IsNullOrWhiteSpace(raw))continue;
             var code=raw.Trim();
-            if(!canonicalOutcomeMap.TryGetValue(code,out var name))continue;
+            if(!canonicalOutcomeMap.TryGetValue(code,out var outcome))continue;
             if(!seen.Add(code))continue;
-            resolved.Add(new WideCandidateOutcomeMappingDto(code,name));
+            // Carry the authoritative DB-backed lifecycle (RoleCode + RequiresVerification) so the Web card
+            // can lead with "Prospective pathway" vs "Historical status \u2014 verification required" without
+            // re-deriving the distinction. Advisory/presentation only; never affects scoring or eligibility.
+            resolved.Add(new WideCandidateOutcomeMappingDto(code,outcome.Name,string.IsNullOrWhiteSpace(outcome.RoleCode)?null:outcome.RoleCode.Trim(),outcome.RequiresVerification));
         }
         return resolved;
     }
@@ -2933,6 +2986,28 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     // seed that opens with (or contains) a recognized disposition verb. Only active for a matter-backed
     // EVALUATE run; otherwise this is a no-op and the standard validity gate stays authoritative. An
     // admitted seed still has to earn evidence support at the unchanged admission gates before it can win.
+    // Deterministic outcome firewall helper: a basis name is an eligible competing disposition only when the
+    // SHARED gate classifier resolves it to a competing resolution role (substantive/conditional resolution or
+    // a terminating procedural consequence). Evidence/record/imaging/fact artifacts classify as
+    // DependencyProposition/BaselineState/ProceduralPathway and are withheld from the competition basis. This
+    // reuses the exact classification the normalization gate applies, so there is a single source of truth for
+    // what counts as a tribunal-reachable outcome. Fail-soft: any exception admits the name.
+    private static bool IsEligibleDispositionName(string name)
+    {
+        if(string.IsNullOrWhiteSpace(name))return false;
+        try
+        {
+            var role=LegalDecisionService.ClassifyCandidate(name,null);
+            return role is LegalDecisionService.CandidateSemanticRole.SubstantiveResolution
+                or LegalDecisionService.CandidateSemanticRole.ConditionalResolution
+                or LegalDecisionService.CandidateSemanticRole.ProceduralConsequence;
+        }
+        catch
+        {
+            return true;
+        }
+    }
+
     private bool IsDecisionOutcomeCandidate(string name)
     {
         if(_matterContext is null||_decisionIntent.CurrentOutcomeIsHardConstraint)return false;
@@ -6967,7 +7042,10 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                     // judgment instead of replacing it — the metric grounds the score while the LLM
                     // signal prevents min-max normalization artifacts (0%/100%) from dominating.
                     var llmScore=Math.Clamp(score.EvidenceScore,0,1);
-                    var clamped=metricScores.TryGetValue(resolvedName,out var candidateMetrics)&&candidateMetrics.TryGetValue(branch.WideBranchId,out var metricScore)?Math.Clamp(0.5m*metricScore+0.5m*llmScore,0,1):llmScore;
+                    var priorScore=metricScores.TryGetValue(resolvedName,out var candidateMetrics)&&candidateMetrics.TryGetValue(branch.WideBranchId,out var metricScore)?Math.Clamp(0.5m*metricScore+0.5m*llmScore,0,1):llmScore;
+                    // Evidence-gated Cs: the (metric-blended) model prior shrunk toward the branch's measured
+                    // evidence support in proportion to admitted-evidence volume. No admitted evidence → prior.
+                    var clamped=WideCandidateBranchScoring.GatedCs(priorScore,branch.EvidenceSupport,branch.EvidenceCount);
                     if(branch.ParentWideBranchId is not null&&childrenByParent.Contains(branch.ParentWideBranchId.Value)&&!scoringBranchIds.Contains(branch.WideBranchId))
                     {
                         var list=childScoresByParent.TryGetValue(branch.ParentWideBranchId.Value,out var existing)?existing:childScoresByParent[branch.ParentWideBranchId.Value]=[];

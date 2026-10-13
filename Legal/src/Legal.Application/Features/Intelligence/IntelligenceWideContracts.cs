@@ -752,7 +752,12 @@ public sealed record WideCandidateNarrativeDto(
 
 // One resolved advisory Domain Pack outcome mapping: the canonical OutcomeCode plus its DB-backed Name.
 // Rendered as a subordinate line under the LLM outcome card. Advisory/presentation only.
-public sealed record WideCandidateOutcomeMappingDto(string OutcomeCode, string Name);
+// RoleCode (PATHWAY = prospective resolution; ASSERTED_HISTORICAL = possibly-completed status that must be
+// verified before it can be treated as an established resolution) and RequiresVerification carry the
+// authoritative DB-backed lifecycle so the card can lead with "Prospective pathway" vs "Historical status
+// — verification required" without the Web layer inventing the distinction. Both are optional and default
+// to a prospective interpretation so non-pack/legacy mappings are byte-for-byte unchanged.
+public sealed record WideCandidateOutcomeMappingDto(string OutcomeCode, string Name, string? RoleCode = null, bool RequiresVerification = false);
 
 // A single decision-material driver for a candidate (label + plain-language reason it matters).
 public sealed record WideCandidateDriverDto(string Label,string? Reason);

@@ -1003,13 +1003,13 @@
                                             }
                                             @if (InterpretiveItemPoloxiScore(result, item) is { } pcs)
                                             {
-                                                <span class="um-badge um-badge-info" title="POLOXI Candidate × Branch score (Cs) for this candidate under this dimension.">@pcs.ToString("P0") POLOXI</span>
-                                            }
-                                            &mdash; @item.Detail
-                                        </p>
-                                    }
-                                    <div>
-                                        <span class="um-badge um-badge-neutral">INTERPRETIVE</span>
+                                                            <span class="um-badge um-badge-info" title="POLOXI Candidate × Branch Cs: the LLM prior shrunk toward measured branch evidence in proportion to admitted-evidence volume. With no admitted evidence it equals the LLM prior (not zero).">@pcs.ToString("P0") POLOXI</span>
+                                                        }
+                                                        &mdash; @item.Detail
+                                                    </p>
+                                                }
+                                                <div>
+                                                    <span class="um-badge um-badge-neutral">INTERPRETIVE</span>
                                         @if (result.DataVolatility == "TIME_SENSITIVE")
                                         {
                                             <span class="um-badge um-badge-warning" title="This result depends on facts that change over time; figures may be outdated."><i class="bi bi-clock-history"></i> TIME-SENSITIVE</span>
@@ -1052,13 +1052,13 @@
                                                     }
                                                     @if (InterpretiveItemPoloxiScore(result, item) is { } pcs)
                                                     {
-                                                        <span class="um-badge um-badge-info" title="POLOXI Candidate × Branch score (Cs) for this candidate under this dimension.">@pcs.ToString("P0") POLOXI</span>
-                                                    }
-                                                    &mdash; @item.Detail
-                                                </p>
-                                            }
-                                            <div>
-                                                <span class="um-badge um-badge-neutral" title="This interpretation path was demoted to dormant/secondary — retained for completeness, not driving the primary answer.">NOT PRIORITIZED</span>
+                                                                    <span class="um-badge um-badge-info" title="POLOXI Candidate × Branch Cs: the LLM prior shrunk toward measured branch evidence in proportion to admitted-evidence volume. With no admitted evidence it equals the LLM prior (not zero).">@pcs.ToString("P0") POLOXI</span>
+                                                                }
+                                                                &mdash; @item.Detail
+                                                            </p>
+                                                        }
+                                                        <div>
+                                                            <span class="um-badge um-badge-neutral" title="This interpretation path was demoted to dormant/secondary — retained for completeness, not driving the primary answer.">NOT PRIORITIZED</span>
                                                 <span class="um-badge um-badge-neutral">INTERPRETIVE</span>
                                                 @if (result.DataVolatility == "TIME_SENSITIVE")
                                                 {
@@ -1621,10 +1621,10 @@
                     }
 
                     <div class="cfa-popup-metrics">
-                        <div class="cfa-popup-metric"><span class="cfa-popup-metric-lbl">Key supporting factors</span><span class="cfa-popup-metric-val">@cfa.KeySupportingFactors</span></div>
-                        <div class="cfa-popup-metric"><span class="cfa-popup-metric-lbl">Critical dependencies</span><span class="cfa-popup-metric-val">@cfa.CriticalDependencies</span></div>
-                        <div class="cfa-popup-metric"><span class="cfa-popup-metric-lbl">Missing / unverified evidence</span><span class="cfa-popup-metric-val cfa-popup-metric-val--warn">@cfa.MissingEvidence</span></div>
-                        <div class="cfa-popup-metric"><span class="cfa-popup-metric-lbl">Main vulnerabilities</span><span class="cfa-popup-metric-val cfa-popup-metric-val--danger">@cfa.MainVulnerabilities</span></div>
+                        <div class="cfa-popup-metric"><span class="cfa-popup-metric-lbl">Relative support</span><span class="cfa-popup-metric-val">@cfa.SupportPct%</span></div>
+                        <div class="cfa-popup-metric"><span class="cfa-popup-metric-lbl">Evidence coverage</span><span class="cfa-popup-metric-val">@cfa.EvidenceCoveragePct%</span></div>
+                        <div class="cfa-popup-metric"><span class="cfa-popup-metric-lbl">Interpretive support</span><span class="cfa-popup-metric-val">@cfa.InterpretiveSupport</span></div>
+                        <div class="cfa-popup-metric"><span class="cfa-popup-metric-lbl">Branches scored</span><span class="cfa-popup-metric-val">@cfa.BranchWinCount</span></div>
                     </div>
 
                     @if (!string.IsNullOrWhiteSpace(cfa.EstimatedResolutionLabel) || !string.IsNullOrWhiteSpace(cfa.EstimatedCostBand))
@@ -7276,10 +7276,10 @@
                 "leader" => all.Where(o => o.IsLeader).ToList(),
                 "competing" => all.Where(o => !o.IsLeader).ToList(),
                 "evidence" => all.Where(o => o.Tags.Any(t => t.Label == "Evidence backed")).ToList(),
-                "supporting" => all.Where(o => o.KeySupportingFactors > 0).ToList(),
-                "dependencies" => all.Where(o => o.CriticalDependencies > 0).ToList(),
-                "missing" => all.Where(o => o.MissingEvidence > 0).ToList(),
-                "vulnerabilities" => all.Where(o => o.MainVulnerabilities > 0).ToList(),
+                "support" => all.Where(o => o.SupportPct > 0).ToList(),
+                "coverage" => all.Where(o => o.EvidenceCoveragePct > 0).ToList(),
+                "interpretive" => all.Where(o => o.InterpretiveSupport > 0).ToList(),
+                "branches" => all.Where(o => o.BranchWinCount > 0).ToList(),
                 _ => all is List<OvOutcome> list ? list : all.ToList(),
             };
         }
@@ -7294,6 +7294,11 @@
         }
         _ovKpiFilter = string.Equals(_ovKpiFilter, filter, StringComparison.Ordinal) ? null : filter;
     }
+
+    // Authoritative lifecycle subtitle for an outcome card. Label is the lawyer-facing line shown under the
+    // card title; Tone maps to the ov-tag/ov badge tones (info = prospective, warn = historical/verify-first);
+    // IsHistorical drives visual separation so a recorded status is never shown as a live competitor.
+    internal sealed record OvLifecycle(string Label, string Tone, bool IsHistorical);
 
     internal sealed record OvOutcome(
         int Index,
@@ -7334,6 +7339,28 @@
         // scored C card. Empty when the composer mapped nothing (rendered as a muted disclosure in pack mode).
         public IReadOnlyList<(string Code, string Name)> MappedOutcomes { get; init; } = [];
 
+        // Authoritative, DB-backed lifecycle for the card subtitle. Prospective pathways compete; historical
+        // (asserted / verification-required) statuses are relabeled "Historical status — verification required"
+        // and visually separated so a recorded status never appears to compete with prospective outcomes.
+        public OvLifecycle Lifecycle { get; init; } = new("Prospective pathway · Assessment pending", "info", false);
+
+        // ── Reliable per-outcome signals for the Overview metric tiles ──────────────────────────────
+        // These replace the legacy factor-graph counts (Key supporting factors / Critical dependencies /
+        // Missing evidence / Main vulnerabilities), which joined by candidate title and therefore read 0
+        // for the dynamic, LLM-proposed outcome set. Every value below is already persisted on this record
+        // from the live run (Candidate × Branch competition), so nothing is fabricated and nothing falls to 0
+        // merely because a title join missed.
+
+        // Evidence coverage expressed as a whole percentage (0..100) for the tile value.
+        public int EvidenceCoveragePct => (int)Math.Round((double)EvidenceCoverage * 100);
+
+        // Number of decision branches (Candidate × Branch dimensions) this outcome was scored against.
+        public int BranchWinCount => BranchScores.Count;
+
+        // Interpretive mentions that named this outcome (InterpretiveSupportCount is mapped onto the
+        // KeySupportingFactors slot by the builders). Kept as a named accessor for tile clarity.
+        public int InterpretiveSupport => KeySupportingFactors;
+
         // Deterministic text for the Overview card so it is NEVER blank: prefer the composed landscape
         // narrative, then the candidate Detail, then a derived viability/support summary built from the
         // persisted scores already on this record. Nothing is fabricated — every value comes from the run.
@@ -7345,8 +7372,8 @@
                 if (!string.IsNullOrWhiteSpace(Detail)) return Detail!;
                 var lead = IsLeader ? "Current leader" : "Competing outcome";
                 return $"{lead} with {SupportPct}% relative support and {ViabilityLabel.ToLowerInvariant()}. "
-                    + $"{KeySupportingFactors} supporting factor(s), {CriticalDependencies} dependency(ies), "
-                    + $"{MissingEvidence} with missing or unverified evidence, {MainVulnerabilities} vulnerability(ies).";
+                    + $"{EvidenceCoveragePct}% evidence coverage, {InterpretiveSupport} interpretive mention(s), "
+                    + $"scored across {BranchWinCount} decision branch(es).";
             }
         }
 
@@ -7395,6 +7422,36 @@
             .Where(m => !string.IsNullOrWhiteSpace(m.OutcomeCode) && !string.IsNullOrWhiteSpace(m.Name))
             .Select(m => (m.OutcomeCode, m.Name))
             .ToArray();
+    }
+
+    // Resolves the AUTHORITATIVE, DB-backed lifecycle label for an outcome card from the validated,
+    // persisted assessment (the saved candidate set), not from a raw LLM guess. The canonical mapped pack
+    // outcome carries RoleCode (PATHWAY = prospective resolution; ASSERTED_HISTORICAL = a possibly-completed
+    // historical status) and RequiresVerification. A historical/verification-required outcome is surfaced as
+    // "Historical status — verification required" so it is visibly SEPARATED from prospective competitors
+    // rather than appearing to compete with them. When no canonical mapping exists the card falls back to the
+    // shared classifier role so a pure-LLM outcome still gets a sensible, non-fabricated subtitle. Fail-soft:
+    // a blank display name yields the default prospective, assessment-pending subtitle.
+    private OvLifecycle OvLifecycleFor(string displayName)
+    {
+        var defaultLifecycle = new OvLifecycle("Prospective pathway · Assessment pending", "info", false);
+        var candidates = _response?.CandidateLandscape?.Candidates;
+        if (candidates is null || string.IsNullOrWhiteSpace(displayName)) return defaultLifecycle;
+        var match = candidates.FirstOrDefault(c =>
+            string.Equals(c.CandidateName, displayName, StringComparison.OrdinalIgnoreCase)
+            || c.CandidateName.Contains(displayName, StringComparison.OrdinalIgnoreCase)
+            || displayName.Contains(c.CandidateName, StringComparison.OrdinalIgnoreCase));
+        var mapped = match?.MappedOutcomes;
+        if (mapped is null || mapped.Count == 0) return defaultLifecycle;
+        // A single mapped outcome whose authoritative role is historical/asserted OR that requires
+        // verification is a "Historical status" card. If ANY mapped outcome is historical, the card is
+        // treated as historical (verify-first) so a recorded status never masquerades as a live competitor.
+        var isHistorical = mapped.Any(m =>
+            m.RequiresVerification
+            || string.Equals(m.RoleCode, "ASSERTED_HISTORICAL", StringComparison.OrdinalIgnoreCase));
+        return isHistorical
+            ? new OvLifecycle("Historical status — verification required", "warn", true)
+            : defaultLifecycle;
     }
 
     // Resolves the deep, long-form candidate-landscape analysis for a candidate display name, composed in
@@ -7526,7 +7583,7 @@
                         null,
                         null,
                         [])
-                        { Narrative = OvNarrativeFor(title), FullNarrative = OvFullNarrativeFor(title), MappedOutcomes = OvMappedOutcomesFor(title) });
+                        { Narrative = OvNarrativeFor(title), FullNarrative = OvFullNarrativeFor(title), MappedOutcomes = OvMappedOutcomesFor(title), Lifecycle = OvLifecycleFor(title) });
                     if (proposed.Count >= 10) break;
                 }
                 return proposed;
@@ -7540,6 +7597,17 @@
             // deliberately small so a genuinely-supported field is never suppressed.
             const decimal OvCredibleSupportFloor = 0.05m;
             var hasCredibleSupport = scoreSum >= OvCredibleSupportFloor;
+            // Branch-evidence fallback: CompositeScore = Min(composite, CertaintyCeiling), and the certainty
+            // ceiling = min(legal, fact, evidence, authority). On an unverified / no-admitted-evidence matter
+            // the evidence (and often verification) dimension is ~0, which clamps EVERY candidate composite to
+            // ~0 even though the Candidate × Branch dimensions carry real EvidenceScores. In that case the
+            // composite-relative support collapses to 0% for the whole field, which is misleading. When the
+            // composite field is not credible but the branches DO carry evidence, derive support from the mean
+            // branch EvidenceScore actually present on each candidate (a real, traceable signal) instead of 0.
+            decimal MeanBranchEvidence(WideCandidateDto c) =>
+                c.BranchScores.Count > 0 ? c.BranchScores.Average(b => b.EvidenceScore) : 0m;
+            var branchEvidenceSum = ranked.Sum(MeanBranchEvidence);
+            var useBranchFallback = !hasCredibleSupport && branchEvidenceSum >= OvCredibleSupportFloor;
             var summaries = DfiCandidateDependencySummaries
                 .ToDictionary(s => s.CandidateTitle, s => s, StringComparer.OrdinalIgnoreCase);
             var outcomes = new List<OvOutcome>();
@@ -7551,7 +7619,12 @@
                 var established = sum?.Established ?? 0;
                 var missing = total - established;
                 var vulns = sum?.Required.Count(d => string.Equals(d.Tone, "danger", StringComparison.OrdinalIgnoreCase)) ?? 0;
-                var supportPct = (hasCredibleSupport && scoreSum > 0) ? (int)Math.Round((double)(c.CompositeScore / scoreSum) * 100) : 0;
+                var supportPct =
+                    (hasCredibleSupport && scoreSum > 0)
+                        ? (int)Math.Round((double)(c.CompositeScore / scoreSum) * 100)
+                        : (useBranchFallback && branchEvidenceSum > 0)
+                            ? (int)Math.Round((double)(MeanBranchEvidence(c) / branchEvidenceSum) * 100)
+                            : 0;
 
                 var tier = c.SupportTierCode;
                 var viabilityLabel = tier switch
@@ -7598,7 +7671,7 @@
                     c.EstimatedResolutionLabel,
                     c.EstimatedCostBand,
                     c.BranchScores.Take(8).ToArray())
-                    { Narrative = OvNarrativeFor(c.DisplayName), FullNarrative = OvFullNarrativeFor(c.DisplayName), EvidenceCoverage = c.EvidenceCoverage, MappedOutcomes = OvMappedOutcomesFor(c.DisplayName) });
+                    { Narrative = OvNarrativeFor(c.DisplayName), FullNarrative = OvFullNarrativeFor(c.DisplayName), EvidenceCoverage = c.EvidenceCoverage, MappedOutcomes = OvMappedOutcomesFor(c.DisplayName), Lifecycle = OvLifecycleFor(c.DisplayName) });
             }
             return outcomes;
         }
@@ -8395,18 +8468,24 @@
     private decimal? InterpretiveItemLlmScore(WideInterpretiveResultItemDto item)
         => item.Score is { } llm ? Math.Clamp(llm, 0m, 1m) : null;
 
-    // POLOXI score: the computed Candidate × Branch Cs for this item (cell, else candidate composite).
+    // POLOXI Candidate × Branch Cs. The authoritative gated Cs is now computed in the pipeline
+    // (WideCandidateBranchScoring.GatedCs) and PERSISTED on each candidate's branch cell, so the chip
+    // simply reads that cell to stay consistent with ranking/ABV/narratives — no re-gating here (that
+    // would double-apply the formula). When the item does not resolve to a candidate cell, fall back to
+    // the item's own LLM prior, then the candidate composite, so the chip is never a misleading 0%.
     private decimal? InterpretiveItemPoloxiScore(WideInterpretiveResultDto result, WideInterpretiveResultItemDto item)
     {
         var candidate = _response?.Candidates
             .FirstOrDefault(c => string.Equals(c.DisplayName?.Trim(), item.Name?.Trim(), StringComparison.OrdinalIgnoreCase));
-        if (candidate is null)
-            return null;
-        var cell = candidate.BranchScores
+        var cell = candidate?.BranchScores
             .FirstOrDefault(b => string.Equals(b.BranchDisplayName?.Trim(), result.BranchDisplayName?.Trim(), StringComparison.OrdinalIgnoreCase));
-        return cell is not null
-            ? Math.Clamp(cell.EvidenceScore, 0m, 1m)
-            : Math.Clamp(candidate.CompositeScore, 0m, 1m);
+        if (cell is not null)
+            return Math.Clamp(cell.EvidenceScore, 0m, 1m);
+
+        if (item.Score is { } llm)
+            return Math.Clamp(llm, 0m, 1m);
+
+        return candidate is not null ? Math.Clamp(candidate.CompositeScore, 0m, 1m) : null;
     }
     internal IReadOnlyCollection<WideBranchDto> EliminatedBranches => _response?.Branches.Where(x => x.IsEliminated).ToArray() ?? [];
     internal IEnumerable<IGrouping<int, WideBranchDto>> BranchLevels => (_response?.Branches ?? []).OrderBy(x => x.SortOrder).GroupBy(x => x.LevelNumber).OrderBy(group => group.Key);

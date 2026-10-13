@@ -337,6 +337,30 @@ public sealed partial class LegalDecisionService
             return CandidateSemanticRole.ConditionalResolution;
         if (ContainsAny(text, "dependency", "requires proof", "element of", "precondition"))
             return CandidateSemanticRole.DependencyProposition;
+        // Factual / clinical / evidentiary descriptions are NOT dispositions the tribunal can reach —
+        // they are supporting fact propositions (injuries, diagnoses, medical findings, reported
+        // conditions, documentary evidence). They must never enter authoritative outcome competition;
+        // a reported injury is evidence about the claim, not a resolution of the motion/claim. Classify
+        // them as DependencyProposition so they are preserved for provenance but withheld from competition.
+        if (!ContainsDispositionSignal(text) && (ContainsAny(text,
+                "reported", "diagnos", "injury", "injuries", "fracture", "sprain",
+                "contusion", "laceration", "herniat", "rupture", "lesion", "symptom", "condition",
+                "mri", "x-ray", "xray", "ct scan", "imaging", "radiograph", "clinical finding",
+                "medical finding", "examination finding", "pathology", "treatment", "surgery",
+                "diagnosis", "prognosis", "impairment",
+                // Documentary / records / report artifacts are evidence about the claim, not
+                // dispositions of it. A "Perioperative records" or "operative report" entry names
+                // a source document, so it is withheld from competition the same way clinical
+                // findings are (unless the text also carries an explicit disposition signal).
+                "record", "records", "report", "reports", "documentation", "chart", "progress note",
+                "operative", "perioperative", "discharge summary", "billing", "invoice",
+                "receipt", "statement", "ledger", "photograph", "deposition transcript",
+                "affidavit", "exhibit", "intake form")
+            // Short/embeddable tokens are matched as WHOLE WORDS so a genuine legal remedy such as a
+            // "restraining order" (which contains the substring "strain") or terms like "dialog"/"catalog"
+            // ("log") and "billable" ("bill") are not misread as clinical/evidentiary artifacts.
+            || ContainsWholeWord(text, "tear", "strain", "bill", "photo", "log")))
+            return CandidateSemanticRole.DependencyProposition;
         return CandidateSemanticRole.SubstantiveResolution;
     }
 
@@ -464,6 +488,30 @@ public sealed partial class LegalDecisionService
         if (ContainsAny(t, "procedure", "procedural", "filing", "deadline", "service", "jurisdiction"))
             return DependencyCategory.Procedural;
         return DependencyCategory.Factual;
+    }
+
+    // True when the text carries a genuine legal-disposition signal (a resolution the tribunal can
+    // reach or an action the party can take). Guards the fact-description classifier so a real
+    // disposition that merely mentions an injury (e.g. "Deny the motion because the injury is
+    // time-barred") is NOT demoted to a non-competing dependency proposition.
+    private static bool ContainsDispositionSignal(string text) =>
+        ContainsAny(text,
+            "grant", "deny", "dismiss", "settle", "settlement", "judgment", "verdict", "award",
+            "sustain", "overrul", "uphold", "vacate", "remand", "nonsuit",
+            "non-suit", "summary judgment", "default judgment", "proceed to", "file suit",
+            "accept", "reject", "pursue", "withdraw", "compromise", "resolve", "adjudicat",
+            "motion granted", "motion denied", "coverage applies", "coverage denied", "liable",
+            "not liable", "enforce", "rescind")
+        // "bar"/"barred" must match as WHOLE WORDS so a clinical term like "Lumbar" (which contains the
+        // substring "bar") is not misread as a procedural-bar disposition signal.
+        || ContainsWholeWord(text, "bar", "barred");
+
+    private static bool ContainsWholeWord(string text, params string[] needles)
+    {
+        foreach (var n in needles)
+            if (System.Text.RegularExpressions.Regex.IsMatch(text, $@"\b{System.Text.RegularExpressions.Regex.Escape(n)}\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                return true;
+        return false;
     }
 
     private static bool ContainsAny(string text, params string[] needles)

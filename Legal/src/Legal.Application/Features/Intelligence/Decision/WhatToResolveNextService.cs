@@ -81,9 +81,6 @@ public sealed class WhatToResolveNextService(
     private static readonly HashSet<string> ResolvedFactStates =
         new(StringComparer.OrdinalIgnoreCase) { LegalFactStates.Established, LegalFactStates.Invalidated };
 
-    // Decision-materiality floor: below this a proposition is not worth surfacing as a resolution target.
-    private const decimal DecisionMaterialityFloor = 0.20m;
-
     public async Task<WhatToResolveNextResult> GetAsync(
         Guid tenantId,
         Guid matterId,
@@ -127,8 +124,10 @@ public sealed class WhatToResolveNextService(
         // Existing LegalADV normalization (same projection NBA uses). Not a new formula.
         var maxIv = Math.Max(0.001m, scored.Propositions.Max(p => p.InformationValue));
 
+        // Surface EVERY unresolved proposition (highest information value first). No materiality floor is
+        // applied so the cockpit lists the full resolution frontier rather than only decision-material items.
         var targets = scored.Propositions
-            .Where(p => IsUnresolved(p.FactStateCode) && p.DecisionImpact >= DecisionMaterialityFloor)
+            .Where(p => IsUnresolved(p.FactStateCode))
             .OrderByDescending(p => p.InformationValue)
             .Select(p => MapTarget(p, propositionById, evidenceById, maxIv, matter, pack))
             .ToArray();

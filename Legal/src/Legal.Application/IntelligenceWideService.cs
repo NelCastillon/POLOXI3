@@ -14,7 +14,7 @@ namespace Legal.Application;
 // Isolated clone of the POLOXI search orchestration used by /intelligence/search/poloxi_wide.
 // Intentionally duplicates IntelligenceService.SearchWithPoloxiAsync so this "Wide" path can be
 // tweaked freely without changing /intelligence/search/poloxi behavior.
-public sealed partial class IntelligenceWideService(IIntelligenceRepository repository,IIntelligenceWideRepository wideRepository,IAiProviderRouter aiProviderRouter,IExternalKnowledgeProvider externalKnowledgeProvider,ILegalRetriever legalRetriever,IPromptCatalog promptCatalog,IAdaptiveRetriever adaptiveRetriever,IAbvResolutionEngine abvEngine,ILogger<IntelligenceWideService> logger):IIntelligenceWideService
+public sealed partial class IntelligenceWideService(IIntelligenceRepository repository,IIntelligenceWideRepository wideRepository,IAiProviderRouter aiProviderRouter,IExternalKnowledgeProvider externalKnowledgeProvider,ILegalRetriever legalRetriever,IPromptCatalog promptCatalog,IAdaptiveRetriever adaptiveRetriever,IAbvResolutionEngine abvEngine,ILegalDocumentCorpusRepository documentCorpusRepository,ILogger<IntelligenceWideService> logger):IIntelligenceWideService
 {
     private const int WideUserPromptBudget=48000;
     // Safe ceiling for the combined system+user prompt sent to a governed AI call. It sits below the
@@ -770,6 +770,32 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
                     }
                 }
                 catch(Exception)when(!cancellationToken.IsCancellationRequested){/* reuse is an optimization; never blocks the run */}
+            }
+            // ── Matter-corpus evidence merge (fail-soft) ─────────────────────────────────────────────
+            // Verified uploaded-document propositions live in a SEPARATE data plane from external search
+            // snippets, so a matter with strong corpus evidence could still score every Decision Outcome
+            // at 0%. Project the matter evidence graph's propositions into attributed snippets and merge
+            // them so BOTH sources vote through the SAME scoring chain below (ComputeEvidenceSupport /
+            // CountAdmittedExternalEvidence). De-duplicated by Url against external snippets so an
+            // authority present in both planes is never double-counted. Only runs for matter-scoped runs.
+            if(request.MatterId is {} corpusMatterId)
+            {
+                try
+                {
+                    var evidenceGraph=await documentCorpusRepository.GetMatterEvidenceGraphAsync(request.TenantId,corpusMatterId,cancellationToken);
+                    var corpusSnippets=WideCorpusEvidenceProjection.Project(evidenceGraph,survivorsFinal,DateTime.UtcNow);
+                    if(corpusSnippets.Count>0)
+                    {
+                        var existingUrls=externalKnowledge.Select(snippet=>snippet.Url).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                        var freshCorpus=corpusSnippets.Where(snippet=>!existingUrls.Contains(snippet.Url)).ToArray();
+                        if(freshCorpus.Length>0)
+                        {
+                            externalKnowledge=externalKnowledge.Concat(freshCorpus).ToArray();
+                            logger.LogInformation("LEGAL-TRACE stage=corpus-merge matterId={MatterId} propositions={Propositions} projectedSnippets={Projected} merged={Merged}",corpusMatterId,evidenceGraph.Propositions?.Count??0,corpusSnippets.Count,freshCorpus.Length);
+                        }
+                    }
+                }
+                catch(Exception ex)when(!cancellationToken.IsCancellationRequested){logger.LogWarning(ex,"LEGAL-TRACE stage=corpus-merge matterId={MatterId} failed; continuing with external-only evidence",corpusMatterId);}
             }
             // V2.1 three-score model: Interpretation Prior (LLM), Evidence Support (deterministic, from
             // enterprise evidence and matched external snippets), POLOXI Confidence (weighted combination).
@@ -5690,7 +5716,10 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
                     // judgment instead of replacing it — the metric grounds the score while the LLM
                     // signal prevents min-max normalization artifacts (0%/100%) from dominating.
                     var llmScore=Math.Clamp(score.EvidenceScore,0,1);
-                    var clamped=metricScores.TryGetValue(resolvedName,out var candidateMetrics)&&candidateMetrics.TryGetValue(branch.WideBranchId,out var metricScore)?Math.Clamp(0.5m*metricScore+0.5m*llmScore,0,1):llmScore;
+                    var priorScore=metricScores.TryGetValue(resolvedName,out var candidateMetrics)&&candidateMetrics.TryGetValue(branch.WideBranchId,out var metricScore)?Math.Clamp(0.5m*metricScore+0.5m*llmScore,0,1):llmScore;
+                    // Evidence-gated Cs: the (metric-blended) model prior shrunk toward the branch's measured
+                    // evidence support in proportion to admitted-evidence volume. No admitted evidence → prior.
+                    var clamped=WideCandidateBranchScoring.GatedCs(priorScore,branch.EvidenceSupport,branch.EvidenceCount);
                     if(branch.ParentWideBranchId is not null&&childrenByParent.Contains(branch.ParentWideBranchId.Value)&&!scoringBranchIds.Contains(branch.WideBranchId))
                     {
                         var list=childScoresByParent.TryGetValue(branch.ParentWideBranchId.Value,out var existing)?existing:childScoresByParent[branch.ParentWideBranchId.Value]=[];
