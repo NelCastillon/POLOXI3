@@ -2,6 +2,7 @@
 @using Legal.Application.Features.Intelligence.RunManagement
 @using Legal.Web.Services
 @inject ApiClient Api
+@inject NavigationManager Navigation
 
 @* ── Matter-scoped Run History tab. Reads the same DB-backed run ledger as the standalone
      /legal/runassessment page, but scoped to the open matter in the decision cockpit. ── *@
@@ -24,7 +25,7 @@
             <button type="button" class="ram-btn ram-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
                 <i class="bi bi-arrow-clockwise"></i> Refresh
             </button>
-            <a class="ram-btn ram-btn-primary" href="/legal/runassessment" title="Open the full Run &amp; Assessment Management workspace">
+            <a class="ram-btn ram-btn-primary" href="/legal/runassessment" title="Open the full Run History &amp; Assessment Management workspace">
                 <i class="bi bi-box-arrow-up-right"></i> Full workspace
             </a>
         </div>
@@ -67,8 +68,8 @@
                     {
                         <span class="ram-freshness">@current.FreshnessNote</span>
                     }
-                    <button type="button" class="ram-btn ram-btn-ghost" @onclick="() => _selectedRunId = current.AnalysisRunId">
-                        View run
+                    <button type="button" class="ram-btn ram-btn-primary" @onclick="() => ViewDecision2Results(current.AnalysisRunId)">
+                        <i class="bi bi-window-stack"></i> View Original Complete Run
                     </button>
                 </div>
             </section>
@@ -160,6 +161,11 @@
                         </div>
                         <span class="ram-run-status ram-run-status--@selected.ExecutionStatusCode.ToLowerInvariant()">@selected.ExecutionStatusCode</span>
                     </div>
+
+                    <p class="ram-authority-note">
+                        <i class="bi bi-info-circle" aria-hidden="true"></i>
+                        <span>Legal authority citations shown for a run are AI-proposed leads marked &ldquo;Unverified&rdquo; unless a retrieved external source matched their identity, in which case they are marked &ldquo;Verified.&rdquo; Recognizing a citation is never treated as verification. Unverified does not mean the authority is invalid &mdash; it reflects retrieval/configuration state (the proposal pass and external-grounding provider), not bad law.</span>
+                    </p>
 
                     @if (selected.QualityScore is { } sq)
                     {
@@ -262,6 +268,20 @@
                             </dl>
                         </div>
                     }
+
+                    <footer class="ram-detail-foot">
+                        <div class="ram-detail-foot-actions">
+                            <button type="button" class="ram-btn ram-btn-ghost" @onclick="() => OpenSavedCockpit(selected.AnalysisRunId)">
+                                Open saved cockpit
+                            </button>
+                            <button type="button" class="ram-btn ram-btn-outline" @onclick="() => RerunWithCurrentInputs(selected.AnalysisRunId)">
+                                Rerun with current inputs
+                            </button>
+                            <button type="button" class="ram-btn ram-btn-danger" @onclick="() => RequestDeleteRun(selected)">
+                                <i class="bi bi-trash"></i> Delete history
+                            </button>
+                        </div>
+                    </footer>
                 }
                 else
                 {
@@ -275,6 +295,43 @@
     }
 </div>
 
+@if (_pendingDeleteRun is { } del)
+{
+    <div class="ram-root">
+        <div class="ram-modal-backdrop" @onclick="CancelDeleteRun">
+        <div class="ram-confirm-dialog" @onclick:stopPropagation="true">
+            <div class="ram-confirm-icon ram-confirm-icon--danger">
+                <i class="bi bi-exclamation-triangle"></i>
+            </div>
+            <h3 class="ram-confirm-title">Delete analysis history?</h3>
+            <p class="ram-confirm-text">
+                This permanently removes the run <strong>@del.RunLabel</strong>@(string.IsNullOrWhiteSpace(del.Title) ? null : $" — {del.Title}") and its saved analysis from this matter's history. This action cannot be undone.
+            </p>
+            @if (!string.IsNullOrWhiteSpace(_deleteError))
+            {
+                <div class="alert alert-danger ram-alert" role="alert" style="border-left: 4px solid #dc3545;">
+                    <i class="bi bi-exclamation-triangle"></i> @_deleteError
+                </div>
+            }
+            <div class="ram-confirm-footer">
+                <button type="button" class="ram-btn ram-btn-ghost" @onclick="CancelDeleteRun" disabled="@_deleting">Cancel</button>
+                <button type="button" class="ram-btn ram-btn-danger" @onclick="ConfirmDeleteRun" disabled="@_deleting">
+                    @if (_deleting)
+                    {
+                        <span class="spinner-border spinner-border-sm"></span>
+                    }
+                    else
+                    {
+                        <i class="bi bi-trash"></i>
+                    }
+                    Delete
+                </button>
+            </div>
+        </div>
+        </div>
+    </div>
+}
+
 @code {
     [Parameter] public Guid? MatterId { get; set; }
 
@@ -283,6 +340,10 @@
     private bool _loading;
     private string? _loadError;
     private Guid? _loadedMatterId;
+
+    private AnalysisRunDto? _pendingDeleteRun;
+    private bool _deleting;
+    private string? _deleteError;
 
     protected override async Task OnParametersSetAsync()
     {
@@ -345,4 +406,72 @@
     private static string QualityTooltip(RunQualityScoreDto q) =>
         $"Quality {q.Score}/100 (Grade {q.Grade})\n" +
         string.Join("\n", q.Dimensions.Select(d => $"• {d.Label}: {d.Percent}% — {d.Detail}"));
+
+    // Open the full Decision2 Display in read-only saved-run mode, rehydrated from the captured Wide result.
+    private void ViewDecision2Results(Guid runId)
+    {
+        if (_page is null)
+            return;
+        Navigation.NavigateTo($"/legal/personalinjury_decision2?matterId={_page.MatterId}&runId={runId}&readonly=1");
+    }
+
+    // Open the decision cockpit for the selected run's retained snapshot.
+    private void OpenSavedCockpit(Guid runId)
+    {
+        if (_page is null)
+            return;
+        Navigation.NavigateTo($"/legal/personalinjury_decision2?matterId={_page.MatterId}&runId={runId}");
+    }
+
+    // Re-run the analysis using the current matter inputs, seeded from the selected run.
+    private void RerunWithCurrentInputs(Guid runId)
+    {
+        if (_page is null)
+            return;
+        Navigation.NavigateTo($"/legal/personalinjury_decision2?matterId={_page.MatterId}&rerunFrom={runId}");
+    }
+
+    // Open the delete-history confirmation for the selected run.
+    private void RequestDeleteRun(AnalysisRunDto run)
+    {
+        _deleteError = null;
+        _pendingDeleteRun = run;
+    }
+
+    // Dismiss the delete-history confirmation without deleting.
+    private void CancelDeleteRun()
+    {
+        if (_deleting)
+            return;
+        _pendingDeleteRun = null;
+        _deleteError = null;
+    }
+
+    // Soft-delete the confirmed run and its history, then refresh the ledger.
+    private async Task ConfirmDeleteRun()
+    {
+        if (_pendingDeleteRun is not { } run || _deleting)
+            return;
+
+        _deleting = true;
+        _deleteError = null;
+        try
+        {
+            await Api.DeleteLegalRunAsync(run.AnalysisRunId);
+
+            if (_selectedRunId == run.AnalysisRunId)
+                _selectedRunId = null;
+
+            _pendingDeleteRun = null;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _deleteError = $"Delete failed: {ex.Message}";
+        }
+        finally
+        {
+            _deleting = false;
+        }
+    }
 }

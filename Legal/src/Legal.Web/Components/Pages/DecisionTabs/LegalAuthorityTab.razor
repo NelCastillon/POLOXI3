@@ -13,6 +13,13 @@
             .ToArray();
         var reviewItems = authorityReview.Length > 0 ? authorityReview : Owner._legalAuthorityReviewItems;
         var model = Owner._channelScoring;
+        var verifiedCount = authorities.Count(a => string.Equals(a.VerificationStatus, "VERIFIED", StringComparison.OrdinalIgnoreCase));
+        var distinctCitations = authorities
+            .Where(a => !string.IsNullOrWhiteSpace(a.Name))
+            .GroupBy(a => a.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.First())
+            .OrderBy(a => a.Name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
 }
 
         <div class="dci-root">
@@ -58,12 +65,46 @@
                 <div class="dfi-panel-card" style="margin-bottom:14px;">
                     <div style="display:flex; gap:18px; flex-wrap:wrap;">
                         <div><span class="dfi-panel-sub">Authorities retrieved</span><div style="font-size:1.25rem; font-weight:600;">@authorities.Count</div></div>
-                        <div><span class="dfi-panel-sub">Verified</span><div style="font-size:1.25rem; font-weight:600; color:#198754;">@authorities.Count(a => string.Equals(a.VerificationStatus, "VERIFIED", StringComparison.OrdinalIgnoreCase))</div></div>
+                        <div><span class="dfi-panel-sub">Verified</span><div style="font-size:1.25rem; font-weight:600; color:#198754;">@verifiedCount</div></div>
                         <div><span class="dfi-panel-sub">Coverage</span><div style="font-size:1.25rem; font-weight:600;">@Owner.DaAuthorityCoverage.ToString("P0")</div></div>
                         <div><span class="dfi-panel-sub">Parked for review</span><div style="font-size:1.25rem; font-weight:600; color:#fd7e14;">@reviewItems.Count</div></div>
                         <div><span class="dfi-panel-sub">Scoring contributions</span><div style="font-size:1.25rem; font-weight:600;">@contributions.Count</div></div>
                     </div>
+                    @if (verifiedCount == 0)
+                    {
+                        <p class="la-verified-note">
+                            <i class="bi bi-info-circle" aria-hidden="true"></i>
+                            @if (authorities.Count == 0)
+                            {
+                                <span>No legal authorities were proposed or retrieved for this session. If citations never appear, the AI legal-authority proposal pass is disabled (config <code>Intelligence.SearchWide.EnableLegalAuthorityProposal</code>) or the decision did not run in the Legal context. Verified status additionally requires an enabled external-grounding provider &mdash; this is a retrieval/configuration state, not a finding that the authorities are bad law.</span>
+                            }
+                            else
+                            {
+                                <span>@authorities.Count authorit@(authorities.Count == 1 ? "y was" : "ies were") proposed and are shown below as &ldquo;Unverified&rdquo; leads, but none passed independent identity verification against a retrieved source. &ldquo;Verified&rdquo; reflects retrieved, identity-matched evidence &mdash; not a finding that these authorities are invalid. Recognizing a citation is never treated as verification.</span>
+                            }
+                        </p>
+                    }
                 </div>
+
+                @if (distinctCitations.Length > 0)
+                {
+                    <div class="dfi-panel-card" style="margin-bottom:14px;">
+                        <h5 style="margin-bottom:8px;"><i class="bi bi-quote" aria-hidden="true"></i> Citations (@distinctCitations.Length)</h5>
+                        <p class="dfi-panel-sub" style="margin-bottom:10px;">Every distinct legal authority citation retrieved for this decision session. Each links to an external lookup so the citation can be independently reviewed.</p>
+                        <ul class="la-citations-list">
+                            @foreach (var c in distinctCitations)
+                            {
+                                <li class="la-citation">
+                                    <a href="@CitationSearchUrl(c.Name)" target="_blank" rel="noopener noreferrer" class="la-citation-link" title="Look up this citation">
+                                        <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> @c.Name
+                                    </a>
+                                    <span class="la-citation-kind">@c.Kind</span>
+                                    <span class="dfi-tag dfi-tag-@(string.Equals(c.VerificationStatus, "VERIFIED", StringComparison.OrdinalIgnoreCase) ? "ok" : "warn")">@c.VerificationStatus</span>
+                                </li>
+                            }
+                        </ul>
+                    </div>
+                }
 
                 <div class="dfi-panel-card" style="margin-bottom:14px;">
                     <h5 style="margin-bottom:8px;"><i class="bi bi-bank2" aria-hidden="true"></i> Retrieved legal authorities</h5>
@@ -75,7 +116,7 @@
                     {
                         <table class="table table-sm" style="margin:0;">
                             <thead>
-                                <tr><th>Authority</th><th>Kind</th><th>Relevance</th><th>Verification</th><th>Good law (Citator)</th></tr>
+                                <tr><th>Authority</th><th>Kind</th><th>Citation</th><th>Relevance</th><th>Verification</th><th>Good law (Citator)</th></tr>
                             </thead>
                             <tbody>
                                 @foreach (var a in authorities)
@@ -83,6 +124,11 @@
                                     <tr>
                                         <td><strong>@a.Name</strong></td>
                                         <td>@a.Kind</td>
+                                        <td>
+                                            <a href="@CitationSearchUrl(a.Name)" target="_blank" rel="noopener noreferrer" class="la-citation-link" title="Look up this citation">
+                                                <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> @a.Name
+                                            </a>
+                                        </td>
                                         <td>@a.Relevance</td>
                                         <td><span class="dfi-tag dfi-tag-@(string.Equals(a.VerificationStatus, "VERIFIED", StringComparison.OrdinalIgnoreCase) ? "ok" : "warn")">@a.VerificationStatus</span></td>
                                         <td>
@@ -303,6 +349,11 @@
 
 @code {
     [Parameter] public LegalPersonalInjuryDecision2 Owner { get; set; } = default!;
+
+    // External lookup link for a citation when no stored reference/URL exists. Reuses the same neutral
+    // web-search strategy as the Overview candidate citations so both surfaces stay consistent.
+    private static string CitationSearchUrl(string authorityName)
+        => LegalPersonalInjuryDecision2.OvCitationSearchUrl(authorityName);
 
     // Citator validity keyed by authority name (case-insensitive). Loaded on render; absence of data
     // yields the Unknown flag. Advisory only — never blocks the decision workspace.

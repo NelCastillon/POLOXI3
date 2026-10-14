@@ -1,0 +1,120 @@
+@namespace Legal.Web.Components.Pages.DecisionTabs
+@using Legal.Web.Components.Pages
+
+@* ── Citations tab. A consolidated, filterable view of every legal-authority citation
+     proposed or verified for this matter's latest decision session. Reuses the same
+     DaAuthorities pool and verification semantics as the Legal Authority tab;
+     it never changes verification state. ── *@
+
+@{
+    var authorities = Owner.DaAuthorities;
+    var distinct = authorities
+        .Where(a => !string.IsNullOrWhiteSpace(a.Name))
+        .GroupBy(a => a.Name, StringComparer.OrdinalIgnoreCase)
+        .Select(g => g.First())
+        .OrderBy(a => a.Name, StringComparer.OrdinalIgnoreCase)
+        .ToArray();
+    var verifiedCount = distinct.Count(a => IsVerified(a.VerificationStatus));
+    var unverifiedCount = distinct.Length - verifiedCount;
+    var filtered = _filter switch
+    {
+        "VERIFIED" => distinct.Where(a => IsVerified(a.VerificationStatus)).ToArray(),
+        "UNVERIFIED" => distinct.Where(a => !IsVerified(a.VerificationStatus)).ToArray(),
+        _ => distinct
+    };
+    if (!string.IsNullOrWhiteSpace(_search))
+    {
+        filtered = filtered
+            .Where(a => a.Name.Contains(_search, StringComparison.OrdinalIgnoreCase)
+                     || (a.Kind?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false)
+                     || (a.Relevance?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false))
+            .ToArray();
+    }
+}
+
+<div class="cit-root">
+    <div class="cit-topbar">
+        <div class="cit-topbar-title">
+            <span class="cit-topbar-icon"><i class="bi bi-quote" aria-hidden="true"></i></span>
+            <div>
+                <h4>Citations &mdash; Legal Authority References</h4>
+                <p class="dfi-panel-sub">Every distinct legal authority citation proposed or verified for this matter's latest decision session. Citations are AI-proposed leads marked <strong>Unverified</strong> unless a retrieved external source matched their identity, in which case they are marked <strong>Verified</strong>. Recognizing a citation is never treated as verification &mdash; Unverified reflects retrieval/configuration state, not bad law. Each links to an external lookup for independent review.</p>
+            </div>
+        </div>
+    </div>
+
+    @if (distinct.Length == 0)
+    {
+        <div class="dfi-panel-card">
+            <p class="dfi-panel-sub">
+                <i class="bi bi-info-circle" aria-hidden="true"></i>
+                No legal authority citations were proposed or retrieved for this session. If citations never appear, the AI legal-authority proposal pass is disabled (config <code>Intelligence.SearchWide.EnableLegalAuthorityProposal</code>) or the decision did not run in the Legal context. Verified status additionally requires an enabled external-grounding provider.
+            </p>
+        </div>
+    }
+    else
+    {
+        <div class="cit-kpi-strip">
+            <button type="button" class="cit-kpi @(_filter == "ALL" ? "cit-kpi--active" : null)" @onclick='() => _filter = "ALL"' title="Show all citations">
+                <span class="cit-kpi-label">All citations</span>
+                <span class="cit-kpi-value">@distinct.Length</span>
+            </button>
+            <button type="button" class="cit-kpi cit-kpi--ok @(_filter == "VERIFIED" ? "cit-kpi--active" : null)" @onclick='() => _filter = "VERIFIED"' title="Identity-matched against a retrieved source">
+                <span class="cit-kpi-label">Verified</span>
+                <span class="cit-kpi-value">@verifiedCount</span>
+            </button>
+            <button type="button" class="cit-kpi cit-kpi--warn @(_filter == "UNVERIFIED" ? "cit-kpi--active" : null)" @onclick='() => _filter = "UNVERIFIED"' title="AI-proposed leads not yet identity-verified">
+                <span class="cit-kpi-label">Unverified</span>
+                <span class="cit-kpi-value">@unverifiedCount</span>
+            </button>
+        </div>
+
+        <div class="cit-search">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input type="search" class="cit-search-input" placeholder="Search citations by name, kind, or relevance&hellip;" @bind="_search" @bind:event="oninput" />
+        </div>
+
+        <div class="dfi-panel-card">
+            @if (filtered.Length == 0)
+            {
+                <p class="dfi-panel-sub">No citations match the current filter.</p>
+            }
+            else
+            {
+                <table class="table table-sm cit-table">
+                    <thead>
+                        <tr><th>Citation</th><th>Kind</th><th>Relevance</th><th>Verification</th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var c in filtered)
+                        {
+                            <tr>
+                                <td>
+                                    <a href="@CitationSearchUrl(c.Name)" target="_blank" rel="noopener noreferrer" class="cit-link" title="Look up this citation">
+                                        <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> @c.Name
+                                    </a>
+                                </td>
+                                <td><span class="cit-kind">@c.Kind</span></td>
+                                <td class="cit-relevance">@c.Relevance</td>
+                                <td><span class="dfi-tag dfi-tag-@(IsVerified(c.VerificationStatus) ? "ok" : "warn")">@c.VerificationStatus</span></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public LegalPersonalInjuryDecision2 Owner { get; set; } = default!;
+
+    private string _filter = "ALL";
+    private string _search = string.Empty;
+
+    private static bool IsVerified(string? status)
+        => string.Equals(status, "VERIFIED", StringComparison.OrdinalIgnoreCase);
+
+    private static string CitationSearchUrl(string authorityName)
+        => LegalPersonalInjuryDecision2.OvCitationSearchUrl(authorityName);
+}

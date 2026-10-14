@@ -285,6 +285,9 @@
                                             case "Legal Authority":
                                     <LegalAuthorityTab Owner="this" />
                                     break;
+                                            case "Citations":
+                                    <CitationsTab Owner="this" />
+                                    break;
                                             case "Run History":
                                     <RunHistoryTab MatterId="EffectiveMatterId" />
                                     break;
@@ -963,19 +966,9 @@
                 </section>
 
                 <section class="poloxi-panel poloxi-evidence-panel">
-                    <div class="poloxi-panel-header"><div class="poloxi-panel-title"><span class="poloxi-panel-icon"><i class="bi bi-collection"></i></span><div><span>LLM knowledge · not enterprise data</span><h2>Results &amp; references</h2></div></div></div>
                     @if (_response.Evidence.Count == 0 && _response.ExternalReferences.Count == 0 && _response.InterpretiveResults.Count == 0)
                     {
                         <div class="poloxi-empty"><i class="bi bi-lightbulb"></i><strong>No result sets returned</strong><p>The LLM did not return interpretive result sets or references for this question.</p></div>
-                    }
-                    @foreach (var evidence in _response.Evidence)
-                    {
-                        var canOpen = !string.IsNullOrWhiteSpace(evidence.NavigationRoute);
-                        <article class="poloxi-evidence @(canOpen ? "poloxi-evidence-clickable" : null)" @ondblclick="() => OpenEvidence(evidence)" title="@(canOpen ? "Double-click to open the source record." : null)">
-                            <span class="poloxi-rank">@evidence.RankNumber</span>
-                            <div class="poloxi-evidence-main"><strong>@evidence.Title</strong><small>@evidence.ModuleCode · @evidence.EntityTypeCode</small><p>@evidence.Excerpt</p><div>@foreach (var branch in evidence.MatchedBranches) { <span class="um-badge um-badge-neutral">@BranchNameWithLevel(branch)</span> }</div></div>
-                            <div class="poloxi-score"><strong>@evidence.RelevanceScore.ToString("P0")</strong><small>Score</small></div>
-                        </article>
                     }
                     @if (_response.InterpretiveResults.Count > 0)
                     {
@@ -1072,13 +1065,27 @@
                                         </div>
                                         <div class="poloxi-score" title="POLOXI branch-support confidence: interpretation prior blended with evidence support."><strong>@result.Confidence.ToString("P0")</strong><small>POLOXI</small></div>
                                     </article>
+                                                     }
+                                                </div>
+                                            }
+                                        }
+                                        @if (_response.Evidence.Count > 0)
+                                        {
+                                            <div class="poloxi-section-divider"><i class="bi bi-collection"></i><h2>Results &amp; references</h2></div>
+                                            <p class="poloxi-panel-sub">LLM knowledge · not enterprise data</p>
+                                            @foreach (var evidence in _response.Evidence)
+                                            {
+                                                var canOpen = !string.IsNullOrWhiteSpace(evidence.NavigationRoute);
+                                                <article class="poloxi-evidence @(canOpen ? "poloxi-evidence-clickable" : null)" @ondblclick="() => OpenEvidence(evidence)" title="@(canOpen ? "Double-click to open the source record." : null)">
+                                                    <span class="poloxi-rank">@evidence.RankNumber</span>
+                                                    <div class="poloxi-evidence-main"><strong>@evidence.Title</strong><small>@evidence.ModuleCode · @evidence.EntityTypeCode</small><p>@evidence.Excerpt</p><div>@foreach (var branch in evidence.MatchedBranches) { <span class="um-badge um-badge-neutral">@BranchNameWithLevel(branch)</span> }</div></div>
+                                                    <div class="poloxi-score"><strong>@evidence.RelevanceScore.ToString("P0")</strong><small>Score</small></div>
+                                                </article>
+                                            }
+                                        }
+                                    </section>
+                                </div>
                                 }
-                            </div>
-                        }
-                    }
-                </section>
-            </div>
-            }
 
                                 </section>
                             }
@@ -6809,7 +6816,7 @@
 
     // ── Decision Intelligence console (reads existing response + matter fields only) ──
     internal string _dfiTab = "Overview";
-    private static readonly string[] DfiTabs = ["Overview", "Decision Analysis", "Decision Contract", "Hierarchy", "Hierarchy Details", "Factor Matrix", "Evidence", "Document Intelligence", "Media & Machine Evidence", "Legal Authority", "Competition", "Readiness", "Decision Change Intelligence (DCI)", "Continuous Decision Calibration (CDC)", "Channel Scoring (LPI)", "Human Intelligence", "Investigation", "Run History", "Audit"];
+    private static readonly string[] DfiTabs = ["Overview", "Decision Analysis", "Decision Contract", "Hierarchy", "Hierarchy Details", "Factor Matrix", "Evidence", "Document Intelligence", "Media & Machine Evidence", "Legal Authority", "Citations", "Competition", "Readiness", "Decision Change Intelligence (DCI)", "Continuous Decision Calibration (CDC)", "Channel Scoring (LPI)", "Human Intelligence", "Investigation", "Run History", "Audit"];
 
     private void SelectDfiTab(string tab)
     {
@@ -8280,10 +8287,23 @@
 
     internal IReadOnlyList<WideFactorDto> DfiFilteredFactors => _dfiFactorFilter switch
     {
-        "Missing" => DfiFactors.Where(f => f.Availability != "AVAILABLE").ToArray(),
-        "Needs review" => DfiFactors.Where(f => f.ValidationStatus != "VALID" || f.VerificationStatus == "UNVERIFIED").ToArray(),
-        _ => DfiFactors.ToArray(),
+        "Missing" => OrderByRelationship(DfiFactors.Where(f => f.Availability != "AVAILABLE")),
+        "Needs review" => OrderByRelationship(DfiFactors.Where(f => f.ValidationStatus != "VALID" || f.VerificationStatus == "UNVERIFIED")),
+        _ => OrderByRelationship(DfiFactors),
     };
+
+    // Surface the most actionable relationships first: SUPPORTS, then CONDITIONAL, then everything else.
+    // Ties keep the original factor order (stable) so the listing stays deterministic.
+    private IReadOnlyList<WideFactorDto> OrderByRelationship(IEnumerable<WideFactorDto> factors) =>
+        factors.OrderBy(DfiRelationRank).ToArray();
+
+    private int DfiRelationRank(WideFactorDto f)
+    {
+        var rel = DfiFactorRelation(f);
+        if (rel.Contains("SUPPORTS", StringComparison.OrdinalIgnoreCase)) return 0;
+        if (rel.Contains("CONDITIONAL", StringComparison.OrdinalIgnoreCase)) return 1;
+        return 2;
+    }
 
     internal void SelectDfiFactor(string factorId)
     {

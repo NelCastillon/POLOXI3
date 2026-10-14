@@ -299,6 +299,18 @@ public sealed class LegalDocumentSemanticInterpreter(IAiProviderRouter aiRouter)
     private const string SystemPrompt = """
         You extract proposed legal-document semantics. Use only supplied passages and Domain Pack concepts.
         Never decide a matter, verify a fact, or invent missing content. Every evidence proposal should cite a supplied passageId.
+
+        Extract EXHAUSTIVELY and at ATOMIC granularity. Do not summarize several distinct assertions into one
+        proposition. Decompose each passage into every discrete, independently checkable fact it asserts (each
+        party, date, amount, location, duty, breach, causation link, injury, damage, coverage term, or condition
+        is its own factPropositions entry). Favor MORE small, single-claim propositions over FEWER broad ones.
+
+        Every factPropositions entry MUST be backed by evidence: for each fact, also emit at least one evidenceItems
+        entry drawn from the passage that asserts it AND a relationships entry whose sourceProposalKey is that
+        evidence item's proposalKey, whose targetProposalKey is the fact's proposalKey, and whose
+        relationshipTypeCode is SUPPORTS (or CONTRADICTS when the passage refutes the fact). A fact with no
+        supporting evidence relationship will be discarded, so never leave a fact unlinked.
+
         When DomainEntityTypes/DomainEventTypes are supplied, also extract domainEntities/domainEvents that occur in the
         passages, each bound to one supplied entityTypeCode/eventTypeCode and citing a supplied passageId; omit any you cannot bind.
         All facts are allegations pending independent verification. Return strict JSON matching the schema.

@@ -1512,7 +1512,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             // V2.1 Candidate x Branch competition: extract candidates from the interpretive result sets,
             // enforce hard constraints (PRUNED with a reason, never silently dropped), and compute a
             // composite ranking weighted by branch POLOXI confidence. Fail-soft: empty on LLM failure.
-            var interpretiveResults=MapInterpretiveResults(answer,survivorsFinal,externalKnowledge);
+            var interpretiveResults=MapInterpretiveResults(answer,survivorsFinal,externalKnowledge,IsLegalDecisionEvaluationRun);
             IReadOnlyCollection<WideCandidateDto> candidates=[];
             // V3.1 answer-kind routing: the FIRST LLM reply (query contract) decides the task type.
             // CONTENT_ENUMERATION queries ask for pieces of content (exam questions, tips, examples),
@@ -1962,7 +1962,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             if(string.Equals(request.ContextCode?.Trim(),WideSearchContexts.Legal,StringComparison.OrdinalIgnoreCase)&&answerStatus!="USER_CLARIFICATION_REQUIRED"&&!string.IsNullOrWhiteSpace(finalAnswerText))
             {
                 llmCalls++;
-                legalAnswer=await ComposeLegalAnswerAsync(request,finalAnswerText,answerContext?.WinnerDisplayName,resolutionDeliverable,externalKnowledge,interpretiveResults,decisionConfidence,decisionEvidenceCoverage,evidenceCoverage,finalEntropy,cancellationToken);
+                legalAnswer=await ComposeLegalAnswerAsync(request,finalAnswerText,answerContext?.WinnerDisplayName,resolutionDeliverable,externalKnowledge,interpretiveResults,decisionConfidence,decisionEvidenceCoverage,evidenceCoverage,finalEntropy,candidates,relevantEvidence,cancellationToken);
             }
             // Candidate Landscape Narrative Composer (PRESENTATION ONLY, legal context + POLOXI engine).
             // One fail-soft LLM call explains the WHOLE candidate competition and produces a per-candidate
@@ -1986,7 +1986,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 if(landscapeCandidates.Count>0)
                 {
                     llmCalls++;
-                    candidateLandscape=await ComposeCandidateLandscapeAsync(request,executionId.ToString(),landscapeCandidates,answerContext?.WinnerDisplayName,answerStatus,decisionConfidence,finalEntropy,cancellationToken);
+                    candidateLandscape=await ComposeCandidateLandscapeAsync(request,executionId.ToString(),landscapeCandidates,answerContext?.WinnerDisplayName,answerStatus,decisionConfidence,finalEntropy,relevantEvidence,externalKnowledge,interpretiveResults,cancellationToken);
                 }
             }
             timer.Stop();
@@ -2192,7 +2192,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     // POLOXI INTERPRETATION RESULTS as substantive (but explicitly unverified) input. Zero new
     // reasoning happens here: lack of verified evidence changes the EVIDENCE STATUS, not whether an
     // already-resolved interpretation may be presented.
-    private string BuildLegalComposerContext(WideSearchRequest request,string poloxiConclusion,string? winnerDisplayName,WideResolutionDeliverableDto? resolutionDeliverable,IReadOnlyList<WideExternalKnowledgeSnippet> verifiedAuthorities,IReadOnlyCollection<WideInterpretiveResultDto> interpretiveResults,string interpretationStatus,string evidenceStatus,decimal? decisionConfidence,decimal decisionEvidenceCoverage,decimal evidenceCoverage,WideEntropyResult finalEntropy)
+    private string BuildLegalComposerContext(WideSearchRequest request,string poloxiConclusion,string? winnerDisplayName,WideResolutionDeliverableDto? resolutionDeliverable,IReadOnlyList<WideExternalKnowledgeSnippet> verifiedAuthorities,IReadOnlyCollection<WideInterpretiveResultDto> interpretiveResults,string interpretationStatus,string evidenceStatus,decimal? decisionConfidence,decimal decisionEvidenceCoverage,decimal evidenceCoverage,WideEntropyResult finalEntropy,IReadOnlyCollection<WideCandidateDto> candidates,IReadOnlyCollection<PoloxiEvidenceDto> relevantEvidence)
     {
         var builder=new StringBuilder();
         builder.Append("QUESTION: ").Append(Truncate(request.Query,3000)).Append('\n');
@@ -2240,6 +2240,42 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             foreach(var authority in verifiedAuthorities.Take(8))
                 builder.Append("- ").Append(Truncate(authority.Title,200)).Append(" (").Append(authority.Url).Append("): ").Append(Truncate(authority.Snippet,400)).Append('\n');
         }
+        // WINNING DECISION OUTCOME + ITS FACTORS. The Decision Brief MUST be built from the SAME analysis and
+        // factors that made the winning candidate prevail - not a generic summary. Supply the top candidate's
+        // own composite/quality/support metadata and its highest-scoring per-branch (Cs) factor dimensions so
+        // the brief's analysis walks the actual drivers of the decision.
+        var winner=candidates.OrderBy(c=>c.RankNumber).FirstOrDefault();
+        if(winner is not null)
+        {
+            builder.Append("\nWINNING DECISION OUTCOME (the factors below ARE the decision's drivers - build the brief's analysis from these):\n");
+            builder.Append("- ").Append(Truncate(winner.DisplayName,200))
+                .Append(" | composite=").Append(winner.CompositeScore.ToString("0.000"))
+                .Append(" | quality=").Append(winner.QualityScore.ToString("0.000"))
+                .Append(" | evidenceConfidence=").Append(winner.EvidenceConfidence.ToString("0.000"))
+                .Append(" | evidenceCoverage=").Append(winner.EvidenceCoverage.ToString("P0"))
+                .Append(" | supportTier=").Append(winner.SupportTierCode).Append('\n');
+            if(!string.IsNullOrWhiteSpace(winner.Detail))builder.Append("  detail=").Append(Truncate(winner.Detail,500)).Append('\n');
+            builder.Append("  DECISIVE FACTORS (highest-scoring branch dimensions for this outcome):\n");
+            foreach(var branch in winner.BranchScores.OrderByDescending(b=>b.EvidenceScore).Take(8))
+                builder.Append("    \u2022 ").Append(Truncate(branch.BranchDisplayName,160)).Append(" = ").Append(branch.EvidenceScore.ToString("0.000")).Append('\n');
+            var runnerUp=candidates.OrderBy(c=>c.RankNumber).Skip(1).FirstOrDefault();
+            if(runnerUp is not null)
+                builder.Append("  STRONGEST ALTERNATIVE (the brief's counterargument must address this): ")
+                    .Append(Truncate(runnerUp.DisplayName,200)).Append(" | composite=").Append(runnerUp.CompositeScore.ToString("0.000")).Append('\n');
+        }
+        if(relevantEvidence.Count>0)
+        {
+            builder.Append("\nADMITTED EVIDENCE (Evidence tab - actual matter documents/records; ground the brief's analysis and application in these, cite by Title/module, preserve verification state):\n");
+            foreach(var ev in relevantEvidence.OrderByDescending(e=>e.RelevanceScore).Take(16))
+            {
+                builder.Append("- ").Append(Truncate(ev.Title,200))
+                    .Append(" | module=").Append(ev.ModuleCode)
+                    .Append(" | relevance=").Append(ev.RelevanceScore.ToString("0.000"));
+                if(!string.IsNullOrWhiteSpace(ev.Excerpt))builder.Append(" | excerpt=").Append(Truncate(ev.Excerpt,300));
+                builder.Append('\n');
+            }
+        }
+        builder.Append("\nDECISION BRIEF OBJECTIVE: produce the BEST attorney-grade Decision Brief for THIS matter by INTEGRATING the matter + client profile, the admitted evidence, the verified authorities, the POLOXI interpretation results, and the WINNING DECISION OUTCOME's own decisive factors above. The brief must use the SAME analysis and factors that made the winning outcome prevail: the conclusion restates the POLOXI outcome verbatim in substance; the analysis walks the decisive factor dimensions in descending order and ties each to the admitted evidence and matter facts; the application maps the law to THIS matter's facts; the counterargument addresses the strongest alternative named above; and remainingUncertainty/decisiveMissingFact reflect the residual uncertainty. Do not recite coverage percentages as analysis, do not introduce new facts/authorities/scores/rankings beyond those supplied, label unverified material as such, and preserve genuine contradictions.");
         return builder.ToString();
     }
 
@@ -2248,7 +2284,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     // never changes the conclusion, and its result is discarded entirely if the deterministic output
     // guard finds an invented authority or a contradicted conclusion. Any failure returns null and the
     // standard POLOXI answer stands. Never touches ranking, confidence, answer status, or persistence.
-    private async Task<WideLegalAnswerDto?> ComposeLegalAnswerAsync(WideSearchRequest request,string poloxiConclusion,string? winnerDisplayName,WideResolutionDeliverableDto? resolutionDeliverable,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge,IReadOnlyCollection<WideInterpretiveResultDto> interpretiveResults,decimal? decisionConfidence,decimal decisionEvidenceCoverage,decimal evidenceCoverage,WideEntropyResult finalEntropy,CancellationToken cancellationToken)
+    private async Task<WideLegalAnswerDto?> ComposeLegalAnswerAsync(WideSearchRequest request,string poloxiConclusion,string? winnerDisplayName,WideResolutionDeliverableDto? resolutionDeliverable,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge,IReadOnlyCollection<WideInterpretiveResultDto> interpretiveResults,decimal? decisionConfidence,decimal decisionEvidenceCoverage,decimal evidenceCoverage,WideEntropyResult finalEntropy,IReadOnlyCollection<WideCandidateDto> candidates,IReadOnlyCollection<PoloxiEvidenceDto> relevantEvidence,CancellationToken cancellationToken)
     {
         try
         {
@@ -2268,7 +2304,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             var evidenceStatus=verifiedAuthorities.Length==0?"UNVERIFIED"
                 :decisionEvidenceCoverage>=0.75m?"VERIFIED"
                 :"PARTIALLY_VERIFIED";
-            var userPrompt=BuildLegalComposerContext(request,poloxiConclusion,winnerDisplayName,resolutionDeliverable,verifiedAuthorities,interpretiveResults,interpretationStatus,evidenceStatus,decisionConfidence,decisionEvidenceCoverage,evidenceCoverage,finalEntropy);
+            var userPrompt=BuildLegalComposerContext(request,poloxiConclusion,winnerDisplayName,resolutionDeliverable,verifiedAuthorities,interpretiveResults,interpretationStatus,evidenceStatus,decisionConfidence,decisionEvidenceCoverage,evidenceCoverage,finalEntropy,candidates,relevantEvidence);
             var result=await aiProviderRouter.GenerateAsync(request.TenantId,AnswerFeatureCode(request),
                 await GetWideSystemPromptAsync(request,IntelligencePromptCodes.WideLegalAnswer,cancellationToken),
                 userPrompt,
@@ -2371,12 +2407,17 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     // computed: the whole candidate set with ranks, composite/quality/evidence signals, support tiers,
     // constraint status, branch-level scores, the resolved interpretation, and residual uncertainty. Zero
     // new reasoning happens here; the composer only explains the competitive landscape it is handed.
-    private static string BuildCandidateLandscapeContext(WideSearchRequest request,string executionId,IReadOnlyCollection<WideCandidateDto> candidates,string? winnerDisplayName,string presentationState,decimal? decisionConfidence,WideEntropyResult finalEntropy)
+    private static string BuildCandidateLandscapeContext(WideSearchRequest request,string executionId,IReadOnlyCollection<WideCandidateDto> candidates,string? winnerDisplayName,string presentationState,decimal? decisionConfidence,WideEntropyResult finalEntropy,IReadOnlyCollection<PoloxiEvidenceDto> relevantEvidence,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge,IReadOnlyCollection<WideInterpretiveResultDto> interpretiveResults,string matterContextSection)
     {
         var builder=new StringBuilder();
         builder.Append("QUESTION: ").Append(Truncate(request.Query,3000)).Append('\n');
         builder.Append("ANALYSIS RUN ID: ").Append(executionId).Append('\n');
         builder.Append("PRESENTATION STATE: ").Append(presentationState).Append('\n');
+        // MATTER + CLIENT PROFILE CONTEXT (saved Decision Contract values and PI profile). This is the
+        // concrete factual spine of the dispute: parties, jurisdiction, incident, injuries, damages,
+        // allegations. Every candidate narrative must be grounded in THIS matter, not generic doctrine.
+        if(!string.IsNullOrWhiteSpace(matterContextSection))
+            builder.Append(matterContextSection).Append('\n');
         if(!string.IsNullOrWhiteSpace(winnerDisplayName))
             builder.Append("CURRENT LEADING INTERPRETATION: ").Append(Truncate(winnerDisplayName,400)).Append('\n');
         if(decisionConfidence is not null)
@@ -2400,7 +2441,60 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             foreach(var branch in candidate.BranchScores.Take(8))
                 builder.Append("    \u2022 ").Append(Truncate(branch.BranchDisplayName,160)).Append(" = ").Append(branch.EvidenceScore.ToString("0.000")).Append('\n');
         }
-        builder.Append("\nReturn JSON ONLY matching the schema. Produce a substantive, individualized narrative for EVERY candidate above. Each candidate IS a distinct Decision Outcome: anchor its overviewNarrative and fullAnalysis to that candidate's OWN identity, OWN composite/quality/supportTier values, and OWN per-branch (Cs) scores listed under it above. Do NOT reuse another candidate's numbers or write a single generic leader/landscape summary across outcomes. Make each narrative explicitly differential so no two candidates could be swapped without the text becoming wrong. Keep candidate names and identities verbatim, and never introduce new facts, authorities, scores, or rankings.");
+        // ADMITTED EVIDENCE (Evidence tab) + DOCUMENT INTELLIGENCE (retrieved sources) + INTERPRETIVE ANALYSIS.
+        // These are authoritative run artifacts already admitted/retrieved upstream. They are supplied so the
+        // per-candidate narrative is grounded in the ACTUAL documents, passages, media anchors, and prior
+        // branch interpretations rather than scores alone. Never invent sources beyond what is listed here; if
+        // a listed item CONTRADICTS a numeric framing, prefer the admitted evidence and reconcile the prose.
+        if(relevantEvidence.Count>0)
+        {
+            builder.Append("\nADMITTED EVIDENCE (Evidence tab \u2014 actual matter documents/records; cite by Title, note module and relevance; treat as contributing factors):\n");
+            foreach(var ev in relevantEvidence.OrderByDescending(e=>e.RelevanceScore).Take(20))
+            {
+                builder.Append("- ").Append(Truncate(ev.Title,200))
+                    .Append(" | module=").Append(ev.ModuleCode)
+                    .Append(" | entityType=").Append(ev.EntityTypeCode)
+                    .Append(" | relevance=").Append(ev.RelevanceScore.ToString("0.000"));
+                if(ev.MatchedBranches.Count>0)builder.Append(" | branches=").Append(Truncate(string.Join(", ",ev.MatchedBranches),300));
+                if(!string.IsNullOrWhiteSpace(ev.Excerpt))builder.Append(" | excerpt=").Append(Truncate(ev.Excerpt,400));
+                builder.Append('\n');
+            }
+        }
+        if(externalKnowledge.Count>0)
+        {
+            builder.Append("\nDOCUMENT INTELLIGENCE / RETRIEVED SOURCES (Document Intelligence tab \u2014 label each by its verification state exactly; do NOT upgrade a retrieved/unverified source to verified legal support):\n");
+            foreach(var snippet in externalKnowledge
+                .OrderByDescending(s=>s.AuthorityIdentityVerified)
+                .ThenByDescending(s=>s.PropositionSupportScore)
+                .ThenByDescending(s=>s.Score)
+                .Take(16))
+            {
+                if(string.IsNullOrWhiteSpace(snippet.Title)&&string.IsNullOrWhiteSpace(snippet.Snippet))continue;
+                builder.Append("- ").Append(Truncate(string.IsNullOrWhiteSpace(snippet.Title)?snippet.Query:snippet.Title,200))
+                    .Append(" | identityVerified=").Append(snippet.AuthorityIdentityVerified?"YES":"NO")
+                    .Append(" | supportStatus=").Append(snippet.PropositionSupportStatus??"UNVERIFIED")
+                    .Append(" | supportScore=").Append(snippet.PropositionSupportScore.ToString("0.000"));
+                if(!string.IsNullOrWhiteSpace(snippet.AuthorityKind))builder.Append(" | kind=").Append(snippet.AuthorityKind);
+                if(!string.IsNullOrWhiteSpace(snippet.Jurisdiction))builder.Append(" | jurisdiction=").Append(snippet.Jurisdiction);
+                if(!string.IsNullOrWhiteSpace(snippet.BranchDisplayName))builder.Append(" | branch=").Append(Truncate(snippet.BranchDisplayName,160));
+                if(!string.IsNullOrWhiteSpace(snippet.Snippet))builder.Append(" | passage=").Append(Truncate(snippet.Snippet,400));
+                builder.Append('\n');
+            }
+        }
+        if(interpretiveResults.Count>0)
+        {
+            builder.Append("\nINTERPRETIVE ANALYSIS (original branch interpretations \u2014 the reasoning behind each dimension; use to explain WHY, preserving any contradictions):\n");
+            foreach(var ir in interpretiveResults.OrderByDescending(r=>r.Confidence).Take(16))
+            {
+                builder.Append("- ").Append(Truncate(ir.BranchDisplayName,160))
+                    .Append(" | confidence=").Append(ir.Confidence.ToString("0.000"))
+                    .Append(" | interpretation=").Append(Truncate(ir.Interpretation,500)).Append('\n');
+            }
+        }
+        builder.Append("\nReturn JSON ONLY matching the schema. Produce the BEST possible attorney-grade analysis for EVERY candidate by INTEGRATING all supplied context together: (a) the MATTER + CLIENT PROFILE above (parties, jurisdiction, incident, injuries, damages, allegations), (b) the ADMITTED EVIDENCE (Evidence tab), (c) the DOCUMENT INTELLIGENCE / RETRIEVED SOURCES, (d) the INTERPRETIVE ANALYSIS, and (e) the candidate's own scores. Do not write from scores alone and do not produce generic, score-reciting prose; a narrative that merely restates 'composite=0.000, coverage=100%, no document identified' is a FAILURE. Instead, tell the reader what THIS matter's facts and evidence say about THIS outcome. "
+            +"SHORT NARRATIVE (overviewNarrative): 2-4 tight sentences that name THIS candidate outcome, state in plain language why it is currently plausible or weak given the matter facts and admitted evidence, and name the single most decisive factor. "
+            +"LONG NARRATIVE (fullAnalysis fields): walk the matter facts and each admitted-evidence item and retrieved source that bears on this candidate, tying them to the candidate's highest-scoring branch dimensions; the evidenceAndAuthorityPosition field MUST reference actual documents/records by title, module, relevance, and verification/support status rather than reciting coverage percentages. "
+            +"When a source or matter fact CONTRADICTS a numeric framing, reconcile the prose in favor of the admitted evidence and matter facts and say so explicitly. Each candidate IS a distinct Decision Outcome: anchor every narrative to that candidate's OWN identity and OWN per-branch (Cs) scores; make the text explicitly differential so no two candidates could be swapped without becoming wrong. Keep candidate names and identities verbatim, label retrieved/unverified material as such, preserve genuine contradictions, and never introduce new facts, authorities, scores, or rankings beyond those supplied above.");
         return builder.ToString();
     }
 
@@ -2454,7 +2548,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     // One LLM call turns the whole decided candidate competition into a coherent landscape plus an
     // individualized per-candidate narrative. It never re-runs reasoning, changes ranking/scores, or
     // introduces new facts; any failure returns null and the standard POLOXI candidate cards stand.
-    private async Task<WideCandidateLandscapeDto?> ComposeCandidateLandscapeAsync(WideSearchRequest request,string executionId,IReadOnlyCollection<WideCandidateDto> candidates,string? winnerDisplayName,string answerStatus,decimal? decisionConfidence,WideEntropyResult finalEntropy,CancellationToken cancellationToken)
+    private async Task<WideCandidateLandscapeDto?> ComposeCandidateLandscapeAsync(WideSearchRequest request,string executionId,IReadOnlyCollection<WideCandidateDto> candidates,string? winnerDisplayName,string answerStatus,decimal? decisionConfidence,WideEntropyResult finalEntropy,IReadOnlyCollection<PoloxiEvidenceDto> relevantEvidence,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge,IReadOnlyCollection<WideInterpretiveResultDto> interpretiveResults,CancellationToken cancellationToken)
     {
         try
         {
@@ -2463,7 +2557,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             var presentationState=string.Equals(answerStatus,"USER_CLARIFICATION_REQUIRED",StringComparison.OrdinalIgnoreCase)?"INTERPRETIVE"
                 :string.IsNullOrWhiteSpace(winnerDisplayName)?"INTERPRETIVE"
                 :"COMPETED";
-            var userPrompt=BuildCandidateLandscapeContext(request,executionId,candidates,winnerDisplayName,presentationState,decisionConfidence,finalEntropy);
+            var userPrompt=BuildCandidateLandscapeContext(request,executionId,candidates,winnerDisplayName,presentationState,decisionConfidence,finalEntropy,relevantEvidence,externalKnowledge,interpretiveResults,BuildMatterContextSection());
             userPrompt=AppendCanonicalOutcomeMappingContext(userPrompt);
             var result=await aiProviderRouter.GenerateAsync(request.TenantId,CandidateLandscapeFeatureCode(request),
                 await GetWideSystemPromptAsync(request,IntelligencePromptCodes.WideCandidateLandscape,cancellationToken),
@@ -3533,6 +3627,14 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         // Not-prioritized (DORMANT) branches are included so their interpretations still receive full
         // result sets — they render as secondary-importance results, never disappear from the surface.
         var allInterpretiveBranches=survivors.Where(branch=>branch.GroundingStatusCode=="INTERPRETIVE"||branch.BranchStateCode==WideBranchStates.Dormant).OrderBy(branch=>branch.LevelNumber).ThenByDescending(branch=>branch.Confidence).ToArray();
+        // Legal EVALUATE decomposes broad L1/L2 interpretive dimensions into atomic L3/L4+ factor propositions
+        // that are grounded/evaluated (not tagged INTERPRETIVE/Dormant) and therefore excluded above - which
+        // silently caps the Interpretation results surface at L1/L2. For legal runs, seed the numbered paths
+        // from EVERY surviving branch that carries an interpretation so every reasoning-hierarchy level through
+        // the deepest L-value is represented; the existing level-ascending order and prompt-budget loop are
+        // preserved, so this never alters ranking, evidence admission, or scoring.
+        if(IsLegalDecisionEvaluationRun)
+            allInterpretiveBranches=survivors.Where(branch=>!string.IsNullOrWhiteSpace(branch.Interpretation)).OrderBy(branch=>branch.LevelNumber).ThenByDescending(branch=>branch.Confidence).ToArray();
         // Fallback: a run can produce surviving branches none of which are tagged INTERPRETIVE/Dormant
         // (for example every branch resolved against a capability). Without numbered paths the answer LLM
         // returns zero interpretiveResults and the LLM-knowledge section renders empty - leaving the POLOXI
@@ -4590,9 +4692,16 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
 
     // Interpretive result sets answered by the LLM for the interpretive narrowing paths, arranged with
     // Level 1 branches first, then by POLOXI branch-support confidence (prior + evidence, highest first).
-    private static WideInterpretiveResultDto[] MapInterpretiveResults(WideAnswerProposal answer,IReadOnlyCollection<WideBranchRecord> survivors,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge)
+    private static WideInterpretiveResultDto[] MapInterpretiveResults(WideAnswerProposal answer,IReadOnlyCollection<WideBranchRecord> survivors,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge,bool includeAllLevels=false)
     {
-        var interpretive=survivors.Where(branch=>branch.GroundingStatusCode=="INTERPRETIVE"||branch.BranchStateCode==WideBranchStates.Dormant).GroupBy(branch=>NormalizeBranchDisplayKey(branch.DisplayName),StringComparer.OrdinalIgnoreCase).ToDictionary(group=>group.Key,group=>(Level:group.Min(branch=>branch.LevelNumber),Confidence:group.Max(branch=>branch.PoloxiConfidence>0?branch.PoloxiConfidence:branch.Confidence),StateCode:group.OrderByDescending(branch=>branch.PoloxiConfidence>0?branch.PoloxiConfidence:branch.Confidence).First().BranchStateCode),StringComparer.OrdinalIgnoreCase);
+        // The resolution set normally covers only INTERPRETIVE/Dormant branches. On a legal EVALUATE run the
+        // numbered narrowing paths also include the atomic L3/L4+ factor branches (grounded/evaluated), so the
+        // lookup must cover every interpretation-bearing survivor; otherwise those deeper results resolve to
+        // Level 0 and render as "LN" instead of their true reasoning-hierarchy L-value.
+        var resolutionBranches=survivors.Where(branch=>branch.GroundingStatusCode=="INTERPRETIVE"||branch.BranchStateCode==WideBranchStates.Dormant).ToArray();
+        if(resolutionBranches.Length==0||includeAllLevels)
+            resolutionBranches=survivors.Where(branch=>!string.IsNullOrWhiteSpace(branch.Interpretation)).ToArray();
+        var interpretive=resolutionBranches.GroupBy(branch=>NormalizeBranchDisplayKey(branch.DisplayName),StringComparer.OrdinalIgnoreCase).ToDictionary(group=>group.Key,group=>(Level:group.Min(branch=>branch.LevelNumber),Confidence:group.Max(branch=>branch.PoloxiConfidence>0?branch.PoloxiConfidence:branch.Confidence),StateCode:group.OrderByDescending(branch=>branch.PoloxiConfidence>0?branch.PoloxiConfidence:branch.Confidence).First().BranchStateCode),StringComparer.OrdinalIgnoreCase);
         // The answer LLM may echo a slightly different display name than the stored branch name; without a
         // tolerant lookup every card silently falls back to the single shared answer confidence, which makes
         // all interpretive scores identical. Exact normalized match first, then the most specific containment

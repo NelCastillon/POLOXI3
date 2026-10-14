@@ -23,15 +23,15 @@ public partial class LegalPersonalInjuryDecision2
 {
     // Expand/collapse state for the synthesis-first candidate assessment cards (by candidate index). The
     // synthesis is always visible; the supporting detail (13 facets + original branch interpretations) is
-    // EXPANDED BY DEFAULT so attorneys immediately see the full reasoning and lineage. We track the
-    // explicitly COLLAPSED indices so the default (absent from the set) renders expanded.
-    private readonly HashSet<int> _ovAssessmentCollapsed = [];
-    internal bool IsAssessmentExpanded(int index) => !_ovAssessmentCollapsed.Contains(index);
+    // collapsed by default for every candidate EXCEPT the leading one (C1), which starts expanded so the
+    // attorney immediately sees the full reasoning for the top outcome. We track explicit user overrides so
+    // toggling still works in both directions; absent an override the default rule (only C1 expanded) applies.
+    private const int LeadingAssessmentIndex = 1;
+    private readonly Dictionary<int, bool> _ovAssessmentOverride = [];
+    internal bool IsAssessmentExpanded(int index) =>
+        _ovAssessmentOverride.TryGetValue(index, out var expanded) ? expanded : index == LeadingAssessmentIndex;
     internal void ToggleAssessment(int index)
-    {
-        if (!_ovAssessmentCollapsed.Remove(index))
-            _ovAssessmentCollapsed.Add(index);
-    }
+        => _ovAssessmentOverride[index] = !IsAssessmentExpanded(index);
 
     // Whether the reusable Matter Analysis block is expanded on the Overview tab (collapsed by default).
     private bool _ovMatterAnalysisExpanded;
@@ -47,6 +47,16 @@ public partial class LegalPersonalInjuryDecision2
         string Summary,
         IReadOnlyList<string> Items);
 
+    // One legal-authority citation surfaced under a candidate assessment. Projected (never fabricated)
+    // from the run's already-proposed legal authorities (DaAuthorities) whose name/tokens genuinely appear
+    // in THIS candidate's narrative, branch, or synthesis text. SearchUrl is an external lookup link used
+    // when no stored reference/URL exists for the authority.
+    internal sealed record OvCitation(
+        string Name,
+        string Kind,
+        string VerificationStatus,
+        string SearchUrl);
+
     // A complete per-candidate assessment: a readable synthesis first, the original branch interpretations
     // preserved beneath (Interpretations = OvOutcome.FullNarrative), and the expandable 13-facet detail.
     internal sealed record OvCandidateAssessment(
@@ -58,11 +68,71 @@ public partial class LegalPersonalInjuryDecision2
         string? Narrative,
         IReadOnlyList<(string Label, string Text)> Interpretations,
         IReadOnlyList<OvAssessmentFacet> Facets,
+        IReadOnlyList<OvCitation> Citations,
         int SupportPct,
         bool IsLeader,
         bool CompetitionValid,
         string ViabilityLabel,
         string ViabilityTone);
+
+    // Builds an external search URL for an authority when no stored reference/URL exists, so the attorney
+    // can still look the citation up. Uses a neutral web search over the exact authority text.
+    internal static string OvCitationSearchUrl(string authorityName)
+        => $"https://www.google.com/search?q={Uri.EscapeDataString(authorityName)}";
+
+    // Matches the run's proposed legal authorities to a single candidate by checking whether the authority
+    // name (or its distinctive tokens) genuinely appears in that candidate's narrative / full analysis /
+    // branch / detail text. Pure projection over persisted values — empty when nothing matches, never
+    // fabricated and never duplicated.
+    private IReadOnlyList<OvCitation> OvCitationsForCandidate(OvOutcome o)
+    {
+        var authorities = DaAuthorities;
+        if (authorities.Count == 0) return [];
+
+        // Assemble the candidate-specific text corpus from persisted values only.
+        var corpus = new System.Text.StringBuilder();
+        void AddText(string? text) { if (!string.IsNullOrWhiteSpace(text)) corpus.Append(' ').Append(text); }
+        AddText(o.Title);
+        AddText(o.Detail);
+        AddText(o.CardText);
+        AddText(o.Narrative);
+        foreach (var seg in o.FullNarrative)
+        {
+            AddText(seg.Label);
+            AddText(seg.Text);
+        }
+        foreach (var b in o.BranchScores)
+            AddText(b.BranchDisplayName);
+
+        var haystack = corpus.ToString();
+        if (string.IsNullOrWhiteSpace(haystack)) return [];
+
+        var matched = new List<OvCitation>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var a in authorities)
+        {
+            if (string.IsNullOrWhiteSpace(a.Name) || !seen.Add(a.Name)) continue;
+            if (!OvAuthorityAppearsInText(a.Name, haystack)) continue;
+            matched.Add(new OvCitation(a.Name, a.Kind, a.VerificationStatus, OvCitationSearchUrl(a.Name)));
+        }
+        return matched;
+    }
+
+    // True when an authority name genuinely appears in the candidate text: either the full name is present,
+    // or every distinctive token (length >= 4, numbers kept) of the authority appears. This avoids matching
+    // on common filler words while remaining resilient to citation punctuation differences.
+    private static bool OvAuthorityAppearsInText(string authorityName, string haystack)
+    {
+        if (haystack.Contains(authorityName, StringComparison.OrdinalIgnoreCase)) return true;
+
+        var tokens = authorityName
+            .Split([' ', ',', '.', ';', ':', '(', ')', '§', '-', '/', '\t', '\n', '\r'], StringSplitOptions.RemoveEmptyEntries)
+            .Where(t => t.Length >= 4 || t.Any(char.IsDigit))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (tokens.Length == 0) return false;
+        return tokens.All(t => haystack.Contains(t, StringComparison.OrdinalIgnoreCase));
+    }
 
     // The assembled candidate assessment across EVERY relevant L1→Ln branch, one row per decision candidate.
     // Built from the same OvOutcomes pool the Decision Outcomes cards use, so it is always consistent with
@@ -198,6 +268,8 @@ public partial class LegalPersonalInjuryDecision2
 
                 var synthesis = BuildCandidateSynthesis(o, competitionValid, supporting.Count, opposing.Count, questions.Count);
 
+                var citations = OvCitationsForCandidate(o);
+
                 list.Add(new OvCandidateAssessment(
                     o.Index,
                     o.Title,
@@ -207,6 +279,7 @@ public partial class LegalPersonalInjuryDecision2
                     o.Narrative,
                     o.FullNarrative,
                     facets,
+                    citations,
                     o.SupportPct,
                     o.IsLeader,
                     competitionValid,
