@@ -24,12 +24,23 @@
             <div class="auth-alert" role="alert"><i class="bi bi-exclamation-triangle"></i> @_agreementsError</div>
         }
 
-        @if (_agreementsError is not null)
+        @if (_earlyAccessLocked)
         {
-            <div class="auth-alert" role="alert"><i class="bi bi-exclamation-triangle"></i> @_agreementsError</div>
+            <div class="auth-locked" role="status">
+                <i class="bi bi-lock-fill" aria-hidden="true"></i>
+                <p>
+                    Self-service account creation is being finalized during Early Access.
+                    To request access, please contact
+                    <a href="mailto:legal@judz.ai">legal@judz.ai</a>.
+                </p>
+                <a class="auth-btn" href="mailto:legal@judz.ai">
+                    <i class="bi bi-envelope" aria-hidden="true"></i> Contact us
+                </a>
+            </div>
         }
-
-        <EditForm Model="_form" OnValidSubmit="SubmitAsync">
+        else
+        {
+            <EditForm Model="_form" OnValidSubmit="SubmitAsync">
             <DataAnnotationsValidator />
             <div class="auth-row">
                 <div class="auth-field">
@@ -67,10 +78,11 @@
                 </div>
                 <ValidationMessage For="() => _form.AcceptedAgreements" class="text-danger" />
             </div>
-            <button type="submit" class="auth-btn" disabled="@(_busy || !_form.AcceptedAgreements || !AgreementsAvailable)">
+            <button type="submit" class="auth-btn" disabled="@(_busy || _earlyAccessLocked || !_form.AcceptedAgreements || !AgreementsAvailable)">
                 @(_busy ? "Creating account…" : "Create account")
             </button>
         </EditForm>
+        }
 
         <p class="auth-foot">Already have an account? <a href="/login">Sign in</a></p>
     </div>
@@ -146,7 +158,11 @@
     private LegalAgreementDto? _selectedAgreement;
     private bool _showEarlyAccessNotice = true;
 
-    private void CloseEarlyAccessNotice() => _showEarlyAccessNotice = false;
+    // Self-service signup is intentionally locked during Early Access. Dismissing the notice must NOT
+    // enable account creation; the lock stays in effect until self-service is finalized.
+    private bool _earlyAccessLocked = true;
+
+    private void CloseEarlyAccessNotice() => Navigation.NavigateTo("/", forceLoad: true);
 
     private bool AgreementsAvailable => FindAgreement(AgreementType.TermsOfService) is not null
         && FindAgreement(AgreementType.PrivacyPolicy) is not null;
@@ -180,6 +196,11 @@
 
     private async Task SubmitAsync()
     {
+        if (_earlyAccessLocked)
+        {
+            _error = "Self-service account creation is not available during Early Access. Please contact legal@judz.ai for access.";
+            return;
+        }
         _busy = true;
         _error = null;
         try
