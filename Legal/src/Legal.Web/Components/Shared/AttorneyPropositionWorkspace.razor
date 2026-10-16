@@ -19,6 +19,8 @@
    as a real outcome.
    ──────────────────────────────────────────────────────────────────────────── *@
 
+@inject IJSRuntime JS
+
 <div class="apw">
 
     <div class="apw-header">
@@ -73,6 +75,17 @@
         <div class="apw-tree-head">
             <span class="apw-card-label">Evaluation tree</span>
             <div class="apw-tree-head-right">
+                <div class="apw-tree-filter">
+                    <i class="bi bi-search"></i>
+                    <input type="text" class="apw-tree-filter-input" @bind="_nodeFilter" @bind:event="oninput"
+                           placeholder="Filter nodes (e.g. L3) to jump to a drop zone…" />
+                    @if (!string.IsNullOrWhiteSpace(_nodeFilter))
+                    {
+                        <button type="button" class="apw-tree-filter-clear" title="Clear filter" @onclick="() => _nodeFilter = string.Empty">
+                            <i class="bi bi-x-lg"></i>
+                        </button>
+                    }
+                </div>
                 <span class="apw-tree-context">@SelectedCode CONTEXT</span>
                 <button type="button" class="apw-btn apw-btn-ghost">Expand causation</button>
             </div>
@@ -81,10 +94,11 @@
         <div class="apw-tree-grid">
             @foreach (var col in EffectiveTreeColumns)
             {
+                var visibleNodes = FilteredNodes(col);
                 <div class="apw-tree-col">
                     <div class="apw-col-head">@col.Head</div>
 
-                    @for (var i = 0; i <= col.Nodes.Count; i++)
+                    @for (var i = 0; i <= visibleNodes.Count; i++)
                     {
                         var slotId = $"{col.Level}:{i}";
                         var level = col.Level;
@@ -145,13 +159,14 @@
                         {
                             var isActive = _activeSlot == slotId;
                             <div class="apw-rail @(_hoverSlot == slotId ? "apw-rail--hover" : "") @(isActive && _dropPreview ? "apw-rail--preview" : "")"
+                                 id="@(isActive && _dropPreview ? "apw-active-preview" : null)"
                                  @ondragover:preventDefault="true"
                                  @ondragover="() => _hoverSlot = slotId"
                                  @ondragleave="() => _hoverSlot = null"
                                  @ondrop="() => OnDropSlotAsync(slotId, level)"
                                  @onclick="() => PreviewSlotAsync(slotId, level)"
                                  role="button"
-                                 title="Insert a proposition here (L@(level))">
+                                 title="Click to insert a proposition here (L@(level)) — no dragging required">
                                 @if (isActive && _busy)
                                 {
                                     <i class="bi bi-arrow-repeat apw-spin"></i>
@@ -189,15 +204,15 @@
                                 }
                                 else
                                 {
-                                    <span class="apw-rail-plus"><i class="bi bi-plus-lg"></i> Insert here</span>
+                                    <span class="apw-rail-plus"><i class="bi bi-plus-lg"></i> Click to insert here</span>
                                 }
                             </div>
                         }
 
                         @* The node that follows this slot (if any) *@
-                        @if (i < col.Nodes.Count)
+                        @if (i < visibleNodes.Count)
                         {
-                            var n = col.Nodes[i];
+                            var n = visibleNodes[i];
                             <div class="apw-node @NodeCssFor(n)"
                                  @onmouseover="() => OnNodeHover(n.NodeId)"
                                  @onmouseout="() => OnNodeHover(null)">
@@ -232,7 +247,7 @@
 
         <div class="apw-tree-foot">
             <i class="bi bi-arrows-move"></i>
-            Drag from the proposition tray, or select the insertion zone, to evaluate the Human Intelligence (LPI) impact on the selected candidate.
+            Drag the proposition into the tree — or, for distant rows, <strong>click any “Click to insert here” zone</strong> to place it without dragging. Either way evaluates the Human Intelligence (LPI) impact on the selected candidate.
         </div>
     </section>
 
@@ -240,7 +255,7 @@
     <section class="apw-card apw-tray">
         <div class="apw-tray-head">
             <strong>New proposition</strong>
-            <span class="apw-tray-hint">Drag into the tree, or select a drop zone, to preview placement.</span>
+            <span class="apw-tray-hint">Drag into the tree, or just click a drop zone, to preview placement.</span>
         </div>
 
         <label class="apw-field-label">Atomic statement</label>
@@ -308,6 +323,28 @@
     // ── Public view-model + callback contract ─────────────────────────────────
     public sealed record WorkspaceCandidate(Guid NodeId, string Code, string Label, decimal? Score);
     public sealed record WorkspacePreviewRequest(Guid CandidateId, string Text, int Level);
+
+    // Columns are independently scrollable, so a preview opened on a distant (e.g. bottom L3) rail can
+    // have its Apply/Cancel actions below the visible pane. Scroll the active preview into view so its
+    // buttons are always reachable. UI-only; no placement logic is affected.
+    private bool _scrollPreviewPending;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_scrollPreviewPending)
+        {
+            _scrollPreviewPending = false;
+            try
+            {
+                await JS.InvokeVoidAsync("eval",
+                    "document.getElementById('apw-active-preview')?.scrollIntoView({block:'center',behavior:'smooth'})");
+            }
+            catch
+            {
+                // Non-fatal: scrolling is a convenience only.
+            }
+        }
+    }
     public sealed record WorkspacePreviewResult(decimal CurrentScore, decimal ProjectedScore, decimal Delta, string? Explanation, bool Advisory);
     public sealed record WorkspaceApplyRequest(Guid CandidateId, string Text, int Level);
     public sealed record WorkspaceApplyResult(decimal FinalScore, decimal Delta, bool Advisory, string? Summary);
@@ -463,6 +500,7 @@
     // ── Draft + placement state ───────────────────────────────────────────────
     private string _draftText = "The vehicle crossed the stop line while the signal was red.";
     private string? _hoverSlot;
+    private string _nodeFilter = string.Empty;   // UI-only: filters which tree nodes are rendered so long columns (L3) stay reachable
     private string? _activeSlot;   // slot currently being previewed
     private string? _appliedSlot;  // slot where the proposition was placed
     private int _activeLevel = 3;  // hierarchy level of the active/applied slot
@@ -491,6 +529,22 @@
 
     private static string FormatScore(decimal? score)
         => score is { } s ? s.ToString("0.#") : "—";
+
+    // UI-only: narrows which nodes a column renders based on the free-text filter. Insertion slots and
+    // drop/scoring logic are untouched — only the rendered node set shrinks so long columns (L3) become
+    // reachable. Matching is case-insensitive across level, name, parent name and sub text.
+    private IReadOnlyList<TreeNode> FilteredNodes(TreeColumn col)
+    {
+        if (string.IsNullOrWhiteSpace(_nodeFilter)) return col.Nodes;
+        var q = _nodeFilter.Trim();
+        return col.Nodes
+            .Where(n =>
+                (n.Lvl?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false)
+                || (n.Name?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false)
+                || (n.ParentName?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false)
+                || (n.Sub?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false))
+            .ToList();
+    }
 
     // Percentage width (0–100) for the candidate score bar; scores are treated as 0–100 LPI.
     private int ScorePercent(decimal? score)
@@ -542,6 +596,7 @@
         _activeLevel = level;
         _dropPreview = true;
         _previewResult = null;
+        _scrollPreviewPending = true;   // bring the preview (and its Apply/Cancel) fully into view
 
         if (PreviewHandler is null || _selectedCandidateId is not { } cid)
             return; // local demo mode: show the preview panel without a score
