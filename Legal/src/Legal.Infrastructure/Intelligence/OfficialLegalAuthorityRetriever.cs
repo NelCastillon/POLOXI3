@@ -17,6 +17,9 @@ public interface ILegalAuthoritySourceRegistry
 {
     Task<IReadOnlyCollection<LegalAuthoritySourceDescriptor>> GetSourcesAsync(Guid tenantId,CancellationToken cancellationToken=default);
     Task RegisterAsync(LegalAuthoritySourceRegistration registration,CancellationToken cancellationToken=default);
+    // Best-effort stamp of the latest retrieval attempt (date + outcome) so the admin registry can show
+    // a source actually ran. Default no-op keeps test doubles and alternate registries unaffected.
+    Task RecordRunAsync(Guid legalAuthoritySourceId,string runStatus,CancellationToken cancellationToken=default) => Task.CompletedTask;
 }
 
 public sealed class LegalAuthoritySourceRegistry(IIntelligenceWideRepository repository):ILegalAuthoritySourceRegistry
@@ -26,6 +29,9 @@ public sealed class LegalAuthoritySourceRegistry(IIntelligenceWideRepository rep
 
     public Task RegisterAsync(LegalAuthoritySourceRegistration registration,CancellationToken cancellationToken=default) =>
         repository.UpsertLegalAuthoritySourceAsync(registration,cancellationToken);
+
+    public Task RecordRunAsync(Guid legalAuthoritySourceId,string runStatus,CancellationToken cancellationToken=default) =>
+        repository.RecordLegalAuthoritySourceRunAsync(legalAuthoritySourceId,runStatus,cancellationToken);
 }
 
 public interface ILegalAuthoritySourceBootstrapper
@@ -98,8 +104,12 @@ public sealed class OfficialLegalAuthorityRetriever(
         {
             var fetched=await FetchAsync(query,candidate.Descriptor,candidate.Citation,timeout.Token,cancellationToken);
             if(fetched.Snippet is not null)
+            {
+                await RecordRunSafelyAsync(candidate.Descriptor,"RESULTS_FOUND",candidate.Citation.Value,fetched.Url,fetched.HttpStatus,null,cancellationToken);
                 return new([fetched.Snippet],new(candidate.Descriptor.ProviderCode,true,"RESULTS_FOUND",1,1,
                     NormalizedCitation:candidate.Citation.Value,EndpointUrl:fetched.Url,HttpStatus:fetched.HttpStatus));
+            }
+            await RecordRunSafelyAsync(candidate.Descriptor,fetched.FailureOutcome??"NO_RESULTS",candidate.Citation.Value,fetched.Url,fetched.HttpStatus,fetched.FailureDetail,cancellationToken);
             if(fetched.FailureOutcome is not null&&OutcomeSeverity(fetched.FailureOutcome)>OutcomeSeverity(failureOutcome))
             {
                 failureOutcome=fetched.FailureOutcome;
@@ -112,6 +122,52 @@ public sealed class OfficialLegalAuthorityRetriever(
         return failureOutcome is not null
             ?Empty(true,failureOutcome,failureDetail,failureCitation,failureUrl,failureStatus)
             :Empty(true,"NO_RESULTS");
+    }
+
+    // Best-effort last-run stamp so the admin registry can show a source actually ran (date + outcome).
+    // Never allowed to disrupt retrieval: swallow all non-cancellation faults and log at debug. In
+    // addition, any non-success outcome is persisted to the DB-backed error log so administrators can
+    // see WHY a source failed (provider, citation, endpoint, HTTP status, detail) alongside its status.
+    private async Task RecordRunSafelyAsync(LegalAuthoritySourceDescriptor descriptor,string runStatus,string? citation,string? url,int? httpStatus,string? detail,CancellationToken cancellationToken)
+    {
+        if(descriptor.LegalAuthoritySourceId!=Guid.Empty)
+        {
+            try
+            {
+                await registry.RecordRunAsync(descriptor.LegalAuthoritySourceId,runStatus,cancellationToken);
+            }
+            catch(Exception exception)when(exception is not OperationCanceledException||!cancellationToken.IsCancellationRequested)
+            {
+                logger.LogDebug(exception,"LEGAL-TRACE stage=3-official-authority outcome=LAST_RUN_STAMP_FAILED source={SourceId}",descriptor.LegalAuthoritySourceId);
+            }
+        }
+
+        if(string.Equals(runStatus,"RESULTS_FOUND",StringComparison.OrdinalIgnoreCase))return;
+
+        // Severity mirrors OutcomeSeverity: systemic technical failures are Errors; an empty/no-result
+        // outcome is advisory (Warning). errorLog is fail-soft, so no try/catch is required here.
+        var severity=OutcomeSeverity(runStatus)>=2?"Error":"Warning";
+        var contextJson=System.Text.Json.JsonSerializer.Serialize(new
+        {
+            outcome=runStatus,
+            sourceId=descriptor.LegalAuthoritySourceId,
+            provider=descriptor.ProviderCode,
+            jurisdiction=descriptor.JurisdictionCode,
+            authorityKind=descriptor.AuthorityKindCode,
+            citation,
+            url,
+            httpStatus,
+            detail
+        });
+        await errorLog.LogAsync(new ErrorLogEntry
+        {
+            Module="OfficialLegalAuthorityRetriever",
+            Operation="SearchAsync/Fetch",
+            SeverityCode=severity,
+            Message=$"Authority source '{descriptor.ProviderCode}' run outcome {runStatus}"+(string.IsNullOrWhiteSpace(detail)?string.Empty:$": {detail}"),
+            Source=url,
+            ContextJson=contextJson
+        },cancellationToken);
     }
 
     // Higher wins when several candidates fail differently: a systemic technical failure is more
@@ -231,20 +287,30 @@ public sealed class OfficialLegalAuthorityRetriever(
             return await FetchCuratedAsync(query,descriptor,citation,cancellationToken);
         var relativeUrl=ExpandTemplate(descriptor.DocumentUrlTemplate,citation);
         if(relativeUrl is null)return (null,"EXTRACTION_EMPTY",null,null,null);
-        var url=$"{descriptor.BaseUrl.TrimEnd('/')}/{relativeUrl.TrimStart('/')}";
-        var isJsonApi=descriptor.ExtractionStrategyCode.Equals("JSON_NYSENATE",StringComparison.OrdinalIgnoreCase);
+        // An authority row MAY override the host with a per-source API endpoint (ApiEndpoint). When present
+        // it is used as the base for the document URL instead of BaseUrl, letting a JSON API live on a
+        // different host than the human-facing BaseUrl shown in the admin grid.
+        var apiBase=string.IsNullOrWhiteSpace(descriptor.ApiEndpoint)?descriptor.BaseUrl:descriptor.ApiEndpoint!;
+        var url=$"{apiBase.TrimEnd('/')}/{relativeUrl.TrimStart('/')}";
+        var isNySenate=descriptor.ExtractionStrategyCode.Equals("JSON_NYSENATE",StringComparison.OrdinalIgnoreCase);
+        var isGenericJsonApi=descriptor.ExtractionStrategyCode.Equals("JSON_API",StringComparison.OrdinalIgnoreCase);
+        var isJsonApi=isNySenate||isGenericJsonApi;
         if(isJsonApi)
         {
-            // The NY Senate Open Legislation API is the only government-host source that returns live New
-            // York statute text from blocked networks (nysenate.gov HTML and Justia both 403). It requires a
-            // free API key, appended as a query-string parameter from configuration so the key is never
-            // stored in the descriptor row. Missing key => explicit, actionable failure (not a silent 401).
-            var apiKey=configuration["Legal:OfficialAuthority:NySenateApiKey"];
+            // Credential resolution order: the per-source ApiKey column (configured from the admin UI) wins;
+            // for the legacy NY Senate row we fall back to the global configuration key so existing
+            // deployments keep working. The key is appended as a query-string parameter and the account id
+            // (ApiAccountId), when supplied, is sent as an additional parameter. Secrets are never logged.
+            var apiKey=string.IsNullOrWhiteSpace(descriptor.ApiKey)
+                ? (isNySenate?configuration["Legal:OfficialAuthority:NySenateApiKey"]:null)
+                : descriptor.ApiKey;
             if(string.IsNullOrWhiteSpace(apiKey))
             {
                 logger.LogWarning("LEGAL-TRACE stage=4-official-authority provider={Provider} outcome=PROVIDER_FAILURE detail=MISSING_API_KEY",descriptor.ProviderCode);
-                return (null,"PROVIDER_FAILURE","Legal:OfficialAuthority:NySenateApiKey is not configured; NY Senate API requires a key.",url,null);
+                return (null,"PROVIDER_FAILURE","API key is not configured for this authority source; configure the API key on the source or Legal:OfficialAuthority:NySenateApiKey.",url,null);
             }
+            if(!string.IsNullOrWhiteSpace(descriptor.ApiAccountId))
+                url=$"{url}{(url.Contains('?')?"&":"?")}account={Uri.EscapeDataString(descriptor.ApiAccountId!)}";
             url=$"{url}{(url.Contains('?')?"&":"?")}key={Uri.EscapeDataString(apiKey)}";
         }
         try
@@ -295,7 +361,11 @@ public sealed class OfficialLegalAuthorityRetriever(
             if(!response.IsSuccessStatusCode)
                 return (null,"PROVIDER_FAILURE",$"{descriptor.ProviderCode} returned HTTP {status} for {safeUrl}.",safeUrl,status);
             var finalUri=response.RequestMessage?.RequestUri;
-            if(finalUri is null||!Uri.TryCreate(descriptor.BaseUrl,UriKind.Absolute,out var baseUri)||
+            // Validate the final host against the base that was ACTUALLY used to build the request: for an
+            // API source that overrides the host via ApiEndpoint (apiBase), the trusted host is apiBase, not
+            // the human-facing BaseUrl. Comparing against BaseUrl would falsely reject a valid API response
+            // whose JSON host legitimately differs from the display BaseUrl as an untrusted redirect.
+            if(finalUri is null||!Uri.TryCreate(apiBase,UriKind.Absolute,out var baseUri)||
                !finalUri.Host.Equals(baseUri.Host,StringComparison.OrdinalIgnoreCase))
             {
                 logger.LogWarning("LEGAL-TRACE stage=4-official-authority provider={Provider} outcome=UNTRUSTED_REDIRECT url={Url}",descriptor.ProviderCode,safeUrl);
@@ -428,6 +498,8 @@ public sealed class OfficialLegalAuthorityRetriever(
     {
         if(descriptor.ExtractionStrategyCode.Equals("JSON_NYSENATE",StringComparison.OrdinalIgnoreCase))
             return ExtractNySenateJson(html);
+        if(descriptor.ExtractionStrategyCode.Equals("JSON_API",StringComparison.OrdinalIgnoreCase))
+            return ExtractGenericJson(html);
         if(descriptor.ExtractionStrategyCode.Equals("FULL_PAGE_TEXT",StringComparison.OrdinalIgnoreCase))
             return ExtractFullPageText(html);
         if(!descriptor.ExtractionStrategyCode.Equals("HTML_ID_SECTION",StringComparison.OrdinalIgnoreCase))return null;
@@ -453,6 +525,60 @@ public sealed class OfficialLegalAuthorityRetriever(
         var sentinelIndex=decoded.LastIndexOf(LeginfoBodySentinel,StringComparison.OrdinalIgnoreCase);
         var body=sentinelIndex>=0?decoded[(sentinelIndex+LeginfoBodySentinel.Length)..].Trim():decoded;
         return body.Length>=MinimumStatutoryBodyLength?body:null;
+    }
+
+    // Generic JSON API extraction. Provider-agnostic: walks the parsed JSON for the first substantial
+    // string value found under common statutory body properties ("text","body","content","document",
+    // "html","value"), preferring a top-level/result-scoped match. This lets arbitrary JSON APIs be
+    // consumed via the JSON_API strategy without a provider-specific parser, while still rejecting shell
+    // responses through the MinimumStatutoryBodyLength guard.
+    private static string? ExtractGenericJson(string json)
+    {
+        try
+        {
+            using var document=System.Text.Json.JsonDocument.Parse(json);
+            var text=FindJsonBody(document.RootElement,0);
+            if(string.IsNullOrWhiteSpace(text))return null;
+            var decoded=WebUtility.HtmlDecode(WhiteSpace.Replace(HtmlTag.Replace(text," ")," ")).Trim();
+            return decoded.Length>=MinimumStatutoryBodyLength?decoded:null;
+        }
+        catch(System.Text.Json.JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static readonly string[] JsonBodyProperties={"text","body","content","document","html","value"};
+
+    private static string? FindJsonBody(System.Text.Json.JsonElement element,int depth)
+    {
+        if(depth>6)return null;
+        switch(element.ValueKind)
+        {
+            case System.Text.Json.JsonValueKind.Object:
+                foreach(var name in JsonBodyProperties)
+                    if(element.TryGetProperty(name,out var direct)&&direct.ValueKind==System.Text.Json.JsonValueKind.String)
+                    {
+                        var value=direct.GetString();
+                        if(!string.IsNullOrWhiteSpace(value)&&value.Trim().Length>=MinimumStatutoryBodyLength)
+                            return value;
+                    }
+                foreach(var property in element.EnumerateObject())
+                {
+                    var nested=FindJsonBody(property.Value,depth+1);
+                    if(!string.IsNullOrWhiteSpace(nested))return nested;
+                }
+                return null;
+            case System.Text.Json.JsonValueKind.Array:
+                foreach(var item in element.EnumerateArray())
+                {
+                    var nested=FindJsonBody(item,depth+1);
+                    if(!string.IsNullOrWhiteSpace(nested))return nested;
+                }
+                return null;
+            default:
+                return null;
+        }
     }
 
     // Parses the NY Senate Open Legislation API JSON envelope:

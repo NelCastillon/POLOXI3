@@ -14,6 +14,16 @@ public interface IIntelligenceWideRepository
     Task<WideLegalGroundingConfiguration> GetLegalGroundingConfigurationAsync(Guid tenantId,CancellationToken cancellationToken=default);
     Task<IReadOnlyCollection<LegalAuthoritySourceDescriptor>> GetLegalAuthoritySourcesAsync(Guid tenantId,CancellationToken cancellationToken=default);
     Task UpsertLegalAuthoritySourceAsync(LegalAuthoritySourceRegistration registration,CancellationToken cancellationToken=default);
+    // Administration CRUD for the Legal Authority Source registry (tenant rows + platform defaults).
+    Task<IReadOnlyCollection<LegalAuthoritySourceAdminDto>> GetLegalAuthoritySourcesAdminAsync(Guid tenantId,CancellationToken cancellationToken=default);
+    Task<Guid> CreateLegalAuthoritySourceAsync(SaveLegalAuthoritySourceRequest request,Guid tenantId,Guid actorUserId,CancellationToken cancellationToken=default);
+    Task UpdateLegalAuthoritySourceAsync(Guid legalAuthoritySourceId,SaveLegalAuthoritySourceRequest request,Guid tenantId,Guid actorUserId,CancellationToken cancellationToken=default);
+    Task ToggleLegalAuthoritySourceAsync(Guid legalAuthoritySourceId,bool isEnabled,Guid tenantId,Guid actorUserId,CancellationToken cancellationToken=default);
+    Task DeleteLegalAuthoritySourceAsync(Guid legalAuthoritySourceId,Guid tenantId,Guid actorUserId,CancellationToken cancellationToken=default);
+    // Stamp the most recent retrieval attempt (UTC timestamp + outcome code) so the admin grid can show
+    // that a source is not just enabled but has actually run before. Best-effort; never on the hot path's
+    // critical result.
+    Task RecordLegalAuthoritySourceRunAsync(Guid legalAuthoritySourceId,string runStatus,CancellationToken cancellationToken=default);
     // DB-backed concept -> legal authority map (POLOXI.Legal_LegalConceptAuthority) used to resolve
     // concept-only legal branches to concrete UCC/U.S. Code citations for grounding.
     Task<IReadOnlyCollection<WideLegalConceptAuthorityDto>> GetLegalConceptAuthoritiesAsync(Guid tenantId,CancellationToken cancellationToken=default);

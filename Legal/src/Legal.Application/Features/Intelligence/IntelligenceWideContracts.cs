@@ -1265,7 +1265,11 @@ public sealed record LegalAuthoritySourceDescriptor(
     string DocumentUrlTemplate,
     string? SectionAnchorTemplate,
     string ExtractionStrategyCode,
-    int Priority);
+    int Priority,
+    string? MatterTypeCode = null,
+    string? ApiEndpoint = null,
+    string? ApiAccountId = null,
+    string? ApiKey = null);
 
 public sealed record LegalAuthorityDiscoveryRequest(
     Guid TenantId,
@@ -1286,7 +1290,58 @@ public sealed record LegalAuthoritySourceRegistration(
     int Priority,
     string DiscoveryMethodCode,
     string DiscoveryEvidenceUrl,
-    DateTime VerifiedDateUtc);
+    DateTime VerifiedDateUtc,
+    string? MatterTypeCode = null);
+
+// ── Administration CRUD surface for the Legal Authority Source registry ──
+// Full row projection for the admin management grid (includes enablement + audit).
+public sealed record LegalAuthoritySourceAdminDto(
+    Guid LegalAuthoritySourceId,
+    string ProviderCode,
+    string JurisdictionCode,
+    string AuthorityKindCode,
+    string? MatterTypeCode,
+    string CitationPattern,
+    string BaseUrl,
+    string DocumentUrlTemplate,
+    string? SectionAnchorTemplate,
+    string ExtractionStrategyCode,
+    string? DiscoveryMethodCode,
+    string? DiscoveryEvidenceUrl,
+    DateTime? VerifiedDateUtc,
+    int Priority,
+    bool IsEnabled,
+    Guid? TenantId,
+    DateTime CreatedDateUtc,
+    DateTime? ModifiedDateUtc,
+    string? ApiEndpoint = null,
+    string? ApiAccountId = null,
+    bool HasApiKey = false,
+    DateTime? LastRunDateUtc = null,
+    string? LastRunStatus = null);
+
+// Create/update payload. LegalAuthoritySourceId == null/empty => create.
+public sealed record SaveLegalAuthoritySourceRequest(
+    string ProviderCode,
+    string JurisdictionCode,
+    string AuthorityKindCode,
+    string? MatterTypeCode,
+    string CitationPattern,
+    string BaseUrl,
+    string DocumentUrlTemplate,
+    string? SectionAnchorTemplate,
+    string ExtractionStrategyCode,
+    string? DiscoveryMethodCode,
+    string? DiscoveryEvidenceUrl,
+    DateTime? VerifiedDateUtc,
+    int Priority,
+    bool IsEnabled,
+    string? ApiEndpoint = null,
+    string? ApiAccountId = null,
+    string? ApiKey = null);
+
+// Enable/disable toggle payload.
+public sealed record ToggleLegalAuthoritySourceRequest(bool IsEnabled);
 
 // DB-backed concept -> legal authority mapping (POLOXI.Legal_LegalConceptAuthority). Concept-only legal
 // branches (e.g. "cure of delay", "implied waiver") produce no explicit citation, so this map resolves

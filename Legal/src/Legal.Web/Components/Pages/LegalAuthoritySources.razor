@@ -1,0 +1,468 @@
+@page "/legal/configuration/authority-sources"
+@using System.ComponentModel.DataAnnotations
+@using Legal.Application.Features.Intelligence
+@using Legal.Application.Features.Intelligence.Decision
+@inject ApiClient Api
+
+@* ────────────────────────────────────────────────────────────────────────────
+   Legal Authority Sources — enterprise CRUD administration for the DB-backed
+   POLOXI.Legal_AuthoritySource registry. Curate official-law sources per
+   Provider × Jurisdiction (State) × Authority Kind × Matter Type to close the
+   per-state statutory/regulatory coverage gap. All option lists (Matter Type,
+   State/Jurisdiction) are DB-backed via the legal decision matter facets; no
+   mock/hardcoded values.
+   ──────────────────────────────────────────────────────────────────────────── *@
+
+<LegalWorkspace>
+<div class="intel-page">
+<header class="intel-header">
+    <div><span>Control plane</span><h1>Legal Authority Sources</h1><p>Curate the DB-backed official-law sources (statutes, regulations, case law) used to ground POLOXI legal reasoning. Sources are matched by Provider, Jurisdiction, Authority Kind and Matter Type. Leave Matter Type blank to apply a source to every matter type.</p></div>
+    <div class="intel-header-actions">
+        <button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg"></i> Add source</button>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+    </div>
+</header>
+
+@if(_loading){<div class="intel-state las-loading"><span class="las-spinner"></span> Loading authority sources…</div>}
+else
+{
+    @if(_saveMessage is not null){<div class="las-toast las-toast--success" role="status"><i class="bi bi-check-circle-fill"></i><span>@_saveMessage</span><button type="button" class="las-toast-close" @onclick="() => _saveMessage = null"><i class="bi bi-x-lg"></i></button></div>}
+    <section class="pc-kpi-strip las-kpis">
+        <article class="intel-kpi-link las-kpi @(_kpiFilter=="ALL"?"intel-kpi-active":null)" role="button" tabindex="0" title="Show all authority sources" @onclick='() => SetFilter("ALL")'><span class="las-kpi-icon las-kpi-icon--all"><i class="bi bi-collection"></i></span><span class="las-kpi-meta"><span>All sources</span><strong>@_items.Count</strong></span></article>
+        <article class="intel-kpi-link las-kpi @(_kpiFilter=="ENABLED"?"intel-kpi-active":null)" role="button" tabindex="0" title="Show only enabled sources" @onclick='() => SetFilter("ENABLED")'><span class="las-kpi-icon las-kpi-icon--ok"><i class="bi bi-check2-circle"></i></span><span class="las-kpi-meta"><span>Enabled</span><strong>@_items.Count(i => i.IsEnabled)</strong></span></article>
+        <article class="intel-kpi-link las-kpi @(_kpiFilter=="DISABLED"?"intel-kpi-active":null)" role="button" tabindex="0" title="Show only disabled sources" @onclick='() => SetFilter("DISABLED")'><span class="las-kpi-icon las-kpi-icon--off"><i class="bi bi-pause-circle"></i></span><span class="las-kpi-meta"><span>Disabled</span><strong>@_items.Count(i => !i.IsEnabled)</strong></span></article>
+        <article class="intel-kpi-link las-kpi @(_kpiFilter=="STATUTE"?"intel-kpi-active":null)" role="button" tabindex="0" title="Show only statutes" @onclick='() => SetFilter("STATUTE")'><span class="las-kpi-icon las-kpi-icon--statute"><i class="bi bi-journal-text"></i></span><span class="las-kpi-meta"><span>Statutes</span><strong>@_items.Count(i => string.Equals(i.AuthorityKindCode,"Statute",StringComparison.OrdinalIgnoreCase))</strong></span></article>
+        <article class="intel-kpi-link las-kpi @(_kpiFilter=="REGULATION"?"intel-kpi-active":null)" role="button" tabindex="0" title="Show only regulations" @onclick='() => SetFilter("REGULATION")'><span class="las-kpi-icon las-kpi-icon--reg"><i class="bi bi-shield-check"></i></span><span class="las-kpi-meta"><span>Regulations</span><strong>@_items.Count(i => string.Equals(i.AuthorityKindCode,"Regulation",StringComparison.OrdinalIgnoreCase))</strong></span></article>
+    </section>
+
+    <section class="intel-panel las-panel">
+        <div class="intel-toolbar las-toolbar">
+            <div class="intel-search las-search">
+                <i class="bi bi-search"></i>
+                <input type="text" placeholder="Search provider, jurisdiction, matter type, URL…" @bind="_search" @bind:event="oninput" />
+                @if(!string.IsNullOrWhiteSpace(_search)){<button type="button" class="las-search-clear" title="Clear search" @onclick="() => _search = string.Empty"><i class="bi bi-x-lg"></i></button>}
+            </div>
+            <span class="las-result-count">@Filtered.Count of @_items.Count shown</span>
+        </div>
+
+        @if(_loadError is not null){<div class="intel-error las-alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;"><i class="bi bi-exclamation-octagon-fill"></i><span>@_loadError</span></div>}
+
+        @if(Filtered.Count==0){<div class="intel-state las-empty"><i class="bi bi-inbox"></i><p>No authority sources match the current filter.</p><button class="um-btn um-btn-primary um-btn-sm" @onclick="OpenCreate"><i class="bi bi-plus-lg"></i> Add source</button></div>}
+        else
+        {
+            <table class="intel-table las-table">
+                <thead>
+                    <tr><th>Provider</th><th>Jurisdiction</th><th>Kind</th><th>Matter Type</th><th>Priority</th><th>Scope</th><th>Status</th><th>Last Run</th><th>Last Result</th><th class="las-th-actions">Actions</th></tr>
+                </thead>
+                <tbody>
+                    @foreach(var item in Filtered)
+                    {
+                        <tr class="intel-row-click las-row" @onclick="() => OpenEdit(item)">
+                            <td><span class="las-provider">@item.ProviderCode</span></td>
+                            <td>@FormatJurisdiction(item.JurisdictionCode)</td>
+                            <td><span class="las-chip las-chip--@KindClass(item.AuthorityKindCode)">@item.AuthorityKindCode</span></td>
+                            <td>@(string.IsNullOrWhiteSpace(item.MatterTypeCode) ? (MarkupString)"<span class=\"las-muted\">All matter types</span>" : (MarkupString)System.Net.WebUtility.HtmlEncode(item.MatterTypeCode))</td>
+                            <td><span class="las-priority">@item.Priority</span></td>
+                            <td><span class="las-chip las-chip--@(item.TenantId is null ? "platform" : "tenant")">@(item.TenantId is null ? "Platform" : "Tenant")</span></td>
+                            <td><span class="intel-badge las-status @(item.IsEnabled?"intel-badge-ok":"intel-badge-off")"><span class="las-status-dot"></span>@(item.IsEnabled?"Enabled":"Disabled")</span></td>
+                            <td>@(item.LastRunDateUtc is { } run ? (MarkupString)$"<span title=\"{run:u}\">{run.ToLocalTime():yyyy-MM-dd HH:mm}</span>" : (MarkupString)"<span class=\"las-muted\">Never run</span>")</td>
+                            <td>@(string.IsNullOrWhiteSpace(item.LastRunStatus) ? (MarkupString)"<span class=\"las-chip las-chip--other\">Not Run</span>" : (MarkupString)$"<span class=\"las-chip las-chip--{LastRunClass(item.LastRunStatus)}\">{System.Net.WebUtility.HtmlEncode(item.LastRunStatus)}</span>")</td>
+                            <td class="intel-row-actions las-actions">
+                                <button class="las-iconbtn" title="@(item.IsEnabled?"Disable":"Enable")" @onclick="() => ToggleAsync(item)" @onclick:stopPropagation="true"><i class="bi @(item.IsEnabled?"bi-toggle-on":"bi-toggle-off")"></i></button>
+                                <button class="las-iconbtn" title="Edit" @onclick="() => OpenEdit(item)" @onclick:stopPropagation="true"><i class="bi bi-pencil"></i></button>
+                                <button class="las-iconbtn las-iconbtn--danger" title="Delete" @onclick="() => AskDelete(item)" @onclick:stopPropagation="true"><i class="bi bi-trash"></i></button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </section>
+}
+</div>
+
+@if(_showForm)
+{
+    <div class="um-modal-backdrop" @onclick="() => _showForm = false">
+        <div class="um-modal" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-bank"></i>
+                <span>@(_isEdit ? "Edit authority source" : "Add authority source")</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showForm = false"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="um-form-grid">
+                        <div class="intel-field">
+                            <label>Provider</label>
+                            <InputText @bind-Value="_form.ProviderCode" placeholder="e.g. Justia, eCFR, CourtListener" />
+                            <ValidationMessage For="() => _form.ProviderCode" class="text-danger" />
+                        </div>
+                        <div class="intel-field">
+                            <label>Jurisdiction</label>
+                            <InputSelect @bind-Value="_form.JurisdictionCode">
+                                <option value="">Select jurisdiction…</option>
+                                <option value="FEDERAL">FEDERAL</option>
+                                @foreach(var s in _states){<option value="@($"NAME:{s.ToUpperInvariant()}")">@s</option>}
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.JurisdictionCode" class="text-danger" />
+                        </div>
+                        <div class="intel-field">
+                            <label>Authority kind</label>
+                            <InputSelect @bind-Value="_form.AuthorityKindCode">
+                                <option value="Statute">Statute</option>
+                                <option value="Regulation">Regulation</option>
+                                <option value="CaseLaw">Case law</option>
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.AuthorityKindCode" class="text-danger" />
+                        </div>
+                        <div class="intel-field">
+                            <label>Matter type (blank = all)</label>
+                            <InputSelect @bind-Value="_form.MatterTypeCode">
+                                <option value="">All matter types</option>
+                                @foreach(var m in _matterTypes){<option value="@m">@m</option>}
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.MatterTypeCode" class="text-danger" />
+                        </div>
+                        <div class="intel-field">
+                            <label>Priority</label>
+                            <InputNumber @bind-Value="_form.Priority" />
+                            <ValidationMessage For="() => _form.Priority" class="text-danger" />
+                        </div>
+                        <div class="intel-field">
+                            <label>Extraction strategy</label>
+                            <InputSelect @bind-Value="_form.ExtractionStrategyCode">
+                                <option value="HtmlDocument">HtmlDocument</option>
+                                <option value="PlainText">PlainText</option>
+                                <option value="Json">Json</option>
+                                <option value="JSON_API">JSON_API (generic API)</option>
+                                <option value="JSON_NYSENATE">JSON_NYSENATE</option>
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.ExtractionStrategyCode" class="text-danger" />
+                        </div>
+                        <div class="intel-field intel-field-wide">
+                            <label>Base URL</label>
+                            <InputText @bind-Value="_form.BaseUrl" placeholder="https://…" />
+                            <ValidationMessage For="() => _form.BaseUrl" class="text-danger" />
+                        </div>
+                        <div class="intel-field intel-field-wide">
+                            <label>Document URL template</label>
+                            <InputText @bind-Value="_form.DocumentUrlTemplate" placeholder="https://…/{citation}/" />
+                            <ValidationMessage For="() => _form.DocumentUrlTemplate" class="text-danger" />
+                        </div>
+                        <div class="intel-field intel-field-wide">
+                            <label>Citation pattern (optional)</label>
+                            <InputText @bind-Value="_form.CitationPattern" />
+                            <ValidationMessage For="() => _form.CitationPattern" class="text-danger" />
+                        </div>
+                        <div class="intel-field intel-field-wide">
+                            <label>Section anchor template (optional)</label>
+                            <InputText @bind-Value="_form.SectionAnchorTemplate" />
+                        </div>
+                        <div class="intel-field intel-field-wide">
+                            <label>API endpoint / host (optional)</label>
+                            <InputText @bind-Value="_form.ApiEndpoint" placeholder="https://api.example.gov" />
+                            <ValidationMessage For="() => _form.ApiEndpoint" class="text-danger" />
+                        </div>
+                        <div class="intel-field">
+                            <label>API user / account ID (optional)</label>
+                            <InputText @bind-Value="_form.ApiAccountId" placeholder="account or user id" />
+                            <ValidationMessage For="() => _form.ApiAccountId" class="text-danger" />
+                        </div>
+                        <div class="intel-field">
+                            <label>API key / token (optional)@(_form.HasApiKey ? " — saved" : "")</label>
+                            <InputText type="password" @bind-Value="_form.ApiKey" placeholder="@(_form.HasApiKey ? "•••••• (leave blank to keep)" : "key or token")" />
+                            <ValidationMessage For="() => _form.ApiKey" class="text-danger" />
+                        </div>
+                        <div class="intel-field">
+                            <label>Discovery method (optional)</label>
+                            <InputText @bind-Value="_form.DiscoveryMethodCode" placeholder="e.g. Curated" />
+                        </div>
+                        <div class="intel-field intel-field-wide">
+                            <label>Discovery evidence URL (optional)</label>
+                            <InputText @bind-Value="_form.DiscoveryEvidenceUrl" />
+                        </div>
+                        <div class="intel-field">
+                            <label class="intel-check"><InputCheckbox @bind-Value="_form.IsEnabled" /> Enabled</label>
+                        </div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showForm = false">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@(_saving ? "Saving…" : "Save source")</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if(_deleteTarget is not null)
+{
+    <div class="um-modal-backdrop" @onclick="() => _deleteTarget = null">
+        <div class="um-confirm-dialog" @onclick:stopPropagation="true">
+            <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-exclamation-triangle"></i></div>
+            <h3>Delete authority source?</h3>
+            <p>This will remove the <strong>@_deleteTarget.ProviderCode</strong> source for <strong>@FormatJurisdiction(_deleteTarget.JurisdictionCode)</strong> (@_deleteTarget.AuthorityKindCode). This action cannot be undone.</p>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="() => _deleteTarget = null">Cancel</button>
+                <button type="button" class="um-btn um-btn-danger" @onclick="ConfirmDeleteAsync" disabled="@_saving">@(_saving ? "Deleting…" : "Delete")</button>
+            </div>
+        </div>
+    </div>
+}
+</LegalWorkspace>
+
+@code {
+    private bool _loading = true;
+    private bool _saving;
+    private bool _showForm;
+    private bool _isEdit;
+    private string? _loadError;
+    private string? _saveMessage;
+    private string _search = string.Empty;
+    private string _kpiFilter = "ALL";
+
+    private IReadOnlyList<LegalAuthoritySourceAdminDto> _items = [];
+    private IReadOnlyCollection<string> _matterTypes = [];
+    private IReadOnlyCollection<string> _states = [];
+
+    private Guid? _editingId;
+    private readonly AuthoritySourceForm _form = new();
+    private LegalAuthoritySourceAdminDto? _deleteTarget;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            _items = (await Api.GetLegalAuthoritySourcesAsync()).ToList();
+            var facets = await Api.GetLegalDecisionMatterFacetsAsync();
+            _matterTypes = facets.MatterTypeCodes;
+            _states = facets.States.Count > 0 ? facets.States : facets.Jurisdictions;
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load authority sources: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private List<LegalAuthoritySourceAdminDto> Filtered
+    {
+        get
+        {
+            IEnumerable<LegalAuthoritySourceAdminDto> q = _items;
+            q = _kpiFilter switch
+            {
+                "ENABLED" => q.Where(i => i.IsEnabled),
+                "DISABLED" => q.Where(i => !i.IsEnabled),
+                "STATUTE" => q.Where(i => string.Equals(i.AuthorityKindCode, "Statute", StringComparison.OrdinalIgnoreCase)),
+                "REGULATION" => q.Where(i => string.Equals(i.AuthorityKindCode, "Regulation", StringComparison.OrdinalIgnoreCase)),
+                _ => q
+            };
+            if (!string.IsNullOrWhiteSpace(_search))
+            {
+                var term = _search.Trim();
+                q = q.Where(i =>
+                    (i.ProviderCode?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                    (i.JurisdictionCode?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                    (i.MatterTypeCode?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                    (i.BaseUrl?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                    (i.DocumentUrlTemplate?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false));
+            }
+            return q.ToList();
+        }
+    }
+
+    private void SetFilter(string filter) => _kpiFilter = filter;
+
+    private static string KindClass(string? kind) => (kind ?? string.Empty).ToLowerInvariant() switch
+    {
+        "statute" => "statute",
+        "regulation" => "reg",
+        "caselaw" => "case",
+        _ => "other"
+    };
+
+    private static string LastRunClass(string? status) => string.Equals(status, "RESULTS_FOUND", StringComparison.OrdinalIgnoreCase)
+        ? "platform"
+        : "other";
+
+    private static string FormatJurisdiction(string? code)
+    {
+        if (string.IsNullOrWhiteSpace(code)) return "—";
+        return code.StartsWith("NAME:", StringComparison.OrdinalIgnoreCase)
+            ? System.Globalization.CultureInfo.CurrentCulture.TextInfo.ToTitleCase(code[5..].ToLowerInvariant())
+            : code;
+    }
+
+    private void OpenCreate()
+    {
+        _isEdit = false;
+        _editingId = null;
+        _form.Reset();
+        _showForm = true;
+    }
+
+    private void OpenEdit(LegalAuthoritySourceAdminDto item)
+    {
+        _isEdit = true;
+        _editingId = item.LegalAuthoritySourceId;
+        _form.LoadFrom(item);
+        _showForm = true;
+    }
+
+    private async Task SaveAsync()
+    {
+        _saving = true;
+        try
+        {
+            var request = _form.ToRequest();
+            if (_isEdit && _editingId is { } id)
+            {
+                await Api.UpdateLegalAuthoritySourceAsync(id, request);
+                _saveMessage = "Authority source updated.";
+            }
+            else
+            {
+                await Api.CreateLegalAuthoritySourceAsync(request);
+                _saveMessage = "Authority source created.";
+            }
+            _showForm = false;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Save failed: {ex.Message}";
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task ToggleAsync(LegalAuthoritySourceAdminDto item)
+    {
+        try
+        {
+            await Api.ToggleLegalAuthoritySourceAsync(item.LegalAuthoritySourceId, !item.IsEnabled);
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Toggle failed: {ex.Message}";
+        }
+    }
+
+    private void AskDelete(LegalAuthoritySourceAdminDto item) => _deleteTarget = item;
+
+    private async Task ConfirmDeleteAsync()
+    {
+        if (_deleteTarget is null) return;
+        _saving = true;
+        try
+        {
+            await Api.DeleteLegalAuthoritySourceAsync(_deleteTarget.LegalAuthoritySourceId);
+            _saveMessage = "Authority source deleted.";
+            _deleteTarget = null;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Delete failed: {ex.Message}";
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private sealed class AuthoritySourceForm
+    {
+        [Required, StringLength(60)] public string ProviderCode { get; set; } = string.Empty;
+        [Required, StringLength(120)] public string JurisdictionCode { get; set; } = string.Empty;
+        [Required, StringLength(40)] public string AuthorityKindCode { get; set; } = "Statute";
+        [StringLength(40)] public string? MatterTypeCode { get; set; }
+        [StringLength(200)] public string CitationPattern { get; set; } = string.Empty;
+        [Required, StringLength(400)] public string BaseUrl { get; set; } = string.Empty;
+        [Required, StringLength(400)] public string DocumentUrlTemplate { get; set; } = string.Empty;
+        [StringLength(200)] public string? SectionAnchorTemplate { get; set; }
+        [Required, StringLength(40)] public string ExtractionStrategyCode { get; set; } = "HtmlDocument";
+        [StringLength(40)] public string? DiscoveryMethodCode { get; set; }
+        [StringLength(400)] public string? DiscoveryEvidenceUrl { get; set; }
+        [StringLength(1000)] public string? ApiEndpoint { get; set; }
+        [StringLength(200)] public string? ApiAccountId { get; set; }
+        [StringLength(500)] public string? ApiKey { get; set; }
+        public bool HasApiKey { get; set; }
+        [Range(0, 1000)] public int Priority { get; set; } = 50;
+        public bool IsEnabled { get; set; } = true;
+
+        public void Reset()
+        {
+            ProviderCode = string.Empty;
+            JurisdictionCode = string.Empty;
+            AuthorityKindCode = "Statute";
+            MatterTypeCode = null;
+            CitationPattern = string.Empty;
+            BaseUrl = string.Empty;
+            DocumentUrlTemplate = string.Empty;
+            SectionAnchorTemplate = null;
+            ExtractionStrategyCode = "HtmlDocument";
+            DiscoveryMethodCode = "Curated";
+            DiscoveryEvidenceUrl = null;
+            ApiEndpoint = null;
+            ApiAccountId = null;
+            ApiKey = null;
+            HasApiKey = false;
+            Priority = 50;
+            IsEnabled = true;
+        }
+
+        public void LoadFrom(LegalAuthoritySourceAdminDto item)
+        {
+            ProviderCode = item.ProviderCode;
+            JurisdictionCode = item.JurisdictionCode;
+            AuthorityKindCode = item.AuthorityKindCode;
+            MatterTypeCode = item.MatterTypeCode;
+            CitationPattern = item.CitationPattern;
+            BaseUrl = item.BaseUrl;
+            DocumentUrlTemplate = item.DocumentUrlTemplate;
+            SectionAnchorTemplate = item.SectionAnchorTemplate;
+            ExtractionStrategyCode = item.ExtractionStrategyCode;
+            DiscoveryMethodCode = item.DiscoveryMethodCode;
+            DiscoveryEvidenceUrl = item.DiscoveryEvidenceUrl;
+            ApiEndpoint = item.ApiEndpoint;
+            ApiAccountId = item.ApiAccountId;
+            ApiKey = null;
+            HasApiKey = item.HasApiKey;
+            Priority = item.Priority;
+            IsEnabled = item.IsEnabled;
+        }
+
+        public SaveLegalAuthoritySourceRequest ToRequest() => new(
+            ProviderCode.Trim(),
+            JurisdictionCode.Trim(),
+            AuthorityKindCode.Trim(),
+            string.IsNullOrWhiteSpace(MatterTypeCode) ? null : MatterTypeCode.Trim(),
+            CitationPattern?.Trim() ?? string.Empty,
+            BaseUrl.Trim(),
+            DocumentUrlTemplate.Trim(),
+            string.IsNullOrWhiteSpace(SectionAnchorTemplate) ? null : SectionAnchorTemplate.Trim(),
+            ExtractionStrategyCode.Trim(),
+            string.IsNullOrWhiteSpace(DiscoveryMethodCode) ? null : DiscoveryMethodCode.Trim(),
+            string.IsNullOrWhiteSpace(DiscoveryEvidenceUrl) ? null : DiscoveryEvidenceUrl.Trim(),
+            null,
+            Priority,
+            IsEnabled,
+            string.IsNullOrWhiteSpace(ApiEndpoint) ? null : ApiEndpoint.Trim(),
+            string.IsNullOrWhiteSpace(ApiAccountId) ? null : ApiAccountId.Trim(),
+            string.IsNullOrWhiteSpace(ApiKey) ? null : ApiKey.Trim());
+    }
+}

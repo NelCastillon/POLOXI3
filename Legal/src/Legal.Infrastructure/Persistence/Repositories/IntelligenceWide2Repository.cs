@@ -31,16 +31,17 @@ AND target.AuthorityKindCode=source.AuthorityKindCode AND target.TenantId IS NUL
 WHEN MATCHED THEN UPDATE SET
     CitationPattern=@CitationPattern,BaseUrl=@BaseUrl,DocumentUrlTemplate=@DocumentUrlTemplate,
     SectionAnchorTemplate=@SectionAnchorTemplate,ExtractionStrategyCode=@ExtractionStrategyCode,
+    MatterTypeCode=@MatterTypeCode,
     Priority=@Priority,DiscoveryMethodCode=@DiscoveryMethodCode,DiscoveryEvidenceUrl=@DiscoveryEvidenceUrl,
     VerifiedDateUtc=@VerifiedDateUtc,IsEnabled=1,ModifiedDateUtc=SYSUTCDATETIME()
 WHEN NOT MATCHED THEN INSERT
     (LegalAuthoritySourceId,ProviderCode,JurisdictionCode,AuthorityKindCode,CitationPattern,BaseUrl,
      DocumentUrlTemplate,SectionAnchorTemplate,ExtractionStrategyCode,DiscoveryMethodCode,
-     DiscoveryEvidenceUrl,VerifiedDateUtc,Priority,IsEnabled,TenantId,CreatedDateUtc,IsDeleted)
+     DiscoveryEvidenceUrl,VerifiedDateUtc,Priority,MatterTypeCode,IsEnabled,TenantId,CreatedDateUtc,IsDeleted)
 VALUES
     (NEWID(),@ProviderCode,@JurisdictionCode,@AuthorityKindCode,@CitationPattern,@BaseUrl,
      @DocumentUrlTemplate,@SectionAnchorTemplate,@ExtractionStrategyCode,@DiscoveryMethodCode,
-     @DiscoveryEvidenceUrl,@VerifiedDateUtc,@Priority,1,NULL,SYSUTCDATETIME(),0);
+     @DiscoveryEvidenceUrl,@VerifiedDateUtc,@Priority,@MatterTypeCode,1,NULL,SYSUTCDATETIME(),0);
 """;
         using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         await connection.ExecuteAsync(new CommandDefinition(sql,registration,cancellationToken:cancellationToken));
@@ -52,17 +53,19 @@ VALUES
 WITH RankedSources AS
 (
     SELECT LegalAuthoritySourceId,ProviderCode,JurisdictionCode,AuthorityKindCode,CitationPattern,
-           BaseUrl,DocumentUrlTemplate,SectionAnchorTemplate,ExtractionStrategyCode,Priority,
+           BaseUrl,DocumentUrlTemplate,SectionAnchorTemplate,ExtractionStrategyCode,Priority,MatterTypeCode,
+           ApiEndpoint,ApiAccountId,ApiKey,
            ROW_NUMBER() OVER
            (
-               PARTITION BY ProviderCode,JurisdictionCode,AuthorityKindCode
-               ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END
+               PARTITION BY ProviderCode,JurisdictionCode,AuthorityKindCode,MatterTypeCode
+               ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END,Priority
            ) SourceRank
     FROM POLOXI.Legal_AuthoritySource
     WHERE IsEnabled=1 AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL)
 )
 SELECT LegalAuthoritySourceId,ProviderCode,JurisdictionCode,AuthorityKindCode,CitationPattern,
-       BaseUrl,DocumentUrlTemplate,SectionAnchorTemplate,ExtractionStrategyCode,Priority
+       BaseUrl,DocumentUrlTemplate,SectionAnchorTemplate,ExtractionStrategyCode,Priority,MatterTypeCode,
+       ApiEndpoint,ApiAccountId,ApiKey
 FROM RankedSources
 WHERE SourceRank=1
 ORDER BY Priority,ProviderCode;
@@ -71,6 +74,129 @@ ORDER BY Priority,ProviderCode;
         return (await connection.QueryAsync<LegalAuthoritySourceDescriptor>(new CommandDefinition(
             sql,new{TenantId=tenantId},cancellationToken:cancellationToken))).AsList();
     }
+
+    public async Task<IReadOnlyCollection<LegalAuthoritySourceAdminDto>> GetLegalAuthoritySourcesAdminAsync(Guid tenantId,CancellationToken cancellationToken=default)
+    {
+        const string sql="""
+SELECT LegalAuthoritySourceId,ProviderCode,JurisdictionCode,AuthorityKindCode,MatterTypeCode,
+       CitationPattern,BaseUrl,DocumentUrlTemplate,SectionAnchorTemplate,ExtractionStrategyCode,
+       DiscoveryMethodCode,DiscoveryEvidenceUrl,VerifiedDateUtc,Priority,IsEnabled,TenantId,
+       CreatedDateUtc,ModifiedDateUtc,
+       ApiEndpoint,ApiAccountId,
+       CAST(CASE WHEN ApiKey IS NOT NULL AND LEN(ApiKey)>0 THEN 1 ELSE 0 END AS BIT) AS HasApiKey,
+       LastRunDateUtc,LastRunStatus
+FROM POLOXI.Legal_AuthoritySource
+WHERE IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL)
+ORDER BY Priority,ProviderCode,JurisdictionCode,AuthorityKindCode;
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return (await connection.QueryAsync<LegalAuthoritySourceAdminDto>(new CommandDefinition(
+            sql,new{TenantId=tenantId},cancellationToken:cancellationToken))).AsList();
+    }
+
+    public async Task<Guid> CreateLegalAuthoritySourceAsync(SaveLegalAuthoritySourceRequest request,Guid tenantId,Guid actorUserId,CancellationToken cancellationToken=default)
+    {
+        const string sql="""
+INSERT POLOXI.Legal_AuthoritySource
+    (LegalAuthoritySourceId,ProviderCode,JurisdictionCode,AuthorityKindCode,MatterTypeCode,CitationPattern,
+     BaseUrl,DocumentUrlTemplate,SectionAnchorTemplate,ExtractionStrategyCode,DiscoveryMethodCode,
+     DiscoveryEvidenceUrl,VerifiedDateUtc,Priority,IsEnabled,ApiEndpoint,ApiAccountId,ApiKey,TenantId,CreatedDateUtc,CreatedByUserId,IsDeleted)
+OUTPUT inserted.LegalAuthoritySourceId
+VALUES
+    (NEWID(),@ProviderCode,@JurisdictionCode,@AuthorityKindCode,@MatterTypeCode,@CitationPattern,
+     @BaseUrl,@DocumentUrlTemplate,@SectionAnchorTemplate,@ExtractionStrategyCode,@DiscoveryMethodCode,
+     @DiscoveryEvidenceUrl,@VerifiedDateUtc,@Priority,@IsEnabled,@ApiEndpoint,@ApiAccountId,@ApiKey,@TenantId,SYSUTCDATETIME(),@ActorUserId,0);
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return await connection.ExecuteScalarAsync<Guid>(new CommandDefinition(sql,new
+        {
+            request.ProviderCode,request.JurisdictionCode,request.AuthorityKindCode,
+            MatterTypeCode=NormalizeMatterType(request.MatterTypeCode),request.CitationPattern,
+            request.BaseUrl,request.DocumentUrlTemplate,request.SectionAnchorTemplate,
+            request.ExtractionStrategyCode,request.DiscoveryMethodCode,request.DiscoveryEvidenceUrl,
+            request.VerifiedDateUtc,request.Priority,request.IsEnabled,
+            ApiEndpoint=NullIfBlank(request.ApiEndpoint),ApiAccountId=NullIfBlank(request.ApiAccountId),
+            ApiKey=NullIfBlank(request.ApiKey),TenantId=tenantId,ActorUserId=actorUserId
+        },cancellationToken:cancellationToken));
+    }
+
+    public async Task UpdateLegalAuthoritySourceAsync(Guid legalAuthoritySourceId,SaveLegalAuthoritySourceRequest request,Guid tenantId,Guid actorUserId,CancellationToken cancellationToken=default)
+    {
+        const string sql="""
+UPDATE POLOXI.Legal_AuthoritySource SET
+    ProviderCode=@ProviderCode,JurisdictionCode=@JurisdictionCode,AuthorityKindCode=@AuthorityKindCode,
+    MatterTypeCode=@MatterTypeCode,CitationPattern=@CitationPattern,BaseUrl=@BaseUrl,
+    DocumentUrlTemplate=@DocumentUrlTemplate,SectionAnchorTemplate=@SectionAnchorTemplate,
+    ExtractionStrategyCode=@ExtractionStrategyCode,DiscoveryMethodCode=@DiscoveryMethodCode,
+    DiscoveryEvidenceUrl=@DiscoveryEvidenceUrl,VerifiedDateUtc=@VerifiedDateUtc,Priority=@Priority,
+    IsEnabled=@IsEnabled,ApiEndpoint=@ApiEndpoint,ApiAccountId=@ApiAccountId,
+    ApiKey=COALESCE(@ApiKey,ApiKey),ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@ActorUserId
+WHERE LegalAuthoritySourceId=@LegalAuthoritySourceId AND IsDeleted=0
+  AND (TenantId=@TenantId OR TenantId IS NULL);
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(sql,new
+        {
+            LegalAuthoritySourceId=legalAuthoritySourceId,request.ProviderCode,request.JurisdictionCode,
+            request.AuthorityKindCode,MatterTypeCode=NormalizeMatterType(request.MatterTypeCode),
+            request.CitationPattern,request.BaseUrl,request.DocumentUrlTemplate,request.SectionAnchorTemplate,
+            request.ExtractionStrategyCode,request.DiscoveryMethodCode,request.DiscoveryEvidenceUrl,
+            request.VerifiedDateUtc,request.Priority,request.IsEnabled,
+            ApiEndpoint=NullIfBlank(request.ApiEndpoint),ApiAccountId=NullIfBlank(request.ApiAccountId),
+            ApiKey=NullIfBlank(request.ApiKey),TenantId=tenantId,ActorUserId=actorUserId
+        },cancellationToken:cancellationToken));
+    }
+
+    public async Task ToggleLegalAuthoritySourceAsync(Guid legalAuthoritySourceId,bool isEnabled,Guid tenantId,Guid actorUserId,CancellationToken cancellationToken=default)
+    {
+        const string sql="""
+UPDATE POLOXI.Legal_AuthoritySource SET
+    IsEnabled=@IsEnabled,ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@ActorUserId
+WHERE LegalAuthoritySourceId=@LegalAuthoritySourceId AND IsDeleted=0
+  AND (TenantId=@TenantId OR TenantId IS NULL);
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(sql,new
+        {
+            LegalAuthoritySourceId=legalAuthoritySourceId,IsEnabled=isEnabled,TenantId=tenantId,ActorUserId=actorUserId
+        },cancellationToken:cancellationToken));
+    }
+
+    public async Task DeleteLegalAuthoritySourceAsync(Guid legalAuthoritySourceId,Guid tenantId,Guid actorUserId,CancellationToken cancellationToken=default)
+    {
+        const string sql="""
+UPDATE POLOXI.Legal_AuthoritySource SET
+    IsDeleted=1,IsEnabled=0,ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@ActorUserId
+WHERE LegalAuthoritySourceId=@LegalAuthoritySourceId AND IsDeleted=0
+  AND (TenantId=@TenantId OR TenantId IS NULL);
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(sql,new
+        {
+            LegalAuthoritySourceId=legalAuthoritySourceId,TenantId=tenantId,ActorUserId=actorUserId
+        },cancellationToken:cancellationToken));
+    }
+
+    public async Task RecordLegalAuthoritySourceRunAsync(Guid legalAuthoritySourceId,string runStatus,CancellationToken cancellationToken=default)
+    {
+        const string sql="""
+UPDATE POLOXI.Legal_AuthoritySource SET
+    LastRunDateUtc=SYSUTCDATETIME(),LastRunStatus=@RunStatus
+WHERE LegalAuthoritySourceId=@LegalAuthoritySourceId AND IsDeleted=0;
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(sql,new
+        {
+            LegalAuthoritySourceId=legalAuthoritySourceId,
+            RunStatus=NullIfBlank(runStatus)
+        },cancellationToken:cancellationToken));
+    }
+
+    private static string? NormalizeMatterType(string? matterTypeCode)
+        => string.IsNullOrWhiteSpace(matterTypeCode)||matterTypeCode.Trim()=="*" ? null : matterTypeCode.Trim();
+
+    private static string? NullIfBlank(string? value)
+        => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     public async Task<IReadOnlyCollection<WideSearchContextDto>> GetSearchContextsAsync(Guid tenantId,CancellationToken cancellationToken=default)
     {
