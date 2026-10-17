@@ -3415,7 +3415,10 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
         return proposed.Select(item=>
         {
             var verified=admitted.Any(snippet=>SnippetMatchesAuthorityIdentity(snippet,item.Reference));
-            return new WideProposedAuthorityDto(item.Name,item.Kind,item.Relevance,verified?"VERIFIED":"UNVERIFIED");
+            var source=(admitted.FirstOrDefault(snippet=>SnippetMatchesAuthorityIdentity(snippet,item.Reference))
+                ??externalKnowledge.FirstOrDefault(snippet=>SnippetMatchesAuthorityIdentity(snippet,item.Reference)))?.Url;
+            var url=Uri.TryCreate(source,UriKind.Absolute,out var uri)&&uri.Scheme==Uri.UriSchemeHttps?source:null;
+            return new WideProposedAuthorityDto(item.Name,item.Kind,item.Relevance,verified?"VERIFIED":"UNVERIFIED"){Url=url};
         }).ToArray();
     }
 

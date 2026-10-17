@@ -400,12 +400,13 @@ public sealed partial class LegalDecisionService(
                 dimension.Name,
                 dimension.Description,
             }),
+            // Evidence is emitted compactly (code + dimension, no per-row description). The PI catalog alone is
+            // 340 rows; with descriptions the block overflows the per-stage prompt budget and gets cut mid-JSON,
+            // silently dropping the tail dimensions (PROCEDURE, SETTLEMENT, RESOLUTION) from every prompt stage.
             EvidenceTypes = domainPack.EvidenceTypes.Select(evidenceType => new
             {
                 evidenceType.EvidenceTypeCode,
-                evidenceType.Name,
                 evidenceType.DimensionCode,
-                evidenceType.Description,
             }),
             VerificationProfiles = domainPack.VerificationProfiles.Select(profile => new
             {
@@ -457,11 +458,13 @@ public sealed partial class LegalDecisionService(
         return "\n\n──────── SELECTED_DOMAIN_PACK (database-backed active configuration, advisory) ────────\n"
             + snapshot
             + "\n\nInterpretation rules for SELECTED_DOMAIN_PACK:\n"
-            + "- This is configuration, NOT evidence about this matter and NOT a fixed hierarchy to copy. "
-            + "Use Dimensions as coverage guidance for independent evaluation roots, decomposing each relevant "
-            + "root into L2, L3, and deeper levels (L1 → L2 → L3 → … → Ln) whenever a child materially changes "
-            + "interpretation, a candidate assessment, a discriminator, an evidence need, a verification "
-            + "obligation, a decision dependency, or a material uncertainty.\n"
+            + "- This is configuration, NOT evidence about this matter. Each active Dimension IS its own L1 root: "
+            + "emit exactly one L1 per Dimension (DimensionCode as the branch code), do NOT merge, consolidate, "
+            + "or drop Dimensions into fewer roots, and do not invent additional L1 roots that duplicate a Dimension. "
+            + "Below L1 the dynamic hierarchy is primary: decompose each root into L2, L3, and deeper levels "
+            + "(L1 → L2 → L3 → … → Ln) whenever a child materially changes interpretation, a candidate assessment, "
+            + "a discriminator, an evidence need, a verification obligation, a decision dependency, or a material "
+            + "uncertainty.\n"
             + "- Preserve the supplied OutcomeCandidates' identities, names, roles, and verification requirements; "
             + "do not remove a configured candidate because support is incomplete, and do not treat preservation "
             + "as eligibility, support, probability, or selection.\n"

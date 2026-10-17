@@ -37,6 +37,8 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         }
     }
     private const int WideUserPromptBudget=48000;
+    /// <summary>Soft budget for the SELECTED DOMAIN PACK context block. Exceeding it logs a warning; the block is never truncated mid-JSON.</summary>
+    private const int DomainPackPromptBudgetChars=24000;
     // Safe ceiling for the combined system+user prompt sent to a governed AI call. It sits below the
     // configured Intelligence.Safety.MaximumInputCharacters guard (raised to 60000 in migration 0194)
     // with headroom so the large Wide answer system prompt plus the clamped user prompt never trips
@@ -92,6 +94,10 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     private IReadOnlyList<DecisionDomainPackDimensionDto> _packDimensions=[];
     private IReadOnlyList<DecisionDomainConceptDto> _packConcepts=[];
     private IReadOnlyList<DecisionDomainPackEvidenceTypeDto> _packEvidenceTypes=[];
+    // Domain Pack mode: matter-derived presence signals (lexical corpus + directly classified document
+    // evidence type codes) used to admit only catalog evidence types the matter actually exhibits at L2.
+    private IReadOnlySet<string> _matterPresenceTokens=new HashSet<string>(StringComparer.Ordinal);
+    private IReadOnlySet<string> _matterDocumentEvidenceTypeCodes=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     // R3 competition accountability: typed status for whether candidate competition ran on this run.
     private string? _candidateCompetitionStatus;
     // R4 Normalization Gate observability: the outcome of routing this run through the shared gate, or
@@ -655,6 +661,8 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         _packDimensions=[];
         _packConcepts=[];
         _packEvidenceTypes=[];
+        _matterPresenceTokens=new HashSet<string>(StringComparer.Ordinal);
+        _matterDocumentEvidenceTypeCodes=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         _canonicalOutcomeCandidates=[];
         _candidateCompetitionStatus=null;
         _legalNormalization=null;
@@ -777,6 +785,8 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             // Use Domain Pack mode: the Level-1 axes are the DB-backed pack Dimensions, so the intent LLM call
             // is skipped and L1 is materialized deterministically from the pack. Off-path is unchanged.
             var useDomainPackHierarchy=_useDomainPack&&_resolvedDomainPackId is not null&&_packDimensions.Count>0;
+            if(_useDomainPack&&!useDomainPackHierarchy)
+                logger.LogWarning("Wide2 Domain Pack mode is ON but the deterministic hierarchy gate FAILED (resolvedPackId={ResolvedPackId}, packDimensions={DimensionCount}); L1 falls back to the LLM intent proposal, which may consolidate dimensions.",_resolvedDomainPackId?.ToString()??"(null)",_packDimensions.Count);
             IReadOnlyCollection<WideProposedBranch> level1Branches;
             if(useDomainPackHierarchy)
             {
@@ -788,7 +798,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 llmCalls++;
                 level1Branches=intent.Branches;
             }
-            var currentLevel=MaterializeBranches(level1Branches,executionId,request.TenantId,1,new Dictionary<string,WideBranchRecord>(),configuration);
+            var currentLevel=MaterializeBranches(level1Branches,executionId,request.TenantId,1,new Dictionary<string,WideBranchRecord>(),configuration,deterministic:useDomainPackHierarchy);
             await wideRepository.SaveWideBranchesAsync(currentLevel,request.UserId,cancellationToken);
             allBranches.AddRange(currentLevel);
 
@@ -902,11 +912,12 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 // still LLM-generated via ProposeNextLevelAsync below. Off-path is unchanged.
                 if(useDomainPackHierarchy&&depth==1)
                 {
+                    await BuildMatterEvidencePresenceSignalsAsync(request,evidence,cancellationToken);
                     var packLevel2=narrowingParents
                         .Where(parent=>parent.BranchCode.StartsWith("DIM_",StringComparison.OrdinalIgnoreCase))
                         .SelectMany(parent=>BuildDomainPackLevel2Branches(parent.BranchCode["DIM_".Length..]))
                         .ToArray();
-                    nextLevel=MaterializeBranches(packLevel2,executionId,request.TenantId,depth+1,parentsByCode,configuration);
+                    nextLevel=MaterializeBranches(packLevel2,executionId,request.TenantId,depth+1,parentsByCode,configuration,deterministic:true);
                 }
                 else
                 {
@@ -2991,11 +3002,17 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                     if(pack is not null)
                     {
                         var config=LegalDecisionService.BuildDomainPackModeConfiguration(pack,pack.Concepts,pack.ConceptRelations,matter.MatterTypeCode);
-                        _matterContextBlock=Truncate($"{_matterContextBlock}\n\n──────── SELECTED DOMAIN PACK (configuration, not evidence; dynamic hierarchy is primary) ────────{config}",12000)??_matterContextBlock;
+                        var packBlock=$"{_matterContextBlock}\n\n──────── SELECTED DOMAIN PACK (configuration, not evidence; dynamic hierarchy is primary) ────────{config}";
+                        // Never cut the pack block mid-JSON: a truncated snapshot silently drops the tail dimensions
+                        // (and their evidence/concepts) from EVERY prompt stage. If the compact serialization still
+                        // exceeds the budget, keep the full block and surface the overflow instead of degrading.
+                        if(packBlock.Length>DomainPackPromptBudgetChars)
+                            logger.LogWarning("Wide2 Domain Pack block for matter {MatterId} is {Length} chars (budget {Budget}); kept intact to avoid dropping dimensions. Pack={DomainPack} Dimensions={DimensionCount} EvidenceTypes={EvidenceCount} Concepts={ConceptCount}.",matterId,packBlock.Length,DomainPackPromptBudgetChars,_resolvedDomainPackCode,pack.Dimensions.Count,pack.EvidenceTypes.Count,pack.Concepts.Count);
+                        _matterContextBlock=packBlock;
                         logger.LogInformation("Wide2 Domain Pack mode ENABLED for matter {MatterId}; appended pack {DomainPack} configuration to the proposal prompts.",matterId,_resolvedDomainPackCode);
                     }
                 }
-                catch(Exception)when(!cancellationToken.IsCancellationRequested){/* Domain Pack overlay is advisory; run continues with the unchanged proposal prompts */}
+                catch(Exception ex)when(!cancellationToken.IsCancellationRequested){logger.LogWarning(ex,"Wide2 Domain Pack overlay failed for matter {MatterId}; continuing with the unchanged proposal prompts.",matterId);}
             }
             // R2 diagnostic (#6): prove which saved matter fields actually reach EVERY prompt stage
             // (query contract, intent, hierarchy, answer, legal composer, candidate competition).
@@ -3686,8 +3703,11 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         return (JsonSerializer.Deserialize<WideAnswerProposal>(result.Content,JsonOptions)??throw new ValidationException("The Wide answer response was empty."),result.ProviderCode,result.ModelCode);
     }
 
-    private static WideBranchRecord[] MaterializeBranches(IReadOnlyCollection<WideProposedBranch> proposed,Guid executionId,Guid tenantId,int levelNumber,IReadOnlyDictionary<string,WideBranchRecord> parentsByCode,WideConfiguration configuration)=>
-        (proposed??[]).Take(configuration.MaximumBranchesPerLevel*Math.Max(parentsByCode.Count,1)).Select((branch,index)=>
+    private static WideBranchRecord[] MaterializeBranches(IReadOnlyCollection<WideProposedBranch> proposed,Guid executionId,Guid tenantId,int levelNumber,IReadOnlyDictionary<string,WideBranchRecord> parentsByCode,WideConfiguration configuration,bool deterministic=false)=>
+        // The per-level cap guards LLM over-generation. Deterministic Domain Pack branches are DB-backed
+        // (every active Dimension at L1, every present evidence/concept at L2) and must not be truncated
+        // by it — otherwise MaximumBranchesPerLevel (5) silently collapses 38 dimensions to 5.
+        (deterministic?(proposed??[]):(proposed??[]).Take(configuration.MaximumBranchesPerLevel*Math.Max(parentsByCode.Count,1))).Select((branch,index)=>
         {
             Guid? parentId=branch.ParentBranchCode is not null&&parentsByCode.TryGetValue(NormalizeCode(branch.ParentBranchCode),out var parent)?parent.WideBranchId:null;
             // Calibration guard: LLM self-reported confidence is capped at 0.9 for interpretive (ungrounded)
@@ -3759,13 +3779,54 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 string.IsNullOrWhiteSpace(concept.Name)?concept.ConceptCode:concept.Name,
                 concept.Description??string.Empty,
                 null,null,0.8m,true,null,parentCode));
+        var admitted=0;var skipped=0;
         foreach(var evidence in _packEvidenceTypes.Where(e=>string.Equals(e.DimensionCode,dimensionCode,StringComparison.OrdinalIgnoreCase)))
+        {
+            // Only evidence types PRESENT in the matter (matter fields, profile, document evidence,
+            // retrieval evidence) become L2 nodes; the rest of the catalog stays DB-side for gap analysis.
+            if(!DomainPackEvidencePresenceMatcher.IsPresent(evidence,_matterPresenceTokens,_matterDocumentEvidenceTypeCodes)){skipped++;continue;}
+            admitted++;
             children.Add(new WideProposedBranch(
                 $"EVD_{evidence.EvidenceTypeCode}",
                 string.IsNullOrWhiteSpace(evidence.Name)?evidence.EvidenceTypeCode:evidence.Name,
                 evidence.Description??string.Empty,
                 null,null,DomainPackInterpretationPrior(evidence.PoloxiImportanceScore),true,null,parentCode));
+        }
+        logger.LogInformation("Wide2 Domain Pack L2 for {Dimension}: evidence admitted={Admitted} skipped(not present in matter)={Skipped} concepts={Concepts}.",dimensionCode,admitted,skipped,children.Count-admitted);
         return children;
+    }
+
+    // Aggregates every matter-side signal into the presence corpus consulted by BuildDomainPackLevel2Branches:
+    // all Matter Context Snapshot fields (Decision incl. Description, Legal scope, PI profile, Facts, every
+    // per-entry Evidence row), the uploaded-document evidence graph (summaries, passages, propositions, and
+    // DIRECT EvidenceTypeCode classifications), and the enterprise retrieval evidence pool. Fail-soft: a
+    // repository failure leaves the already-collected signals in place and is logged.
+    private async Task BuildMatterEvidencePresenceSignalsAsync(WideSearchRequest request,IReadOnlyCollection<PoloxiEvidenceDto> retrievalEvidence,CancellationToken cancellationToken)
+    {
+        var texts=new List<string?>{request.Query};
+        var directCodes=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if(_matterContext is{}snapshot)
+            foreach(var field in snapshot.Decision.Concat(snapshot.LegalScope).Concat(snapshot.PersonalInjuryProfile).Concat(snapshot.Facts).Concat(snapshot.Evidence))
+                if(field.HasValue){texts.Add(field.Label);texts.Add(field.Value);}
+        foreach(var item in retrievalEvidence){texts.Add(item.Title);texts.Add(item.Excerpt);}
+        if(request.MatterId is{}matterId)
+        {
+            try
+            {
+                var graph=await documentCorpusRepository.GetMatterEvidenceGraphAsync(request.TenantId,matterId,cancellationToken);
+                foreach(var item in graph.Evidence)
+                {
+                    if(!string.IsNullOrWhiteSpace(item.EvidenceTypeCode))directCodes.Add(item.EvidenceTypeCode);
+                    texts.Add(item.Summary);texts.Add(item.PassageText);texts.Add(item.DocumentFileName);texts.Add(item.DocumentTypeCode);
+                }
+                foreach(var proposition in graph.Propositions)texts.Add(proposition.PropositionText);
+                foreach(var assertion in graph.SourceAssertions)texts.Add(assertion.QuotedText);
+            }
+            catch(Exception ex)when(!cancellationToken.IsCancellationRequested){logger.LogWarning(ex,"Wide2 Domain Pack presence signals: document evidence graph unavailable for matter {MatterId}; using matter/profile/retrieval signals only.",matterId);}
+        }
+        _matterPresenceTokens=DomainPackEvidencePresenceMatcher.NormalizeCorpusTokens(DomainPackEvidencePresenceMatcher.BuildCorpus(texts)).ToHashSet(StringComparer.Ordinal);
+        _matterDocumentEvidenceTypeCodes=directCodes;
+        logger.LogInformation("Wide2 Domain Pack presence signals for matter {MatterId}: tokens={Tokens} directEvidenceTypeCodes={DirectCodes} retrievalItems={Retrieval}.",request.MatterId,_matterPresenceTokens.Count,directCodes.Count,retrievalEvidence.Count);
     }
 
     private static IReadOnlyCollection<WideCandidateBranchEvidence> MergeMissingBranchScores(IReadOnlyCollection<WideCandidateBranchEvidence> existing,IReadOnlyCollection<WideCandidateBranchEvidence> incoming,IReadOnlyCollection<WideBranchRecord> branches)
@@ -4684,7 +4745,10 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         return proposed.Select(item=>
         {
             var verified=admitted.Any(snippet=>SnippetMatchesAuthorityIdentity(snippet,item.Reference));
-            return new WideProposedAuthorityDto(item.Name,item.Kind,item.Relevance,verified?"VERIFIED":"UNVERIFIED");
+            var source=(admitted.FirstOrDefault(snippet=>SnippetMatchesAuthorityIdentity(snippet,item.Reference))
+                ??externalKnowledge.FirstOrDefault(snippet=>SnippetMatchesAuthorityIdentity(snippet,item.Reference)))?.Url;
+            var url=Uri.TryCreate(source,UriKind.Absolute,out var uri)&&uri.Scheme==Uri.UriSchemeHttps?source:null;
+            return new WideProposedAuthorityDto(item.Name,item.Kind,item.Relevance,verified?"VERIFIED":"UNVERIFIED"){Url=url};
         }).ToArray();
     }
 

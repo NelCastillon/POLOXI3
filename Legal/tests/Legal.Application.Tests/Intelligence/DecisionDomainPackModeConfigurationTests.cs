@@ -96,6 +96,33 @@ public sealed class DecisionDomainPackModeConfigurationTests
     }
 
     [Fact]
+    public void Binds_Every_Dimension_To_Exactly_One_L1_Root_Without_Consolidation()
+    {
+        var pack = Pack();
+
+        var result = LegalDecisionService.BuildDomainPackModeConfiguration(
+            pack, pack.Concepts, pack.ConceptRelations, matterTypeCode: null);
+
+        Assert.Contains("Each active Dimension IS its own L1 root", result);
+        Assert.Contains("exactly one L1 per Dimension", result);
+        Assert.DoesNotContain("NOT a fixed hierarchy to copy", result);
+        Assert.DoesNotContain("coverage guidance", result);
+    }
+
+    [Fact]
+    public void Emits_EvidenceTypes_Compactly_Without_Descriptions()
+    {
+        var pack = Pack();
+
+        var result = LegalDecisionService.BuildDomainPackModeConfiguration(
+            pack, pack.Concepts, pack.ConceptRelations, matterTypeCode: null);
+
+        Assert.Contains("POLICE_REPORT", result);
+        Assert.Contains("LIABILITY", result);
+        Assert.DoesNotContain("Official crash report.", result);
+    }
+
+    [Fact]
     public void Empty_Collections_Do_Not_Throw()
     {
         var pack = new DecisionDomainPackDto(

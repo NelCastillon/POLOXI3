@@ -1019,7 +1019,12 @@ public sealed record WideExternalReferenceDto(string Title,string Url,string Sou
 //   Name/Kind/Relevance: the model's proposal (Kind = Case/Statute/Regulation).
 //   VerificationStatus: VERIFIED  = a retrieved external source passed the identity gate for this authority;
 //                       UNVERIFIED = the lead produced no admitted source (remains an unconfirmed suggestion).
-public sealed record WideProposedAuthorityDto(string Name,string Kind,string Relevance,string VerificationStatus);
+public sealed record WideProposedAuthorityDto(string Name,string Kind,string Relevance,string VerificationStatus)
+{
+    // Source link for the authority. Populated only from a retrieved snippet whose identity matched the
+    // authority (admitted snippet preferred); never synthesized, so a null Url simply renders no link.
+    public string? Url{get;init;}
+}
 
 public sealed record WideInterpretiveResultDto(string BranchDisplayName,string Interpretation,decimal Confidence,IReadOnlyCollection<WideInterpretiveResultItemDto> Items)
 {
