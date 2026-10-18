@@ -734,6 +734,17 @@ public sealed record DecisionDomainPackEvidenceTypeDto(string EvidenceTypeCode, 
     public bool IsRequiredCoverage { get; init; }
     public string? MatterTypeCodes { get; init; }
     public string? RelevanceKeywords { get; init; }
+
+    // Dapper materialization constructor: matches the full column set selected by
+    // LegalDecisionRepository.BuildDomainPackAsync (Dapper requires a constructor whose signature
+    // covers every selected column when no parameterless constructor exists).
+    public DecisionDomainPackEvidenceTypeDto(string EvidenceTypeCode, string Name, string? DimensionCode, string? Description, decimal? PoloxiImportanceScore, bool IsRequiredCoverage, string? MatterTypeCodes, string? RelevanceKeywords)
+        : this(EvidenceTypeCode, Name, DimensionCode, Description, PoloxiImportanceScore)
+    {
+        this.IsRequiredCoverage = IsRequiredCoverage;
+        this.MatterTypeCodes = MatterTypeCodes;
+        this.RelevanceKeywords = RelevanceKeywords;
+    }
 }
 
 public sealed record DecisionDomainPackVerificationProfileDto(string ProfileCode, string Name, string? EvidenceTypeCode, string? Description);

@@ -15,6 +15,12 @@ public sealed class AzureOpenAiProvider(HttpClient httpClient,ILogger<AzureOpenA
     // Process-wide monotonic call counter: makes it obvious in the console whether repeated
     // identical-URL requests are distinct pipeline stages progressing or the same stage retrying.
     private static int _callSequence;
+    // HTTP 429 (token/request rate limit): wait the server's Retry-After (bounded) and retry in place a
+    // few times. Without this every throttled call was reported as a hard route failure and the caller
+    // charged it against its LLM-call ceiling, so a quota blip emptied an entire Wide L3 run.
+    private const int MaximumThrottleRetries=3;
+    private static readonly TimeSpan DefaultThrottleDelay=TimeSpan.FromSeconds(8);
+    private static readonly TimeSpan MaximumThrottleDelay=TimeSpan.FromSeconds(60);
     private static readonly string[] Scope=["https://cognitiveservices.azure.com/.default"];
     // Managed identity is only attempted when the host exposes an identity endpoint; otherwise IMDS probes (169.254.169.254) time out locally and abort the request.
     // Locally the Azure CLI session is used. Token is cached until shortly before expiry to avoid re-invoking az per request.
@@ -68,7 +74,7 @@ public sealed class AzureOpenAiProvider(HttpClient httpClient,ILogger<AzureOpenA
         // back through the existing unsupported_parameter negotiation below.
         if(IsReasoningModel(request.Context.ModelCode)&&!profile.DropReasoningEffort)body["reasoning_effort"]=profile.MinimalEffortRejected&&reasoningEffort=="minimal"?"low":reasoningEffort;
         if(responseFormat is not null)body["response_format"]=JsonSerializer.SerializeToNode(responseFormat);
-        string json;System.Net.HttpStatusCode statusCode;var requestId=string.Empty;var reasoningBudgetRaised=false;
+        string json;System.Net.HttpStatusCode statusCode;var requestId=string.Empty;var reasoningBudgetRaised=false;var throttleRetries=0;
         for(var attempt=0;;attempt++)
         {
             var callNumber=Interlocked.Increment(ref _callSequence);
@@ -93,6 +99,18 @@ public sealed class AzureOpenAiProvider(HttpClient httpClient,ILogger<AzureOpenA
                 }
                 logger.LogInformation("AI call #{CallNumber} completed: feature {FeatureCode}, model {ModelCode}, {ElapsedMs}ms elapsed.",callNumber,request.FeatureCode,request.Context.ModelCode,timer.ElapsedMilliseconds);
                 break;
+            }
+            if((int)statusCode==429)
+            {
+                var retryAfter=ResolveRetryAfter(response.Headers);
+                if(throttleRetries<MaximumThrottleRetries)
+                {
+                    throttleRetries++;
+                    logger.LogWarning("AI call #{CallNumber} throttled (HTTP 429): feature {FeatureCode}, model {ModelCode}; waiting {DelaySeconds}s before throttle retry {Retry}/{Maximum}.",callNumber,request.FeatureCode,request.Context.ModelCode,retryAfter.TotalSeconds,throttleRetries,MaximumThrottleRetries);
+                    await Task.Delay(retryAfter,timeout.Token);
+                    continue;
+                }
+                throw new AiProviderThrottledException($"Azure OpenAI throttled the request (HTTP 429) after {MaximumThrottleRetries} Retry-After waits: {Truncate(json,500)}",retryAfter);
             }
             if((int)statusCode==400&&attempt<3&&TryGetUnsupportedParameter(json,out var unsupported))
             {
@@ -136,6 +154,15 @@ public sealed class AzureOpenAiProvider(HttpClient httpClient,ILogger<AzureOpenA
 
     // Scoped to reasoning-family model codes only (gpt-5*, o1*, o3*, o4*); standard models like
     // gpt-4.1-mini keep their configured budget untouched because they don't spend hidden reasoning tokens.
+    private static string Truncate(string? value,int maximumLength)=>value is null?string.Empty:value.Length>maximumLength?value[..maximumLength]:value;
+    private static TimeSpan ResolveRetryAfter(HttpResponseHeaders headers)
+    {
+        TimeSpan? delay=headers.RetryAfter?.Delta;
+        if(delay is null&&headers.RetryAfter?.Date is{}date)delay=date-DateTimeOffset.UtcNow;
+        if(delay is null&&headers.TryGetValues("retry-after-ms",out var values)&&int.TryParse(values.FirstOrDefault(),out var ms))delay=TimeSpan.FromMilliseconds(ms);
+        var resolved=delay??DefaultThrottleDelay;
+        return resolved<TimeSpan.FromSeconds(1)?TimeSpan.FromSeconds(1):resolved>MaximumThrottleDelay?MaximumThrottleDelay:resolved;
+    }
     private static bool IsReasoningModel(string? modelCode)=>modelCode is not null&&(modelCode.StartsWith("gpt-5",StringComparison.OrdinalIgnoreCase)||modelCode.StartsWith("gpt-6",StringComparison.OrdinalIgnoreCase)||modelCode.StartsWith("o1",StringComparison.OrdinalIgnoreCase)||modelCode.StartsWith("o3",StringComparison.OrdinalIgnoreCase)||modelCode.StartsWith("o4",StringComparison.OrdinalIgnoreCase));
 
     // Learned per-model parameter adjustments (process lifetime). A model that rejects max_tokens or a

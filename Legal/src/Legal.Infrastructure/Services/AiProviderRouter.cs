@@ -79,8 +79,10 @@ public sealed class AiProviderRouter(IAiProviderRouteRepository routeRepository,
                 return await execute(provider,route,context,cancellationToken);
             }
             catch(OperationCanceledException)when(cancellationToken.IsCancellationRequested){throw;}
+            catch(AiProviderThrottledException ex){failures.Add(ex);logger.LogWarning("AI route {ProviderCode}/{ModelCode} throttled (HTTP 429) for feature {FeatureCode}, correlation {CorrelationId}; trying the next configured route.",route.ProviderCode,route.ModelCode,featureCode,correlationId);}
             catch(Exception ex){failures.Add(ex);logger.LogWarning(ex,"AI route {ProviderCode}/{ModelCode} failed for feature {FeatureCode}, correlation {CorrelationId}; trying the next configured route.",route.ProviderCode,route.ModelCode,featureCode,correlationId);}
         }
+        if(failures.Count>0&&failures.All(x=>x is AiProviderThrottledException))throw new AiProviderUnavailableException(featureCode,"All configured AI provider routes are rate-limited (HTTP 429).",new AggregateException(failures));
         throw new AiProviderUnavailableException(featureCode,"All configured AI provider routes were unavailable.",new AggregateException(failures));
     }
 

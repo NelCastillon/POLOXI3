@@ -10,6 +10,14 @@ public sealed class AiProviderUnavailableException:Exception
 {
     public AiProviderUnavailableException(string featureCode,string message,Exception? innerException=null):base(message,innerException)=>FeatureCode=featureCode;
     public string FeatureCode{get;}
+    /// <summary>True when every route failed because the provider throttled the request (HTTP 429) - the call never reached a model and should not count as a consumed model call.</summary>
+    public bool IsThrottled=>InnerException is AiProviderThrottledException||(InnerException is AggregateException aggregate&&aggregate.InnerExceptions.Count>0&&aggregate.InnerExceptions.All(x=>x is AiProviderThrottledException));
+}
+
+/// <summary>Raised by a provider adapter when the upstream service rate-limited the request after the adapter's bounded Retry-After waits were exhausted.</summary>
+public sealed class AiProviderThrottledException(string message,TimeSpan? retryAfter,Exception? innerException=null):Exception(message,innerException)
+{
+    public TimeSpan? RetryAfter{get;}=retryAfter;
 }
 
 public interface IAiProviderRouteRepository

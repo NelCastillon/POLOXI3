@@ -43,6 +43,8 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     private const int ContractContextPrefixBudgetChars=9500;
     /// <summary>Answer-stage budget for the SELECTED DOMAIN PACK block. The hierarchy stages consume the pack whole; final synthesis only needs a bounded excerpt so the interpretive paths are never displaced.</summary>
     private const int AnswerDomainPackBudgetChars=6000;
+    /// <summary>Option 5 per-batch budget for the SELECTED DOMAIN PACK block. Each L3 batch carries its assigned L2 parent lines (which already encode the pack targets), so only a bounded excerpt is repeated per call; the whole pack is still consumed by the L1/L2 stages.</summary>
+    private const int BatchDomainPackBudgetChars=6000;
     /// <summary>Marker that opens the SELECTED DOMAIN PACK block inside the matter context; everything from here on is configuration that must reach the model intact.</summary>
     internal const string DomainPackBlockMarker="──────── SELECTED DOMAIN PACK (configuration, not evidence; dynamic hierarchy is primary) ────────";
     // Safe ceiling for the combined system+user prompt sent to a governed AI call. It sits below the
@@ -811,6 +813,15 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             // Use Domain Pack mode: the Level-1 axes are the DB-backed pack Dimensions, so the intent LLM call
             // is skipped and L1 is materialized deterministically from the pack. Off-path is unchanged.
             var useDomainPackHierarchy=_useDomainPack&&_resolvedDomainPackId is not null&&_packDimensions.Count>0;
+            // Use Domain Pack mode: L1 (Dimensions) and L2 (Concepts/EvidenceTypes) are deterministic DB
+            // rows, so an answer-kind depth budget of 2 would terminate before Option 5 batches a single
+            // configured L2 into L3 propositions (observed: CONTENT_ENUMERATION -> ANSWER_KIND_DEPTH_BUDGET
+            // at depth 2, zero L3). Guarantee the L2->L3 stage runs; the absolute ceiling still applies.
+            if(useDomainPackHierarchy&&effectiveDepthCeiling<3&&configuration.AbsoluteDepthCeiling>=3)
+            {
+                logger.LogInformation("Wide2 Domain Pack mode: raising effective depth ceiling from {Previous} to 3 so configured L2 parents reach Option 5 L3 generation.",effectiveDepthCeiling);
+                effectiveDepthCeiling=3;
+            }
             if(_useDomainPack&&!useDomainPackHierarchy)
                 logger.LogWarning("Wide2 Domain Pack mode is ON but the deterministic hierarchy gate FAILED (resolvedPackId={ResolvedPackId}, packDimensions={DimensionCount}); L1 falls back to the LLM intent proposal, which may consolidate dimensions.",_resolvedDomainPackId?.ToString()??"(null)",_packDimensions.Count);
             IReadOnlyCollection<WideProposedBranch> level1Branches;
@@ -944,9 +955,8 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                         .SelectMany(parent=>BuildDomainPackLevel2Branches(parent.BranchCode["DIM_".Length..]))
                         .ToArray();
                     nextLevel=MaterializeBranches(packLevel2,executionId,request.TenantId,depth+1,parentsByCode,configuration,deterministic:true);
-                    // Option 5 scope ledger: one durable row per configured L2 target (in-scope rows get
-                    // their materialized branch id; rule-excluded rows keep a null branch id). Fail-soft.
-                    await PersistScopeLedgerAsync(request,executionId,nextLevel,cancellationToken);
+                    // Option 5 scope ledger rows (one per configured L2 target) are persisted AFTER
+                    // SaveWideBranchesAsync below: Legal_WideBranchScope.WideBranchId is an FK to Legal_WideBranch.
                 }
                 else if(useDomainPackHierarchy&&depth==2)
                 {
@@ -1053,6 +1063,9 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                     nextLevel=attachedChildren;
                 }
                 await wideRepository.SaveWideBranchesAsync(nextLevel,request.UserId,cancellationToken);
+                // Option 5 scope ledger: one durable row per configured L2 target (in-scope rows get their
+                // materialized branch id; rule-excluded rows keep a null branch id). Fail-soft.
+                if(useDomainPackHierarchy&&depth==1)await PersistScopeLedgerAsync(request,executionId,nextLevel,cancellationToken);
                 await PersistLevelProvenanceAsync(request,nextLevel,cancellationToken);
                 allBranches.AddRange(nextLevel);
                 currentLevel=nextLevel;
@@ -3108,7 +3121,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                         }
                     }
                 }
-                catch(Exception)when(!cancellationToken.IsCancellationRequested){/* pack is advisory; run continues unresolved */}
+                catch(Exception ex)when(!cancellationToken.IsCancellationRequested){logger.LogWarning(ex,"Wide2 Domain Pack resolution FAILED for matter {MatterId} (pack code {PackCode}); the run continues with the pack unresolved and Domain Pack mode disabled.",matterId,packCodeToResolve);}
             }
             // R3: fold the VERIFIED pack identity (id + code) into the serialized block so the discovery and
             // graph-proposal prompts carry proof of which specific DB-backed pack was applied — never an
