@@ -104,6 +104,18 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     // evidence type codes) used to admit only catalog evidence types the matter actually exhibits at L2.
     private IReadOnlySet<string> _matterPresenceTokens=new HashSet<string>(StringComparer.Ordinal);
     private IReadOnlySet<string> _matterDocumentEvidenceTypeCodes=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    // Option 5 (migration 0433): conditional relevance rules for the resolved pack, the run-level passage
+    // index (evidence extracted ONCE per document version and reused across every L3 batch by stable
+    // passage id), per-run scope ledger rows, and the per-run passage-id -> graph item lookup used to
+    // validate model-cited anchors (unknown ids are dropped; fabricated anchors never persist).
+    private IReadOnlyList<DecisionDomainPackRelevanceRuleDto> _packRelevanceRules=[];
+    private IReadOnlyList<LegalEvidenceGraphItemDto> _matterPassageIndex=[];
+    private readonly List<WideBranchScopeRecord> _scopeLedger=new();
+    private readonly Dictionary<string,int> _scopeLedgerByBranchCode=new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string,int> _scopePassageCounts=new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<Guid> _explainedParentIds=new();
+    private readonly List<WidePropositionAnchorRecord> _pendingAnchors=new();
+    private readonly List<WidePropositionLinkRecord> _pendingLinks=new();
     // R3 competition accountability: typed status for whether candidate competition ran on this run.
     private string? _candidateCompetitionStatus;
     // R4 Normalization Gate observability: the outcome of routing this run through the shared gate, or
@@ -669,6 +681,14 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         _packEvidenceTypes=[];
         _matterPresenceTokens=new HashSet<string>(StringComparer.Ordinal);
         _matterDocumentEvidenceTypeCodes=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        _packRelevanceRules=[];
+        _matterPassageIndex=[];
+        _scopeLedger.Clear();
+        _scopeLedgerByBranchCode.Clear();
+        _scopePassageCounts.Clear();
+        _explainedParentIds.Clear();
+        _pendingAnchors.Clear();
+        _pendingLinks.Clear();
         _canonicalOutcomeCandidates=[];
         _candidateCompetitionStatus=null;
         _legalNormalization=null;
@@ -924,15 +944,23 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                         .SelectMany(parent=>BuildDomainPackLevel2Branches(parent.BranchCode["DIM_".Length..]))
                         .ToArray();
                     nextLevel=MaterializeBranches(packLevel2,executionId,request.TenantId,depth+1,parentsByCode,configuration,deterministic:true);
+                    // Option 5 scope ledger: one durable row per configured L2 target (in-scope rows get
+                    // their materialized branch id; rule-excluded rows keep a null branch id). Fail-soft.
+                    await PersistScopeLedgerAsync(request,executionId,nextLevel,cancellationToken);
+                }
+                else if(useDomainPackHierarchy&&depth==2)
+                {
+                    // Option 5: complete-coverage adaptive batching. Every in-scope L2 parent is assigned to a
+                    // budget-sized batch (shared dimension context, bounded parent lines + reused passages);
+                    // returned coverage is validated in code against the assignment; thin/missing parents get
+                    // one targeted retry; outcomes are persisted per parent. Option 6 (optional, DB switch)
+                    // only re-orders: a priority tier is processed first in smaller batches, never excluded.
+                    var coverage=await GenerateDomainPackLevel3Async(request,executionId,narrowingParents,allBranches,parentsByCode,capabilities,configuration,depth+1,evidence,queryContract,llmCalls,cancellationToken);
+                    llmCalls=coverage.LlmCalls;
+                    nextLevel=coverage.Children;
                 }
                 else
                 {
-                    // Per-parent proposal: a single hierarchy-step call over ALL surviving parents is bounded
-                    // by the parent-summary budget (3000 chars ≈ 15 parents). Domain Pack L2 routinely has 100+
-                    // parents, so the model never saw most of them and they received no atomic propositions
-                    // (L3 count of 9 under 128 L2 factors). Decompose each parent with its own focused call so
-                    // every L2 factor is guaranteed matter-specific atomic children. The LLM-call ceiling still
-                    // bounds the pass, and the sibling-coverage pass below backfills any parent still skipped.
                     var batches=BuildHierarchyParentBatches(narrowingParents,allBranches);
                     var batchedChildren=new List<WideBranchRecord>();
                     foreach(var batch in batches)
@@ -991,7 +1019,10 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 // with a focused, single-parent call so all branches deepen symmetrically. Each focused
                 // child is force-attached to its parent. Bounded by the same LLM-call ceiling.
                 var coveredParentIds=nextLevel.Where(child=>child.ParentWideBranchId is not null).Select(child=>child.ParentWideBranchId!.Value).ToHashSet();
-                var uncoveredParents=narrowingParents.Where(parent=>!coveredParentIds.Contains(parent.WideBranchId)).ToArray();
+                // Option 5: a parent the batch pass explicitly explained (INFORMATION_GAP / NOT_APPLICABLE /
+                // retried THIN_RESULT) is covered by its processing-ledger row; re-calling it would reintroduce
+                // the per-parent cost the batching removed and could not add evidence that does not exist.
+                var uncoveredParents=narrowingParents.Where(parent=>!coveredParentIds.Contains(parent.WideBranchId)&&!_explainedParentIds.Contains(parent.WideBranchId)).ToArray();
                 if(uncoveredParents.Length>0)
                 {
                     const string siblingCoverageDirective="SIBLING DECOMPOSITION REQUIRED: Decompose ONLY the single parent branch listed above into its atomic, independently testable child propositions (its distinct legal elements, burden components, factual predicates, or evidentiary sub-issues). Every child must have a NEW distinct branchCode, a narrower proposition than the parent, and its parentBranchCode set to that parent. Do not restate the parent and do not introduce children for any other branch.";
@@ -1022,6 +1053,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                     nextLevel=attachedChildren;
                 }
                 await wideRepository.SaveWideBranchesAsync(nextLevel,request.UserId,cancellationToken);
+                await PersistLevelProvenanceAsync(request,nextLevel,cancellationToken);
                 allBranches.AddRange(nextLevel);
                 currentLevel=nextLevel;
 
@@ -3072,6 +3104,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                             _packDimensions=pack.Dimensions.ToArray();
                             _packConcepts=pack.Concepts.Count>0 ? pack.Concepts.ToArray() : [];
                             _packEvidenceTypes=pack.EvidenceTypes.Count>0 ? pack.EvidenceTypes.ToArray() : [];
+                            _packRelevanceRules=pack.RelevanceRules.Count>0 ? pack.RelevanceRules.ToArray() : [];
                         }
                     }
                 }
@@ -3935,33 +3968,64 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     // L2 siblings under the Dimension per the table relationships. Concept codes are CPT_-prefixed and
     // evidence codes EVD_-prefixed so they stay globally unique. ParentBranchCode is the dimension's
     // DIM_ code so MaterializeBranches attaches them to the correct parent.
+    // Option 5: EVERY configured active target is materialized. Document presence is a SIGNAL (ordering,
+    // gap reporting, scope ledger) and never an admission gate. The only exclusion is a conditional DB
+    // relevance rule (EXCLUDE) whose matter signal actually fires; every decision is written to the scope
+    // ledger so the run can prove complete coverage of the configured catalog.
     private IReadOnlyList<WideProposedBranch> BuildDomainPackLevel2Branches(string dimensionCode)
     {
         if(string.IsNullOrWhiteSpace(dimensionCode))
             return [];
         var parentCode=$"DIM_{dimensionCode}";
         var children=new List<WideProposedBranch>();
+        var excluded=0;
         foreach(var concept in _packConcepts.Where(c=>string.Equals(c.DimensionCode,dimensionCode,StringComparison.OrdinalIgnoreCase)))
-            children.Add(new WideProposedBranch(
-                $"CPT_{concept.ConceptCode}",
-                string.IsNullOrWhiteSpace(concept.Name)?concept.ConceptCode:concept.Name,
-                concept.Description??string.Empty,
-                null,null,0.8m,true,null,parentCode));
-        var admitted=0;var skipped=0;
+        {
+            var rule=ResolveRelevanceRule("CONCEPT",concept.ConceptCode);
+            var code=$"CPT_{concept.ConceptCode}";
+            var name=string.IsNullOrWhiteSpace(concept.Name)?concept.ConceptCode:concept.Name;
+            if(rule is{EffectCode:"EXCLUDE"}){excluded++;RecordScope(code,"CONCEPT",concept.ConceptCode,dimensionCode,name,WideScopeStatuses.ExcludedByRule,"RULE",rule.Reason??$"{rule.SignalKindCode}={rule.SignalValue}",false,concept.IsRequiredCoverage,false);continue;}
+            RecordScope(code,"CONCEPT",concept.ConceptCode,dimensionCode,name,WideScopeStatuses.InScope,rule is null?"DEFAULT":"RULE",rule?.Reason,rule is{EffectCode:"PRIORITIZE"},concept.IsRequiredCoverage,DomainPackEvidencePresenceMatcher.NormalizeCorpusTokens(name).Any(_matterPresenceTokens.Contains));
+            children.Add(new WideProposedBranch(code,name,concept.Description??string.Empty,null,null,0.8m,true,null,parentCode));
+        }
+        var present=0;
         foreach(var evidence in _packEvidenceTypes.Where(e=>string.Equals(e.DimensionCode,dimensionCode,StringComparison.OrdinalIgnoreCase)))
         {
-            // Only evidence types PRESENT in the matter (matter fields, profile, document evidence,
-            // retrieval evidence) become L2 nodes; the rest of the catalog stays DB-side for gap analysis.
-            if(!DomainPackEvidencePresenceMatcher.IsPresent(evidence,_matterPresenceTokens,_matterDocumentEvidenceTypeCodes)){skipped++;continue;}
-            admitted++;
-            children.Add(new WideProposedBranch(
-                $"EVD_{evidence.EvidenceTypeCode}",
-                string.IsNullOrWhiteSpace(evidence.Name)?evidence.EvidenceTypeCode:evidence.Name,
-                evidence.Description??string.Empty,
-                null,null,DomainPackInterpretationPrior(evidence.PoloxiImportanceScore),true,null,parentCode));
+            var rule=ResolveRelevanceRule("EVIDENCE_TYPE",evidence.EvidenceTypeCode);
+            var code=$"EVD_{evidence.EvidenceTypeCode}";
+            var name=string.IsNullOrWhiteSpace(evidence.Name)?evidence.EvidenceTypeCode:evidence.Name;
+            if(rule is{EffectCode:"EXCLUDE"}){excluded++;RecordScope(code,"EVIDENCE_TYPE",evidence.EvidenceTypeCode,dimensionCode,name,WideScopeStatuses.ExcludedByRule,"RULE",rule.Reason??$"{rule.SignalKindCode}={rule.SignalValue}",false,evidence.IsRequiredCoverage,false);continue;}
+            var isPresent=DomainPackEvidencePresenceMatcher.IsPresent(evidence,_matterPresenceTokens,_matterDocumentEvidenceTypeCodes);
+            if(isPresent)present++;
+            RecordScope(code,"EVIDENCE_TYPE",evidence.EvidenceTypeCode,dimensionCode,name,WideScopeStatuses.InScope,rule is null?"DEFAULT":"RULE",rule?.Reason,rule is{EffectCode:"PRIORITIZE"},evidence.IsRequiredCoverage,isPresent);
+            children.Add(new WideProposedBranch(code,name,evidence.Description??string.Empty,null,null,DomainPackInterpretationPrior(evidence.PoloxiImportanceScore),true,null,parentCode));
         }
-        logger.LogInformation("Wide2 Domain Pack L2 for {Dimension}: evidence admitted={Admitted} skipped(not present in matter)={Skipped} concepts={Concepts}.",dimensionCode,admitted,skipped,children.Count-admitted);
+        logger.LogInformation("Wide2 Domain Pack L2 for {Dimension}: materialized={Materialized} evidencePresent={Present} excludedByRule={Excluded}.",dimensionCode,children.Count,present,excluded);
         return children;
+    }
+
+    // Option 5: highest-priority ACTIVE rule for a target whose matter signal fires. KEYWORD/CLAIM/DEFENSE/
+    // MATTER_TYPE/JURISDICTION/PROFILE_FIELD signals are satisfied when every token of SignalValue appears in
+    // the matter presence corpus; DOCUMENT_PRESENT fires when the named evidence type was directly classified
+    // on an uploaded document. A rule with an unmet signal is inert, so pack membership alone never excludes.
+    private DecisionDomainPackRelevanceRuleDto? ResolveRelevanceRule(string targetKind,string targetCode)
+    {
+        if(_packRelevanceRules.Count==0)return null;
+        foreach(var rule in _packRelevanceRules.Where(r=>string.Equals(r.TargetKindCode,targetKind,StringComparison.OrdinalIgnoreCase)&&string.Equals(r.TargetCode,targetCode,StringComparison.OrdinalIgnoreCase)).OrderBy(r=>r.Priority))
+        {
+            var fires=string.Equals(rule.SignalKindCode,"DOCUMENT_PRESENT",StringComparison.OrdinalIgnoreCase)
+                ?_matterDocumentEvidenceTypeCodes.Contains(rule.SignalValue)
+                :DomainPackEvidencePresenceMatcher.NormalizeCorpusTokens(rule.SignalValue) is{Count:>0}tokens&&tokens.All(_matterPresenceTokens.Contains);
+            if(fires)return rule;
+        }
+        return null;
+    }
+
+    private void RecordScope(string branchCode,string targetKind,string targetCode,string dimensionCode,string displayName,string status,string decidedBy,string? reason,bool prioritized,bool required,bool documentPresent)
+    {
+        _scopePassageCounts.TryGetValue(targetCode,out var passageCount);
+        _scopeLedgerByBranchCode[NormalizeCode(branchCode)]=_scopeLedger.Count;
+        _scopeLedger.Add(new WideBranchScopeRecord(Guid.NewGuid(),Guid.Empty,null,Guid.Empty,targetKind,Truncate(targetCode,120)!,Truncate(dimensionCode,120)!,Truncate(displayName,300)!,status,decidedBy,Truncate(reason,1000),prioritized,required,documentPresent,passageCount,null,null,_scopeLedger.Count+1));
     }
 
     // Aggregates every matter-side signal into the presence corpus consulted by BuildDomainPackLevel2Branches:
@@ -3982,6 +4046,11 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             try
             {
                 var graph=await documentCorpusRepository.GetMatterEvidenceGraphAsync(request.TenantId,matterId,cancellationToken);
+                // Option 5: keep the passage-bearing graph items as the run-level passage index so every L3
+                // batch references the SAME extracted passages by stable id (extract once, reuse everywhere).
+                _matterPassageIndex=graph.Evidence.Where(item=>item.LegalDocumentPassageId is not null&&!string.IsNullOrWhiteSpace(item.PassageText)).ToArray();
+                foreach(var group in _matterPassageIndex.Where(item=>!string.IsNullOrWhiteSpace(item.EvidenceTypeCode)).GroupBy(item=>item.EvidenceTypeCode!,StringComparer.OrdinalIgnoreCase))
+                    _scopePassageCounts[group.Key]=group.Select(item=>item.LegalDocumentPassageId!.Value).Distinct().Count();
                 foreach(var item in graph.Evidence)
                 {
                     if(!string.IsNullOrWhiteSpace(item.EvidenceTypeCode))directCodes.Add(item.EvidenceTypeCode);

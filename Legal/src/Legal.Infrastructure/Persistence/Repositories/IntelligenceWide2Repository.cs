@@ -610,7 +610,15 @@ COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultVa
 COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.MarginalConfidenceDeltaFloor' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.03) MarginalConfidenceDeltaFloor,
 COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.EnableResolutionDeepening' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'false') EnableResolutionDeepening,
 COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.ResolutionDeepeningMinConditions' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),2) ResolutionDeepeningMinConditions,
-COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.ResolutionDeepeningMaxConditions' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),4) ResolutionDeepeningMaxConditions;
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.ResolutionDeepeningMaxConditions' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),4) ResolutionDeepeningMaxConditions,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.L3BatchSize' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),8) L3BatchSize,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.L3BatchInputBudgetChars' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),30000) L3BatchInputBudgetChars,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.L3PassagesPerParent' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),4) L3PassagesPerParent,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.L3MinimumPropositionsPerParent' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),2) L3MinimumPropositionsPerParent,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.L3MaxConcurrency' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),3) L3MaxConcurrency,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.L3TierOneCount' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),0) L3TierOneCount,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.L3TierOneBatchSize' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),3) L3TierOneBatchSize,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.L3TierOneMaxPerDimension' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),2) L3TierOneMaxPerDimension;
 -- V3.3 POLOXI.Legal_AnswerKind lookup (tenant rows override global rows with the same code).
 SELECT AnswerKindCode,DepthCeiling,MaxInformationRounds,RunsCandidateCompetition
 FROM(SELECT AnswerKindCode,DepthCeiling,MaxInformationRounds,RunsCandidateCompetition,
@@ -710,7 +718,15 @@ WHERE Rn=1 ORDER BY AnswerKindCode;
             MarginalConfidenceDeltaFloor=Math.Clamp(row.MarginalConfidenceDeltaFloor,0,1),
             EnableResolutionDeepening=string.Equals(row.EnableResolutionDeepening,"true",StringComparison.OrdinalIgnoreCase),
             ResolutionDeepeningMinConditions=Math.Clamp(row.ResolutionDeepeningMinConditions,1,10),
-            ResolutionDeepeningMaxConditions=Math.Clamp(row.ResolutionDeepeningMaxConditions,1,10)
+            ResolutionDeepeningMaxConditions=Math.Clamp(row.ResolutionDeepeningMaxConditions,1,10),
+            L3BatchSize=Math.Clamp(row.L3BatchSize,1,40),
+            L3BatchInputBudgetChars=Math.Clamp(row.L3BatchInputBudgetChars,4000,40000),
+            L3PassagesPerParent=Math.Clamp(row.L3PassagesPerParent,0,12),
+            L3MinimumPropositionsPerParent=Math.Clamp(row.L3MinimumPropositionsPerParent,1,10),
+            L3MaxConcurrency=Math.Clamp(row.L3MaxConcurrency,1,8),
+            L3TierOneCount=Math.Clamp(row.L3TierOneCount,0,100),
+            L3TierOneBatchSize=Math.Clamp(row.L3TierOneBatchSize,1,40),
+            L3TierOneMaxPerDimension=Math.Clamp(row.L3TierOneMaxPerDimension,1,100)
         };
     }
 
@@ -877,9 +893,56 @@ WHERE WideExecutionId=@WideExecutionId AND TenantId=@TenantId AND IsDeleted=0;
         decimal VeryLowInformationValue,decimal LowInformationValue,decimal MediumInformationValue,decimal HighInformationValue,decimal VeryHighInformationValue,int EvidencePriorityMinimumDepth,decimal EvidencePriorityCoverageFloor,int MinimumCandidateDimensionSupport,string EnableClarificationGate,decimal ClarificationConfidenceThreshold,decimal ClarificationWinnerStabilityThreshold,decimal ClarificationMarginThreshold,int MaximumClarificationRounds,decimal MinimumClarificationGain,
         string EnableAdaptiveNarrowing,decimal NarrowingBranchCoverageFloor,decimal NarrowingInformationValueFloor,decimal EnterpriseSupportBase,decimal EnterpriseSupportIncrement,decimal EnterpriseSupportCeiling,decimal ExternalSupportBase,decimal ExternalSupportIncrement,decimal LegalRetrievalRelevanceFloor,decimal LegalSupportFloor,decimal AuthoritativeSourceBonus,decimal EvidenceConsensusThreshold,decimal ExternalOnlySupportDiscount,decimal NarrowingReopenSupportDelta,decimal NarrowingCandidateCoverageFloor,decimal NarrowingCandidateScoreGap,int NarrowingDiscoveryMinimumSupport,int MaximumCandidateAdmissionsPerRound,
         string EnableAnswerKindRouting,string EnableDeliverableSynthesis,string DeliverableSynthesisIndicators,int ContentEnumerationDepthCeiling,int ContentEnumerationMaxInformationRounds,int SingleAnswerDepthCeiling,int SingleAnswerMaxInformationRounds,decimal ClarificationReweightBoost,string EnableChallengeRound,string EnableAbv,int ExternalGroundingBudgetSeconds,string EnableTieredModelRouting,string FastModelCode,decimal ChallengeMarginThreshold,string EnableGuardrailPenalty,decimal GuardrailVetoThreshold,decimal GuardrailAcceptableThreshold,decimal GuardrailPenaltyExponent,
-        string EnableMarginalValueStopping,int MarginalValueMinimumDepth,decimal MarginalCoverageDeltaFloor,decimal MarginalConfidenceDeltaFloor,string EnableResolutionDeepening,int ResolutionDeepeningMinConditions,int ResolutionDeepeningMaxConditions);
+        string EnableMarginalValueStopping,int MarginalValueMinimumDepth,decimal MarginalCoverageDeltaFloor,decimal MarginalConfidenceDeltaFloor,string EnableResolutionDeepening,int ResolutionDeepeningMinConditions,int ResolutionDeepeningMaxConditions,
+        int L3BatchSize,int L3BatchInputBudgetChars,int L3PassagesPerParent,int L3MinimumPropositionsPerParent,int L3MaxConcurrency,int L3TierOneCount,int L3TierOneBatchSize,int L3TierOneMaxPerDimension);
 
     private sealed record WideAnswerKindRow(string AnswerKindCode,int DepthCeiling,int? MaxInformationRounds,bool RunsCandidateCompetition);
+
+    // Option 5 ledgers (migration 0433). Append-only; never deleted.
+    public async Task SaveWideBranchScopesAsync(IReadOnlyCollection<WideBranchScopeRecord> scopes,Guid userId,CancellationToken cancellationToken=default)
+    {
+        if(scopes.Count==0)return;
+        const string sql="""
+INSERT POLOXI.Legal_WideBranchScope(WideBranchScopeId,WideExecutionId,WideBranchId,TenantId,TargetKindCode,TargetCode,DimensionCode,DisplayName,ScopeStatusCode,DecidedByCode,Reason,IsPrioritized,IsRequiredCoverage,DocumentPresent,MappedPassageCount,PriorityScore,TierCode,SortOrder,CreatedDateUtc,CreatedByUserId,IsDeleted)
+VALUES(@WideBranchScopeId,@WideExecutionId,@WideBranchId,@TenantId,@TargetKindCode,@TargetCode,@DimensionCode,@DisplayName,@ScopeStatusCode,@DecidedByCode,@Reason,@IsPrioritized,@IsRequiredCoverage,@DocumentPresent,@MappedPassageCount,@PriorityScore,@TierCode,@SortOrder,SYSUTCDATETIME(),@UserId,0);
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(sql,scopes.Select(s=>new{s.WideBranchScopeId,s.WideExecutionId,s.WideBranchId,s.TenantId,s.TargetKindCode,s.TargetCode,s.DimensionCode,s.DisplayName,s.ScopeStatusCode,s.DecidedByCode,s.Reason,s.IsPrioritized,s.IsRequiredCoverage,s.DocumentPresent,s.MappedPassageCount,s.PriorityScore,s.TierCode,s.SortOrder,UserId=userId}),cancellationToken:cancellationToken));
+    }
+
+    public async Task SaveWideBranchProcessingAsync(IReadOnlyCollection<WideBranchProcessingRecord> rows,Guid userId,CancellationToken cancellationToken=default)
+    {
+        if(rows.Count==0)return;
+        const string sql="""
+INSERT POLOXI.Legal_WideBranchProcessing(WideBranchProcessingId,WideExecutionId,WideBranchId,TenantId,LevelNumber,BatchNumber,AttemptNumber,ProcessingResultCode,PropositionCount,Reason,CreatedDateUtc,CreatedByUserId,IsDeleted)
+VALUES(@WideBranchProcessingId,@WideExecutionId,@WideBranchId,@TenantId,@LevelNumber,@BatchNumber,@AttemptNumber,@ProcessingResultCode,@PropositionCount,@Reason,SYSUTCDATETIME(),@UserId,0);
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(sql,rows.Select(r=>new{r.WideBranchProcessingId,r.WideExecutionId,r.WideBranchId,r.TenantId,r.LevelNumber,r.BatchNumber,r.AttemptNumber,r.ProcessingResultCode,r.PropositionCount,r.Reason,UserId=userId}),cancellationToken:cancellationToken));
+    }
+
+    public async Task SaveWidePropositionLinksAsync(IReadOnlyCollection<WidePropositionLinkRecord> links,Guid userId,CancellationToken cancellationToken=default)
+    {
+        if(links.Count==0)return;
+        const string sql="""
+INSERT POLOXI.Legal_WidePropositionLink(WidePropositionLinkId,WideExecutionId,CanonicalWideBranchId,LinkedParentWideBranchId,TenantId,LinkKindCode,MatchMethodCode,Confidence,SupersededBranchCode,CreatedDateUtc,CreatedByUserId,IsDeleted)
+VALUES(@WidePropositionLinkId,@WideExecutionId,@CanonicalWideBranchId,@LinkedParentWideBranchId,@TenantId,@LinkKindCode,@MatchMethodCode,@Confidence,@SupersededBranchCode,SYSUTCDATETIME(),@UserId,0);
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(sql,links.Select(l=>new{l.WidePropositionLinkId,l.WideExecutionId,l.CanonicalWideBranchId,l.LinkedParentWideBranchId,l.TenantId,l.LinkKindCode,l.MatchMethodCode,l.Confidence,l.SupersededBranchCode,UserId=userId}),cancellationToken:cancellationToken));
+    }
+
+    public async Task SaveWidePropositionAnchorsAsync(IReadOnlyCollection<WidePropositionAnchorRecord> anchors,Guid userId,CancellationToken cancellationToken=default)
+    {
+        if(anchors.Count==0)return;
+        const string sql="""
+INSERT POLOXI.Legal_WidePropositionAnchor(WidePropositionAnchorId,WideExecutionId,WideBranchId,LegalDocumentPassageId,TenantId,PageNumber,Quote,AnchorRoleCode,PassageContentHash,CreatedDateUtc,CreatedByUserId,IsDeleted)
+SELECT @WidePropositionAnchorId,@WideExecutionId,@WideBranchId,@LegalDocumentPassageId,@TenantId,@PageNumber,@Quote,@AnchorRoleCode,@PassageContentHash,SYSUTCDATETIME(),@UserId,0
+WHERE EXISTS(SELECT 1 FROM POLOXI.Legal_DocumentPassage WHERE LegalDocumentPassageId=@LegalDocumentPassageId AND IsDeleted=0);
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(sql,anchors.Select(a=>new{a.WidePropositionAnchorId,a.WideExecutionId,a.WideBranchId,a.LegalDocumentPassageId,a.TenantId,a.PageNumber,a.Quote,a.AnchorRoleCode,a.PassageContentHash,UserId=userId}),cancellationToken:cancellationToken));
+    }
 
     // V3.0: persists one adaptive-narrowing evaluation with its full transition provenance (never deleted).
     public async Task SaveNarrowingIterationAsync(WideNarrowingIterationRecord iteration,Guid userId,CancellationToken cancellationToken=default)

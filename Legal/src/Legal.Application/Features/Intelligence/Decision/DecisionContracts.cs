@@ -712,13 +712,29 @@ public sealed record DecisionDomainPackDto(
     // (liability, causation, comparative fault, damages, …) remain shared evaluation-hierarchy nodes
     // and are NOT part of this set.
     public IReadOnlyCollection<DecisionDomainPackOutcomeCandidateDto> OutcomeCandidates { get; init; } = [];
+
+    // Conditional deterministic relevance rules (migration 0433). A rule EXCLUDEs or PRIORITIZEs a
+    // Concept/EvidenceType only when the named matter signal is present; pack membership alone never
+    // excludes. Advisory ordering/scope configuration only; POLOXI Core owns scoring.
+    public IReadOnlyCollection<DecisionDomainPackRelevanceRuleDto> RelevanceRules { get; init; } = [];
 }
+
+// Migration 0433: TargetKindCode CONCEPT|EVIDENCE_TYPE; SignalKindCode MATTER_TYPE|CLAIM|DEFENSE|
+// JURISDICTION|PROFILE_FIELD|KEYWORD|DOCUMENT_PRESENT; EffectCode EXCLUDE|PRIORITIZE.
+public sealed record DecisionDomainPackRelevanceRuleDto(string TargetKindCode, string TargetCode, string SignalKindCode, string SignalValue, string EffectCode, int Priority, string? Reason);
 
 // PoloxiImportanceScore (0.0–1.0) is an advisory DB-backed importance prior (migration 0407) expressing
 // how decisive the node is to the decision. POLOXI Core owns authoritative scoring; this is configuration only.
 public sealed record DecisionDomainPackDimensionDto(string DimensionCode, string Name, string? Description, decimal? PoloxiImportanceScore = null);
 
-public sealed record DecisionDomainPackEvidenceTypeDto(string EvidenceTypeCode, string Name, string? DimensionCode, string? Description, decimal? PoloxiImportanceScore = null);
+public sealed record DecisionDomainPackEvidenceTypeDto(string EvidenceTypeCode, string Name, string? DimensionCode, string? Description, decimal? PoloxiImportanceScore = null)
+{
+    // Migration 0433 (nullable/additive): required-coverage flag, applicable matter types (comma list,
+    // empty = all) and relevance keywords used ONLY for deterministic ordering and gap reporting.
+    public bool IsRequiredCoverage { get; init; }
+    public string? MatterTypeCodes { get; init; }
+    public string? RelevanceKeywords { get; init; }
+}
 
 public sealed record DecisionDomainPackVerificationProfileDto(string ProfileCode, string Name, string? EvidenceTypeCode, string? Description);
 

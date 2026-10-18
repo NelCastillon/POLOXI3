@@ -1494,7 +1494,9 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
 
         var evidenceTypes = (await connection.QueryAsync<DecisionDomainPackEvidenceTypeDto>(new CommandDefinition(
             """
-            SELECT EvidenceTypeCode, Name, DimensionCode, Description, PoloxiImportanceScore FROM POLOXI.Legal_DecisionDomainPackEvidenceType
+            SELECT EvidenceTypeCode, Name, DimensionCode, Description, PoloxiImportanceScore,
+                   IsRequiredCoverage, MatterTypeCodes, RelevanceKeywords
+            FROM POLOXI.Legal_DecisionDomainPackEvidenceType
             WHERE IsDeleted = 0 AND IsActive = 1 AND DecisionDomainPackId = @PackId ORDER BY SortOrder, Name;
             """, new { PackId = pack.DecisionDomainPackId }, cancellationToken: cancellationToken))).ToArray();
 
@@ -1575,6 +1577,16 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
             FROM RankedOutcome WHERE ScopeRank = 1 ORDER BY SortOrder, OutcomeCode;
             """, new { PackId = pack.DecisionDomainPackId, TenantId = tenantId }, cancellationToken: cancellationToken))).ToArray();
 
+        // Option 5 conditional relevance rules (migration 0433). Tenant rows plus platform defaults.
+        var relevanceRules = (await connection.QueryAsync<DecisionDomainPackRelevanceRuleDto>(new CommandDefinition(
+            """
+            SELECT TargetKindCode, TargetCode, SignalKindCode, SignalValue, EffectCode, Priority, Reason
+            FROM POLOXI.Legal_DecisionDomainPackRelevanceRule
+            WHERE IsDeleted = 0 AND IsActive = 1 AND DecisionDomainPackId = @PackId
+              AND (TenantId = @TenantId OR TenantId IS NULL)
+            ORDER BY Priority, TargetCode;
+            """, new { PackId = pack.DecisionDomainPackId, TenantId = tenantId }, cancellationToken: cancellationToken))).ToArray();
+
         return new DecisionDomainPackDto(
             pack.DecisionDomainPackId, pack.PackCode, pack.PracticeAreaCode, pack.Name, pack.Description,
             dimensions, evidenceTypes, profiles, matterTypes)
@@ -1582,6 +1594,7 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
             Concepts = concepts,
             ConceptRelations = conceptRelations,
             OutcomeCandidates = outcomeCandidates,
+            RelevanceRules = relevanceRules,
         };
     }
 

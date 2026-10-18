@@ -1231,6 +1231,18 @@ public sealed record WideConfiguration(decimal TargetConfidence,decimal MinimumB
     // above the maximum the extra branches are capped to protect latency and avoid branch explosion.
     public int ResolutionDeepeningMinConditions{get;init;}=2;
     public int ResolutionDeepeningMaxConditions{get;init;}=4;
+    // Option 5 adaptive Domain Pack coverage batches (DB-seeded; see migration 0433). Every in-scope L2
+    // is assigned to a budget-sized batch; returned coverage is validated in code and thin/missing
+    // parents get one targeted retry. L3TierOneCount>0 enables the optional Option 6 priority tier
+    // (ordering/depth only, never inclusion); 0 is pure Option 5.
+    public int L3BatchSize{get;init;}=8;
+    public int L3BatchInputBudgetChars{get;init;}=30000;
+    public int L3PassagesPerParent{get;init;}=4;
+    public int L3MinimumPropositionsPerParent{get;init;}=2;
+    public int L3MaxConcurrency{get;init;}=3;
+    public int L3TierOneCount{get;init;}=0;
+    public int L3TierOneBatchSize{get;init;}=3;
+    public int L3TierOneMaxPerDimension{get;init;}=2;
 }
 
 // V3.3 answer-kind definition row from POLOXI.AnswerKind. DepthCeiling 0 and MaxInformationRounds
@@ -1426,11 +1438,56 @@ public sealed record WideProposedBranch(string BranchCode,string DisplayName,str
     // V3.12: HARD_CONSTRAINT | GUARDRAIL | PREFERENCE | CONTEXT; anything else defaults to
     // PREFERENCE so pre-role behavior (keyword fallbacks) is preserved.
     public string? BranchRole{get;init;}
+    // Option 5: stable passage anchors the model cites for this proposition (ids come from the prompt's
+    // passage index). Unknown ids are dropped in code; fabricated anchors never persist.
+    public IReadOnlyCollection<WideProposedAnchor> Anchors{get;init;}=[];
 }
+
+// Option 5 passage anchor emitted by the model. PassageId must match a passage shown in the prompt.
+public sealed record WideProposedAnchor(string PassageId,string? Quote,string? Role);
+
+// Option 5: per-assigned-parent coverage statement the model must return for EVERY parent in the batch.
+// Status: PROPOSITIONS_GENERATED | INFORMATION_GAP | NOT_APPLICABLE. A parent missing from this list is
+// treated as uncovered and recovered by a targeted call.
+public sealed record WideParentCoverage(string ParentBranchCode,string Status,string? Reason);
 
 public sealed record WideIntentProposal(string ConceptCode,string DisplayName,decimal AmbiguityScore,IReadOnlyCollection<WideProposedBranch> Branches);
 
-public sealed record WideLevelProposal(IReadOnlyCollection<WideProposedBranch> Branches);
+public sealed record WideLevelProposal(IReadOnlyCollection<WideProposedBranch> Branches)
+{
+    // Option 5 coverage envelope; empty for legacy single-parent/non-batch calls.
+    public IReadOnlyCollection<WideParentCoverage> ParentCoverage{get;init;}=[];
+}
+
+// Option 6 optional priority review output: ordinal usefulness per L2 parent (NOT outcome support).
+public sealed record WideL2PriorityProposal(IReadOnlyCollection<WideL2PriorityItem> Items);
+public sealed record WideL2PriorityItem(string BranchCode,int Rank,string? Reason);
+
+// ── Option 5 ledgers (migration 0433) ──
+public static class WideScopeStatuses{public const string InScope="IN_SCOPE";public const string ExcludedByRule="EXCLUDED_BY_RULE";}
+public static class WideProcessingResults
+{
+    public const string PropositionsGenerated="PROPOSITIONS_GENERATED";
+    public const string InformationGap="INFORMATION_GAP";
+    public const string NotApplicable="NOT_APPLICABLE";
+    public const string ThinResult="THIN_RESULT";
+    public const string UnprocessedCallCeiling="UNPROCESSED_CALL_CEILING";
+    public const string Failed="FAILED";
+}
+
+// One row per configured L2 target (Concept or EvidenceType) per run. WideBranchId is null only for
+// rule-excluded targets that were never materialized.
+public sealed record WideBranchScopeRecord(Guid WideBranchScopeId,Guid WideExecutionId,Guid? WideBranchId,Guid TenantId,string TargetKindCode,string TargetCode,string DimensionCode,string DisplayName,string ScopeStatusCode,string DecidedByCode,string? Reason,bool IsPrioritized,bool IsRequiredCoverage,bool DocumentPresent,int MappedPassageCount,decimal? PriorityScore,string? TierCode,int SortOrder);
+
+// One row per in-scope L2 per generation attempt.
+public sealed record WideBranchProcessingRecord(Guid WideBranchProcessingId,Guid WideExecutionId,Guid WideBranchId,Guid TenantId,int LevelNumber,int BatchNumber,int AttemptNumber,string ProcessingResultCode,int PropositionCount,string? Reason);
+
+// Shared-proposition reconciliation: the canonical child is kept once; every other parent that
+// produced the same proposition is linked here so scoring counts the proposition once per parent path.
+public sealed record WidePropositionLinkRecord(Guid WidePropositionLinkId,Guid WideExecutionId,Guid CanonicalWideBranchId,Guid LinkedParentWideBranchId,Guid TenantId,string LinkKindCode,string MatchMethodCode,decimal Confidence,string? SupersededBranchCode);
+
+// Proposition -> extracted passage anchor (evidence extracted once, referenced by stable id).
+public sealed record WidePropositionAnchorRecord(Guid WidePropositionAnchorId,Guid WideExecutionId,Guid WideBranchId,Guid LegalDocumentPassageId,Guid TenantId,int? PageNumber,string? Quote,string AnchorRoleCode,string? PassageContentHash);
 
 public sealed record WideAnswerProposal(string Answer,string VerificationCode,decimal Confidence,IReadOnlyCollection<WideAnswerAction> SuggestedActions,IReadOnlyCollection<int> RelevantEvidenceNumbers)
 {
