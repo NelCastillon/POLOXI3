@@ -1188,6 +1188,88 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
         return NoContent();
     }
 
+    // ── Per-matter Evidence Type scope (migration 0441) ─────────────────────────────────────────────
+    // Rows drive which Domain Pack L2 targets receive L3 atomic-proposition generation for the matter.
+    [HttpGet("matters/{matterId:guid}/evidence-scope")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> MatterEvidenceScopes(Guid matterId, CancellationToken cancellationToken)
+        => Ok(await service.GetMatterEvidenceScopesAsync(TenantId, matterId, cancellationToken));
+
+    [HttpGet("matters/{matterId:guid}/evidence-scope/options")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> MatterEvidenceScopeOptions(Guid matterId, CancellationToken cancellationToken)
+        => Ok(await service.GetMatterEvidenceScopeOptionsAsync(TenantId, matterId, cancellationToken));
+
+    [HttpPut("matters/{matterId:guid}/evidence-scope")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> UpsertMatterEvidenceScope(Guid matterId, [FromBody] MatterEvidenceScopeUpsertRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var id = await service.UpsertMatterEvidenceScopeAsync(TenantId, ActorUserId, matterId, request, cancellationToken);
+            return Ok(id);
+        }
+        catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
+    }
+
+    [HttpPost("matters/{matterId:guid}/evidence-scope/status")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> SetMatterEvidenceScopeStatus(Guid matterId, [FromBody] MatterEvidenceScopeBulkStatusRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var count = await service.SetMatterEvidenceScopeStatusAsync(TenantId, ActorUserId, matterId, request, cancellationToken);
+            return Ok(count);
+        }
+        catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
+    }
+
+    [HttpDelete("matters/{matterId:guid}/evidence-scope/{scopeId:guid}")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> DeleteMatterEvidenceScope(Guid matterId, Guid scopeId, CancellationToken cancellationToken)
+        => await service.DeleteMatterEvidenceScopeAsync(TenantId, ActorUserId, matterId, scopeId, cancellationToken) ? NoContent() : NotFound();
+
+    // ── Per-matter Atomic Propositions (migration 0442) ─────────────────────────────────────────────
+    // LLM-generated L3+ propositions per Evidence Type/Concept with worker + call provenance; attorney overrides.
+    [HttpGet("matters/{matterId:guid}/atomic-propositions")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> MatterAtomicPropositions(Guid matterId, CancellationToken cancellationToken)
+        => Ok(await service.GetMatterAtomicPropositionsAsync(TenantId, matterId, cancellationToken));
+
+    [HttpGet("matters/{matterId:guid}/atomic-propositions/options")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> MatterAtomicPropositionOptions(Guid matterId, CancellationToken cancellationToken)
+        => Ok(await service.GetMatterAtomicPropositionOptionsAsync(TenantId, matterId, cancellationToken));
+
+    [HttpPut("matters/{matterId:guid}/atomic-propositions")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> UpsertMatterAtomicProposition(Guid matterId, [FromBody] MatterAtomicPropositionUpsertRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var id = await service.UpsertMatterAtomicPropositionAsync(TenantId, ActorUserId, matterId, request, cancellationToken);
+            return Ok(id);
+        }
+        catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
+    }
+
+    [HttpPost("matters/{matterId:guid}/atomic-propositions/status")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> SetMatterAtomicPropositionStatus(Guid matterId, [FromBody] MatterAtomicPropositionBulkStatusRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var count = await service.SetMatterAtomicPropositionStatusAsync(TenantId, ActorUserId, matterId, request, cancellationToken);
+            return Ok(count);
+        }
+        catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
+    }
+
+    [HttpDelete("matters/{matterId:guid}/atomic-propositions/{propositionId:guid}")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> DeleteMatterAtomicProposition(Guid matterId, Guid propositionId, CancellationToken cancellationToken)
+        => await service.DeleteMatterAtomicPropositionAsync(TenantId, ActorUserId, matterId, propositionId, cancellationToken) ? NoContent() : NotFound();
+
     // ── Generate-New-Matter draft / provenance (scaffold; extraction wired later) ──────────────────
     // Creates a pending PI matter draft (proposed field values + provenance) for attorney review.
     [HttpPost("personalinjury/drafts")]

@@ -378,6 +378,48 @@ internal sealed class RecordingDecisionRepository : ILegalDecisionRepository
     public Task<PersonalInjuryProfileDto?> GetPersonalInjuryProfileAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default)
         => Task.FromResult<PersonalInjuryProfileDto?>(null);
 
+    public Task<IReadOnlyCollection<MatterEvidenceScopeDto>> GetMatterEvidenceScopesAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyCollection<MatterEvidenceScopeDto>>([]);
+
+    public Task<IReadOnlyCollection<MatterEvidenceScopeStatusDto>> GetMatterEvidenceScopeStatusesAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyCollection<MatterEvidenceScopeStatusDto>>([]);
+
+    public Task<IReadOnlyCollection<MatterEvidenceScopeDeciderDto>> GetMatterEvidenceScopeDecidersAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyCollection<MatterEvidenceScopeDeciderDto>>([]);
+
+    public Task<Guid> UpsertUserMatterEvidenceScopeAsync(Guid tenantId, Guid userId, Guid decisionMatterId, MatterEvidenceScopeEvaluation row, string? userNote, CancellationToken cancellationToken = default)
+        => Task.FromResult(Guid.NewGuid());
+
+    public Task<int> SetMatterEvidenceScopeStatusAsync(Guid tenantId, Guid userId, Guid decisionMatterId, IReadOnlyCollection<Guid> ids, string scopeStatusCode, string? userNote, CancellationToken cancellationToken = default)
+        => Task.FromResult(0);
+
+    public Task<bool> SoftDeleteMatterEvidenceScopeAsync(Guid tenantId, Guid userId, Guid decisionMatterId, Guid matterEvidenceScopeId, CancellationToken cancellationToken = default)
+        => Task.FromResult(false);
+
+    public Task UpsertSystemMatterEvidenceScopesAsync(Guid tenantId, Guid userId, Guid decisionMatterId, IReadOnlyCollection<MatterEvidenceScopeEvaluation> rows, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
+
+    public Task<IReadOnlyCollection<MatterAtomicPropositionDto>> GetMatterAtomicPropositionsAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyCollection<MatterAtomicPropositionDto>>([]);
+
+    public Task<IReadOnlyCollection<MatterAtomicPropositionStatusDto>> GetMatterAtomicPropositionStatusesAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyCollection<MatterAtomicPropositionStatusDto>>([]);
+
+    public Task<IReadOnlyCollection<MatterAtomicPropositionDeciderDto>> GetMatterAtomicPropositionDecidersAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyCollection<MatterAtomicPropositionDeciderDto>>([]);
+
+    public Task<Guid> UpsertUserMatterAtomicPropositionAsync(Guid tenantId, Guid userId, Guid decisionMatterId, MatterAtomicPropositionEvaluation row, string scopeStatusCode, string? userNote, CancellationToken cancellationToken = default)
+        => Task.FromResult(Guid.NewGuid());
+
+    public Task<int> SetMatterAtomicPropositionStatusAsync(Guid tenantId, Guid userId, Guid decisionMatterId, IReadOnlyCollection<Guid> ids, string scopeStatusCode, string? userNote, CancellationToken cancellationToken = default)
+        => Task.FromResult(0);
+
+    public Task<bool> SoftDeleteMatterAtomicPropositionAsync(Guid tenantId, Guid userId, Guid decisionMatterId, Guid matterAtomicPropositionId, CancellationToken cancellationToken = default)
+        => Task.FromResult(false);
+
+    public Task UpsertSystemMatterAtomicPropositionsAsync(Guid tenantId, Guid userId, Guid decisionMatterId, IReadOnlyCollection<MatterAtomicPropositionEvaluation> rows, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
+
     public Task SavePersonalInjuryProfileAsync(Guid tenantId, Guid userId, Guid decisionMatterId, PersonalInjuryProfileSaveRequest request, CancellationToken cancellationToken = default)
         => Task.CompletedTask;
 

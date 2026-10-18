@@ -77,6 +77,20 @@ public interface ILegalDecisionService
     Task<IReadOnlyCollection<PersonalInjuryDecisionTypeDto>> GetPersonalInjuryDecisionTypesAsync(Guid tenantId, CancellationToken cancellationToken = default);
     Task<IReadOnlyCollection<PersonalInjuryStageDecisionDto>> GetPersonalInjuryStageDecisionMapAsync(Guid tenantId, CancellationToken cancellationToken = default);
 
+    // ── Per-matter Evidence Type scope (migration 0441) ──
+    Task<IReadOnlyCollection<MatterEvidenceScopeDto>> GetMatterEvidenceScopesAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default);
+    Task<MatterEvidenceScopeOptionsDto> GetMatterEvidenceScopeOptionsAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default);
+    Task<Guid> UpsertMatterEvidenceScopeAsync(Guid tenantId, Guid userId, Guid decisionMatterId, MatterEvidenceScopeUpsertRequest request, CancellationToken cancellationToken = default);
+    Task<int> SetMatterEvidenceScopeStatusAsync(Guid tenantId, Guid userId, Guid decisionMatterId, MatterEvidenceScopeBulkStatusRequest request, CancellationToken cancellationToken = default);
+    Task<bool> DeleteMatterEvidenceScopeAsync(Guid tenantId, Guid userId, Guid decisionMatterId, Guid matterEvidenceScopeId, CancellationToken cancellationToken = default);
+
+    // ── Per-matter Atomic Propositions (0442) ──
+    Task<IReadOnlyCollection<MatterAtomicPropositionDto>> GetMatterAtomicPropositionsAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default);
+    Task<MatterAtomicPropositionOptionsDto> GetMatterAtomicPropositionOptionsAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default);
+    Task<Guid> UpsertMatterAtomicPropositionAsync(Guid tenantId, Guid userId, Guid decisionMatterId, MatterAtomicPropositionUpsertRequest request, CancellationToken cancellationToken = default);
+    Task<int> SetMatterAtomicPropositionStatusAsync(Guid tenantId, Guid userId, Guid decisionMatterId, MatterAtomicPropositionBulkStatusRequest request, CancellationToken cancellationToken = default);
+    Task<bool> DeleteMatterAtomicPropositionAsync(Guid tenantId, Guid userId, Guid decisionMatterId, Guid matterAtomicPropositionId, CancellationToken cancellationToken = default);
+
     // Generate-New-Matter draft / provenance (extraction wired later).
     Task<Guid> CreatePersonalInjuryDraftAsync(Guid tenantId, Guid userId, PersonalInjuryMatterDraftCreateRequest request, CancellationToken cancellationToken = default);
     Task<PersonalInjuryMatterDraftDto?> GetPersonalInjuryDraftAsync(Guid tenantId, Guid decisionPIMatterDraftId, CancellationToken cancellationToken = default);

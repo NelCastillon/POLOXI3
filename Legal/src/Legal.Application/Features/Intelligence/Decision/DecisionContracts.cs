@@ -1408,3 +1408,229 @@ public sealed record CandidateReadinessDto(
     IReadOnlyList<string> Blockers);
 
 public sealed record CandidateReadinessMetricDto(string Label, string Value, int? Pct, string Tone);
+
+// ── Per-matter Evidence Type scope (migration 0441: POLOXI.Legal_MatterEvidenceScope) ───────────
+// One row per Decision Matter x Domain Pack L2 target (EVIDENCE_TYPE | CONCEPT). Holds the deterministic
+// + LLM relevance decision for THIS matter and attorney overrides. Wide2 L3 generation reads it: only
+// statuses whose ParticipatesInL3=1 are sent to atomic-proposition generation. USER decisions are
+// authoritative and never overwritten by the system. Targets are always catalog-validated.
+public static class MatterEvidenceScopeStatusCodes
+{
+    public const string InScope = "IN_SCOPE";
+    public const string OutOfScope = "OUT_OF_SCOPE";
+    public const string PendingReview = "PENDING_REVIEW";
+}
+
+public static class MatterEvidenceScopeDeciderCodes
+{
+    public const string System = "SYSTEM";
+    public const string Llm = "LLM";
+    public const string Rule = "RULE";
+    public const string User = "USER";
+}
+
+public sealed record MatterEvidenceScopeDto(
+    Guid MatterEvidenceScopeId,
+    Guid DecisionMatterId,
+    string PackCode,
+    string TargetKindCode,
+    string TargetCode,
+    string DimensionCode,
+    string DisplayName,
+    string ScopeStatusCode,
+    string DecidedByCode,
+    decimal? DeterministicScore,
+    decimal? LlmScore,
+    decimal? BlendedScore,
+    string? TierCode,
+    string? RelevanceReasons,
+    string? LlmReason,
+    bool IsRequiredCoverage,
+    bool IsPrioritized,
+    bool DocumentPresent,
+    int MappedPassageCount,
+    string? UserNote,
+    Guid? LastEvaluatedExecutionId,
+    DateTime? LastEvaluatedDateUtc,
+    int SortOrder,
+    DateTime CreatedDateUtc,
+    DateTime? ModifiedDateUtc);
+
+public sealed record MatterEvidenceScopeStatusDto(string StatusCode, string Name, string? Description, bool ParticipatesInL3, int SortOrder);
+
+public sealed record MatterEvidenceScopeDeciderDto(string DeciderCode, string Name, string? Description, bool IsAuthoritative, int SortOrder);
+
+// Catalog target available for a matter's pack (used by the UI "add" dropdown; only these may be inserted).
+public sealed record MatterEvidenceScopeTargetOptionDto(string TargetKindCode, string TargetCode, string DimensionCode, string DisplayName, string? Description, bool IsRequiredCoverage);
+
+public sealed record MatterEvidenceScopeOptionsDto
+{
+    public string? PackCode { get; init; }
+    public IReadOnlyCollection<MatterEvidenceScopeStatusDto> Statuses { get; init; } = [];
+    public IReadOnlyCollection<MatterEvidenceScopeDeciderDto> Deciders { get; init; } = [];
+    public IReadOnlyCollection<MatterEvidenceScopeTargetOptionDto> Targets { get; init; } = [];
+}
+
+// Attorney create/edit (UI). Always recorded as DecidedByCode=USER by the service.
+public sealed record MatterEvidenceScopeUpsertRequest(
+    [property: Required, StringLength(30)] string TargetKindCode,
+    [property: Required, StringLength(240)] string TargetCode,
+    [property: Required, StringLength(40)] string ScopeStatusCode,
+    [property: StringLength(1000)] string? UserNote);
+
+public sealed record MatterEvidenceScopeBulkStatusRequest(
+    [property: Required, MinLength(1)] IReadOnlyCollection<Guid> MatterEvidenceScopeIds,
+    [property: Required, StringLength(40)] string ScopeStatusCode,
+    [property: StringLength(1000)] string? UserNote);
+
+// Pipeline (Wide2) write: system/LLM evaluation for one target. Never overwrites a USER row.
+public sealed record MatterEvidenceScopeEvaluation(
+    string PackCode,
+    string TargetKindCode,
+    string TargetCode,
+    string DimensionCode,
+    string DisplayName,
+    string ScopeStatusCode,
+    string DecidedByCode,
+    decimal? DeterministicScore,
+    decimal? LlmScore,
+    decimal? BlendedScore,
+    string? TierCode,
+    string? RelevanceReasons,
+    string? LlmReason,
+    bool IsRequiredCoverage,
+    bool IsPrioritized,
+    bool DocumentPresent,
+    int MappedPassageCount,
+    Guid? LastEvaluatedExecutionId,
+    int SortOrder);
+
+// ── Per-matter Atomic Propositions (migration 0442: POLOXI.Legal_MatterAtomicProposition) ───────────
+// One row per Decision Matter x parent L2 target x LLM-generated atomic proposition (L3+). Captures every
+// model-returned value, the worker/batch that produced it and call provenance. USER decisions are
+// authoritative; the pipeline refreshes model values but never overwrites a USER status/note.
+public static class MatterAtomicPropositionStatusCodes
+{
+    public const string InScope = "IN_SCOPE";
+    public const string OutOfScope = "OUT_OF_SCOPE";
+    public const string PendingReview = "PENDING_REVIEW";
+}
+
+public static class MatterAtomicPropositionDeciderCodes
+{
+    public const string Llm = "LLM";
+    public const string User = "USER";
+}
+
+public sealed record MatterAtomicPropositionDto(
+    Guid MatterAtomicPropositionId,
+    Guid DecisionMatterId,
+    string PackCode,
+    string ParentTargetKindCode,
+    string ParentTargetCode,
+    string ParentDisplayName,
+    string DimensionCode,
+    string? ParentPropositionCode,
+    string PropositionCode,
+    int LevelNumber,
+    string DisplayName,
+    string Statement,
+    string? SearchText,
+    string? CapabilityCode,
+    decimal Confidence,
+    string? SemanticTypeCode,
+    string? BranchRoleCode,
+    bool ContinueNarrowing,
+    string? StopReason,
+    string? DependsOnCodes,
+    string? EquivalentToCodes,
+    int AnchorCount,
+    string? AnchorsJson,
+    string WorkerName,
+    int BatchNumber,
+    int AttemptNumber,
+    string? BatchTierCode,
+    string? ModelCode,
+    string? ProviderCode,
+    int? InputTokenCount,
+    int? OutputTokenCount,
+    int? DurationMs,
+    string? ProviderRequestId,
+    string ScopeStatusCode,
+    string DecidedByCode,
+    string? UserNote,
+    int GenerationCount,
+    Guid? LastWideBranchId,
+    Guid? LastEvaluatedExecutionId,
+    DateTime? LastEvaluatedDateUtc,
+    int SortOrder,
+    DateTime CreatedDateUtc,
+    DateTime? ModifiedDateUtc);
+
+public sealed record MatterAtomicPropositionStatusDto(string StatusCode, string Name, string? Description, bool ParticipatesInNarrowing, int SortOrder);
+
+public sealed record MatterAtomicPropositionDeciderDto(string DeciderCode, string Name, string? Description, bool IsAuthoritative, int SortOrder);
+
+public sealed record MatterAtomicPropositionOptionsDto
+{
+    public string? PackCode { get; init; }
+    public IReadOnlyCollection<MatterAtomicPropositionStatusDto> Statuses { get; init; } = [];
+    public IReadOnlyCollection<MatterAtomicPropositionDeciderDto> Deciders { get; init; } = [];
+    // Parent L2 targets available for this matter's pack (catalog-bound; only these may be used as parents).
+    public IReadOnlyCollection<MatterEvidenceScopeTargetOptionDto> Parents { get; init; } = [];
+}
+
+// Attorney create/edit (UI). Always recorded as DecidedByCode=USER by the service.
+public sealed record MatterAtomicPropositionUpsertRequest(
+    [property: Required, StringLength(30)] string ParentTargetKindCode,
+    [property: Required, StringLength(240)] string ParentTargetCode,
+    [property: Required, StringLength(240)] string PropositionCode,
+    [property: Required, StringLength(300)] string DisplayName,
+    [property: Required, StringLength(2000)] string Statement,
+    [property: Range(0, 1)] decimal Confidence,
+    [property: StringLength(30)] string? SemanticTypeCode,
+    [property: StringLength(30)] string? BranchRoleCode,
+    [property: Required, StringLength(40)] string ScopeStatusCode,
+    [property: StringLength(1000)] string? UserNote);
+
+public sealed record MatterAtomicPropositionBulkStatusRequest(
+    [property: Required, MinLength(1)] IReadOnlyCollection<Guid> MatterAtomicPropositionIds,
+    [property: Required, StringLength(40)] string ScopeStatusCode,
+    [property: StringLength(1000)] string? UserNote);
+
+// Pipeline (Wide2) write: one generated proposition. Never overwrites a USER row's status/note.
+public sealed record MatterAtomicPropositionEvaluation(
+    string PackCode,
+    string ParentTargetKindCode,
+    string ParentTargetCode,
+    string ParentDisplayName,
+    string DimensionCode,
+    string? ParentPropositionCode,
+    string PropositionCode,
+    int LevelNumber,
+    string DisplayName,
+    string Statement,
+    string? SearchText,
+    string? CapabilityCode,
+    decimal Confidence,
+    string? SemanticTypeCode,
+    string? BranchRoleCode,
+    bool ContinueNarrowing,
+    string? StopReason,
+    string? DependsOnCodes,
+    string? EquivalentToCodes,
+    int AnchorCount,
+    string? AnchorsJson,
+    string WorkerName,
+    int BatchNumber,
+    int AttemptNumber,
+    string? BatchTierCode,
+    string? ModelCode,
+    string? ProviderCode,
+    int? InputTokenCount,
+    int? OutputTokenCount,
+    int? DurationMs,
+    string? ProviderRequestId,
+    Guid WideBranchId,
+    Guid WideExecutionId,
+    int SortOrder);

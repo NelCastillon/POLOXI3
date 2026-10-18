@@ -1243,6 +1243,24 @@ public sealed record WideConfiguration(decimal TargetConfidence,decimal MinimumB
     public int L3TierOneCount{get;init;}=0;
     public int L3TierOneBatchSize{get;init;}=3;
     public int L3TierOneMaxPerDimension{get;init;}=2;
+    // Matter-funneled L3 (migration 0436). Tier A/B is CONTEXT DENSITY and batch size only - every in-scope
+    // L2 still receives a model pass (accuracy outranks speed; there is no zero-call tier).
+    public decimal L3TierAThreshold{get;init;}=0.35m;
+    public int L3TierABatchSize{get;init;}=4;
+    public int L3TierAPassagesPerParent{get;init;}=8;
+    public int L3PassageMapConcurrency{get;init;}=4;
+    public int L3PassageMapTopN{get;init;}=12;
+    public int L3FactorSliceMaxItems{get;init;}=6;
+    public bool EnableL2RelevanceReview{get;init;}=true;
+    // Migration 0440: the review runs in dimension-grouped batches so the whole catalog is reviewed
+    // (a single call truncated the catalog past the prompt budget).
+    public int L2ReviewBatchSize{get;init;}=40;
+    // Migration 0441: per-matter Evidence Type scope. When enabled, L3 generation reads
+    // POLOXI.Legal_MatterEvidenceScope and only IN_SCOPE/PENDING_REVIEW targets receive atomic propositions.
+    // Blended relevance below MatterScopeOutThreshold is auto-marked OUT_OF_SCOPE unless required-coverage,
+    // document-present or PRIORITIZE-fired. USER decisions are never overwritten.
+    public bool EnableMatterEvidenceScopeGate{get;init;}=true;
+    public decimal MatterScopeOutThreshold{get;init;}=0.05m;
 }
 
 // V3.3 answer-kind definition row from POLOXI.AnswerKind. DepthCeiling 0 and MaxInformationRounds
@@ -1441,9 +1459,13 @@ public sealed record WideProposedBranch(string BranchCode,string DisplayName,str
     // Option 5: stable passage anchors the model cites for this proposition (ids come from the prompt's
     // passage index). Unknown ids are dropped in code; fabricated anchors never persist.
     public IReadOnlyCollection<WideProposedAnchor> Anchors{get;init;}=[];
+    // Matter-funneled L3 (0436): explicit graph edges. Codes must be present in the same response or the
+    // assigned parent list; unknown codes are dropped in code and never persisted.
+    public IReadOnlyCollection<string> DependsOn{get;init;}=[];
+    public IReadOnlyCollection<string> EquivalentTo{get;init;}=[];
 }
 
-// Option 5 passage anchor emitted by the model. PassageId must match a passage shown in the prompt.
+// Option 5 passage anchor emitted by the model.
 public sealed record WideProposedAnchor(string PassageId,string? Quote,string? Role);
 
 // Option 5: per-assigned-parent coverage statement the model must return for EVERY parent in the batch.
@@ -1477,7 +1499,14 @@ public static class WideProcessingResults
 
 // One row per configured L2 target (Concept or EvidenceType) per run. WideBranchId is null only for
 // rule-excluded targets that were never materialized.
-public sealed record WideBranchScopeRecord(Guid WideBranchScopeId,Guid WideExecutionId,Guid? WideBranchId,Guid TenantId,string TargetKindCode,string TargetCode,string DimensionCode,string DisplayName,string ScopeStatusCode,string DecidedByCode,string? Reason,bool IsPrioritized,bool IsRequiredCoverage,bool DocumentPresent,int MappedPassageCount,decimal? PriorityScore,string? TierCode,int SortOrder);
+public sealed record WideBranchScopeRecord(Guid WideBranchScopeId,Guid WideExecutionId,Guid? WideBranchId,Guid TenantId,string TargetKindCode,string TargetCode,string DimensionCode,string DisplayName,string ScopeStatusCode,string DecidedByCode,string? Reason,bool IsPrioritized,bool IsRequiredCoverage,bool DocumentPresent,int MappedPassageCount,decimal? PriorityScore,string? TierCode,int SortOrder)
+{
+    // 0436: deterministic, auditable matter-relevance reasons behind PriorityScore/TierCode.
+    public string? RelevanceReasons{get;init;}
+}
+
+// 0436: persisted per-execution top-N passage mapping for one L2 parent (computed once by bounded workers).
+public sealed record WideBranchPassageMapRecord(Guid WideBranchPassageMapId,Guid WideExecutionId,Guid WideBranchId,Guid LegalDocumentPassageId,Guid TenantId,string MatchMethodCode,decimal Score,int RankOrder);
 
 // One row per in-scope L2 per generation attempt.
 public sealed record WideBranchProcessingRecord(Guid WideBranchProcessingId,Guid WideExecutionId,Guid WideBranchId,Guid TenantId,int LevelNumber,int BatchNumber,int AttemptNumber,string ProcessingResultCode,int PropositionCount,string? Reason);

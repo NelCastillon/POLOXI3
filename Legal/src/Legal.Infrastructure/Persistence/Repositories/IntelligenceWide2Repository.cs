@@ -618,7 +618,17 @@ COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM
 COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.L3MaxConcurrency' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),3) L3MaxConcurrency,
 COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.L3TierOneCount' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),0) L3TierOneCount,
 COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.L3TierOneBatchSize' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),3) L3TierOneBatchSize,
-COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.L3TierOneMaxPerDimension' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),2) L3TierOneMaxPerDimension;
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.L3TierOneMaxPerDimension' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),2) L3TierOneMaxPerDimension,
+COALESCE(TRY_CONVERT(decimal(9,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.L3TierAThreshold' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),0.35) L3TierAThreshold,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.L3TierABatchSize' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),4) L3TierABatchSize,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.L3TierAPassagesPerParent' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),8) L3TierAPassagesPerParent,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.L3PassageMapConcurrency' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),4) L3PassageMapConcurrency,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.L3PassageMapTopN' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),12) L3PassageMapTopN,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.L3FactorSliceMaxItems' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),6) L3FactorSliceMaxItems,
+COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.EnableL2RelevanceReview' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'true') EnableL2RelevanceReview,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.L2ReviewBatchSize' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),40) L2ReviewBatchSize,
+COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.EnableMatterEvidenceScopeGate' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'true') EnableMatterEvidenceScopeGate,
+COALESCE(TRY_CONVERT(decimal(9,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.MatterScopeOutThreshold' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),0.05) MatterScopeOutThreshold;
 -- V3.3 POLOXI.Legal_AnswerKind lookup (tenant rows override global rows with the same code).
 SELECT AnswerKindCode,DepthCeiling,MaxInformationRounds,RunsCandidateCompetition
 FROM(SELECT AnswerKindCode,DepthCeiling,MaxInformationRounds,RunsCandidateCompetition,
@@ -726,7 +736,17 @@ WHERE Rn=1 ORDER BY AnswerKindCode;
             L3MaxConcurrency=Math.Clamp(row.L3MaxConcurrency,1,8),
             L3TierOneCount=Math.Clamp(row.L3TierOneCount,0,100),
             L3TierOneBatchSize=Math.Clamp(row.L3TierOneBatchSize,1,40),
-            L3TierOneMaxPerDimension=Math.Clamp(row.L3TierOneMaxPerDimension,1,100)
+            L3TierOneMaxPerDimension=Math.Clamp(row.L3TierOneMaxPerDimension,1,100),
+            L3TierAThreshold=Math.Clamp(row.L3TierAThreshold,0,1),
+            L3TierABatchSize=Math.Clamp(row.L3TierABatchSize,1,40),
+            L3TierAPassagesPerParent=Math.Clamp(row.L3TierAPassagesPerParent,0,20),
+            L3PassageMapConcurrency=Math.Clamp(row.L3PassageMapConcurrency,1,16),
+            L3PassageMapTopN=Math.Clamp(row.L3PassageMapTopN,1,50),
+            L3FactorSliceMaxItems=Math.Clamp(row.L3FactorSliceMaxItems,0,20),
+            EnableL2RelevanceReview=string.Equals(row.EnableL2RelevanceReview,"true",StringComparison.OrdinalIgnoreCase),
+            L2ReviewBatchSize=Math.Clamp(row.L2ReviewBatchSize,5,120),
+            EnableMatterEvidenceScopeGate=string.Equals(row.EnableMatterEvidenceScopeGate,"true",StringComparison.OrdinalIgnoreCase),
+            MatterScopeOutThreshold=Math.Clamp(row.MatterScopeOutThreshold,0m,1m)
         };
     }
 
@@ -894,7 +914,9 @@ WHERE WideExecutionId=@WideExecutionId AND TenantId=@TenantId AND IsDeleted=0;
         string EnableAdaptiveNarrowing,decimal NarrowingBranchCoverageFloor,decimal NarrowingInformationValueFloor,decimal EnterpriseSupportBase,decimal EnterpriseSupportIncrement,decimal EnterpriseSupportCeiling,decimal ExternalSupportBase,decimal ExternalSupportIncrement,decimal LegalRetrievalRelevanceFloor,decimal LegalSupportFloor,decimal AuthoritativeSourceBonus,decimal EvidenceConsensusThreshold,decimal ExternalOnlySupportDiscount,decimal NarrowingReopenSupportDelta,decimal NarrowingCandidateCoverageFloor,decimal NarrowingCandidateScoreGap,int NarrowingDiscoveryMinimumSupport,int MaximumCandidateAdmissionsPerRound,
         string EnableAnswerKindRouting,string EnableDeliverableSynthesis,string DeliverableSynthesisIndicators,int ContentEnumerationDepthCeiling,int ContentEnumerationMaxInformationRounds,int SingleAnswerDepthCeiling,int SingleAnswerMaxInformationRounds,decimal ClarificationReweightBoost,string EnableChallengeRound,string EnableAbv,int ExternalGroundingBudgetSeconds,string EnableTieredModelRouting,string FastModelCode,decimal ChallengeMarginThreshold,string EnableGuardrailPenalty,decimal GuardrailVetoThreshold,decimal GuardrailAcceptableThreshold,decimal GuardrailPenaltyExponent,
         string EnableMarginalValueStopping,int MarginalValueMinimumDepth,decimal MarginalCoverageDeltaFloor,decimal MarginalConfidenceDeltaFloor,string EnableResolutionDeepening,int ResolutionDeepeningMinConditions,int ResolutionDeepeningMaxConditions,
-        int L3BatchSize,int L3BatchInputBudgetChars,int L3PassagesPerParent,int L3MinimumPropositionsPerParent,int L3MaxConcurrency,int L3TierOneCount,int L3TierOneBatchSize,int L3TierOneMaxPerDimension);
+        int L3BatchSize,int L3BatchInputBudgetChars,int L3PassagesPerParent,int L3MinimumPropositionsPerParent,int L3MaxConcurrency,int L3TierOneCount,int L3TierOneBatchSize,int L3TierOneMaxPerDimension,
+        decimal L3TierAThreshold,int L3TierABatchSize,int L3TierAPassagesPerParent,int L3PassageMapConcurrency,int L3PassageMapTopN,int L3FactorSliceMaxItems,
+        string EnableL2RelevanceReview,int L2ReviewBatchSize,string EnableMatterEvidenceScopeGate,decimal MatterScopeOutThreshold);
 
     private sealed record WideAnswerKindRow(string AnswerKindCode,int DepthCeiling,int? MaxInformationRounds,bool RunsCandidateCompetition);
 
@@ -903,11 +925,40 @@ WHERE WideExecutionId=@WideExecutionId AND TenantId=@TenantId AND IsDeleted=0;
     {
         if(scopes.Count==0)return;
         const string sql="""
-INSERT POLOXI.Legal_WideBranchScope(WideBranchScopeId,WideExecutionId,WideBranchId,TenantId,TargetKindCode,TargetCode,DimensionCode,DisplayName,ScopeStatusCode,DecidedByCode,Reason,IsPrioritized,IsRequiredCoverage,DocumentPresent,MappedPassageCount,PriorityScore,TierCode,SortOrder,CreatedDateUtc,CreatedByUserId,IsDeleted)
-VALUES(@WideBranchScopeId,@WideExecutionId,@WideBranchId,@TenantId,@TargetKindCode,@TargetCode,@DimensionCode,@DisplayName,@ScopeStatusCode,@DecidedByCode,@Reason,@IsPrioritized,@IsRequiredCoverage,@DocumentPresent,@MappedPassageCount,@PriorityScore,@TierCode,@SortOrder,SYSUTCDATETIME(),@UserId,0);
+INSERT POLOXI.Legal_WideBranchScope(WideBranchScopeId,WideExecutionId,WideBranchId,TenantId,TargetKindCode,TargetCode,DimensionCode,DisplayName,ScopeStatusCode,DecidedByCode,Reason,IsPrioritized,IsRequiredCoverage,DocumentPresent,MappedPassageCount,PriorityScore,TierCode,RelevanceReasons,SortOrder,CreatedDateUtc,CreatedByUserId,IsDeleted)
+VALUES(@WideBranchScopeId,@WideExecutionId,@WideBranchId,@TenantId,@TargetKindCode,@TargetCode,@DimensionCode,@DisplayName,@ScopeStatusCode,@DecidedByCode,@Reason,@IsPrioritized,@IsRequiredCoverage,@DocumentPresent,@MappedPassageCount,@PriorityScore,@TierCode,@RelevanceReasons,@SortOrder,SYSUTCDATETIME(),@UserId,0);
 """;
         using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        await connection.ExecuteAsync(new CommandDefinition(sql,scopes.Select(s=>new{s.WideBranchScopeId,s.WideExecutionId,s.WideBranchId,s.TenantId,s.TargetKindCode,s.TargetCode,s.DimensionCode,s.DisplayName,s.ScopeStatusCode,s.DecidedByCode,s.Reason,s.IsPrioritized,s.IsRequiredCoverage,s.DocumentPresent,s.MappedPassageCount,s.PriorityScore,s.TierCode,s.SortOrder,UserId=userId}),cancellationToken:cancellationToken));
+        await connection.ExecuteAsync(new CommandDefinition(sql,scopes.Select(s=>new{s.WideBranchScopeId,s.WideExecutionId,s.WideBranchId,s.TenantId,s.TargetKindCode,s.TargetCode,s.DimensionCode,s.DisplayName,s.ScopeStatusCode,s.DecidedByCode,s.Reason,s.IsPrioritized,s.IsRequiredCoverage,s.DocumentPresent,s.MappedPassageCount,s.PriorityScore,s.TierCode,s.RelevanceReasons,s.SortOrder,UserId=userId}),cancellationToken:cancellationToken));
+    }
+
+    // 0436: the scope ledger is first saved right after L2 materialization (branch FKs), then re-saved once
+    // the matter funnel has populated PriorityScore/TierCode/RelevanceReasons. Soft-delete + reinsert keeps
+    // the ledger a single authoritative snapshot per execution.
+    public async Task ReplaceWideBranchScopesAsync(Guid executionId,IReadOnlyCollection<WideBranchScopeRecord> scopes,Guid userId,CancellationToken cancellationToken=default)
+    {
+        if(scopes.Count==0)return;
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        using var transaction=connection.BeginTransaction();
+        var ids=scopes.Where(s=>s.WideBranchId is not null).Select(s=>s.WideBranchId!.Value).ToArray();
+        if(ids.Length>0)await connection.ExecuteAsync(new CommandDefinition("UPDATE POLOXI.Legal_WideBranchScope SET IsDeleted=1,ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@UserId WHERE WideExecutionId=@ExecutionId AND IsDeleted=0 AND WideBranchId IN @Ids;",new{ExecutionId=executionId,UserId=userId,Ids=ids},transaction,cancellationToken:cancellationToken));
+        const string sql="""
+INSERT POLOXI.Legal_WideBranchScope(WideBranchScopeId,WideExecutionId,WideBranchId,TenantId,TargetKindCode,TargetCode,DimensionCode,DisplayName,ScopeStatusCode,DecidedByCode,Reason,IsPrioritized,IsRequiredCoverage,DocumentPresent,MappedPassageCount,PriorityScore,TierCode,RelevanceReasons,SortOrder,CreatedDateUtc,CreatedByUserId,IsDeleted)
+VALUES(NEWID(),@WideExecutionId,@WideBranchId,@TenantId,@TargetKindCode,@TargetCode,@DimensionCode,@DisplayName,@ScopeStatusCode,@DecidedByCode,@Reason,@IsPrioritized,@IsRequiredCoverage,@DocumentPresent,@MappedPassageCount,@PriorityScore,@TierCode,@RelevanceReasons,@SortOrder,SYSUTCDATETIME(),@UserId,0);
+""";
+        await connection.ExecuteAsync(new CommandDefinition(sql,scopes.Select(s=>new{s.WideExecutionId,s.WideBranchId,s.TenantId,s.TargetKindCode,s.TargetCode,s.DimensionCode,s.DisplayName,s.ScopeStatusCode,s.DecidedByCode,s.Reason,s.IsPrioritized,s.IsRequiredCoverage,s.DocumentPresent,s.MappedPassageCount,s.PriorityScore,s.TierCode,s.RelevanceReasons,s.SortOrder,UserId=userId}),transaction,cancellationToken:cancellationToken));
+        transaction.Commit();
+    }
+
+    public async Task SaveWideBranchPassageMapsAsync(IReadOnlyCollection<WideBranchPassageMapRecord> rows,Guid userId,CancellationToken cancellationToken=default)
+    {
+        if(rows.Count==0)return;
+        const string sql="""
+INSERT POLOXI.Legal_WideBranchPassageMap(WideBranchPassageMapId,WideExecutionId,WideBranchId,LegalDocumentPassageId,TenantId,MatchMethodCode,Score,RankOrder,CreatedDateUtc,CreatedByUserId,IsDeleted)
+VALUES(@WideBranchPassageMapId,@WideExecutionId,@WideBranchId,@LegalDocumentPassageId,@TenantId,@MatchMethodCode,@Score,@RankOrder,SYSUTCDATETIME(),@UserId,0);
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(sql,rows.Select(r=>new{r.WideBranchPassageMapId,r.WideExecutionId,r.WideBranchId,r.LegalDocumentPassageId,r.TenantId,r.MatchMethodCode,r.Score,r.RankOrder,UserId=userId}),cancellationToken:cancellationToken));
     }
 
     public async Task SaveWideBranchProcessingAsync(IReadOnlyCollection<WideBranchProcessingRecord> rows,Guid userId,CancellationToken cancellationToken=default)

@@ -453,6 +453,46 @@ public sealed class ApiClient(HttpClient httpClient)
             using var response=await _httpClient.PutAsJsonAsync($"api/legal_decision/matters/{matterId}/personalinjury",request,token);
             await EnsureSuccessWithDetailAsync(response,token);
         }
+        // POLOXI Legal Decision — per-matter Evidence Type scope (migration 0441).
+        public async Task<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.MatterEvidenceScopeDto>> GetLegalDecisionMatterEvidenceScopesAsync(Guid matterId,CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.MatterEvidenceScopeDto>>($"api/legal_decision/matters/{matterId}/evidence-scope",token)??[];
+        public async Task<Legal.Application.Features.Intelligence.Decision.MatterEvidenceScopeOptionsDto> GetLegalDecisionMatterEvidenceScopeOptionsAsync(Guid matterId,CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<Legal.Application.Features.Intelligence.Decision.MatterEvidenceScopeOptionsDto>($"api/legal_decision/matters/{matterId}/evidence-scope/options",token)??new();
+        public async Task<Guid> UpsertLegalDecisionMatterEvidenceScopeAsync(Guid matterId,Legal.Application.Features.Intelligence.Decision.MatterEvidenceScopeUpsertRequest request,CancellationToken token=default)
+        {
+            using var response=await _httpClient.PutAsJsonAsync($"api/legal_decision/matters/{matterId}/evidence-scope",request,token);
+            await EnsureSuccessWithDetailAsync(response,token);
+            return await response.Content.ReadFromJsonAsync<Guid>(token);
+        }
+        public async Task<int> SetLegalDecisionMatterEvidenceScopeStatusAsync(Guid matterId,Legal.Application.Features.Intelligence.Decision.MatterEvidenceScopeBulkStatusRequest request,CancellationToken token=default)
+        {
+            using var response=await _httpClient.PostAsJsonAsync($"api/legal_decision/matters/{matterId}/evidence-scope/status",request,token);
+            await EnsureSuccessWithDetailAsync(response,token);
+            return await response.Content.ReadFromJsonAsync<int>(token);
+        }
+        public async Task DeleteLegalDecisionMatterEvidenceScopeAsync(Guid matterId,Guid scopeId,CancellationToken token=default)
+        {
+            using var response=await _httpClient.DeleteAsync($"api/legal_decision/matters/{matterId}/evidence-scope/{scopeId}",token);
+            await EnsureSuccessWithDetailAsync(response,token);
+        }
+        // POLOXI Legal Decision — per-matter Atomic Propositions (migration 0442).
+        public async Task<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.MatterAtomicPropositionDto>> GetLegalDecisionMatterAtomicPropositionsAsync(Guid matterId,CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.MatterAtomicPropositionDto>>($"api/legal_decision/matters/{matterId}/atomic-propositions",token)??[];
+        public async Task<Legal.Application.Features.Intelligence.Decision.MatterAtomicPropositionOptionsDto> GetLegalDecisionMatterAtomicPropositionOptionsAsync(Guid matterId,CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<Legal.Application.Features.Intelligence.Decision.MatterAtomicPropositionOptionsDto>($"api/legal_decision/matters/{matterId}/atomic-propositions/options",token)??new();
+        public async Task<Guid> UpsertLegalDecisionMatterAtomicPropositionAsync(Guid matterId,Legal.Application.Features.Intelligence.Decision.MatterAtomicPropositionUpsertRequest request,CancellationToken token=default)
+        {
+            using var response=await _httpClient.PutAsJsonAsync($"api/legal_decision/matters/{matterId}/atomic-propositions",request,token);
+            await EnsureSuccessWithDetailAsync(response,token);
+            return await response.Content.ReadFromJsonAsync<Guid>(token);
+        }
+        public async Task<int> SetLegalDecisionMatterAtomicPropositionStatusAsync(Guid matterId,Legal.Application.Features.Intelligence.Decision.MatterAtomicPropositionBulkStatusRequest request,CancellationToken token=default)
+        {
+            using var response=await _httpClient.PostAsJsonAsync($"api/legal_decision/matters/{matterId}/atomic-propositions/status",request,token);
+            await EnsureSuccessWithDetailAsync(response,token);
+            return await response.Content.ReadFromJsonAsync<int>(token);
+        }
+        public async Task DeleteLegalDecisionMatterAtomicPropositionAsync(Guid matterId,Guid propositionId,CancellationToken token=default)
+        {
+            using var response=await _httpClient.DeleteAsync($"api/legal_decision/matters/{matterId}/atomic-propositions/{propositionId}",token);
+            await EnsureSuccessWithDetailAsync(response,token);
+        }
         // POLOXI Legal Decision — Personal Injury Generate-New-Matter draft / provenance (scaffold).
         public async Task<Guid> CreateLegalDecisionPersonalInjuryDraftAsync(Legal.Application.Features.Intelligence.Decision.PersonalInjuryMatterDraftCreateRequest request,CancellationToken token=default)
         {

@@ -88,6 +88,8 @@ public interface IIntelligenceWide2Repository
     Task SaveNarrowingIterationAsync(WideNarrowingIterationRecord iteration,Guid userId,CancellationToken cancellationToken=default);
     // Option 5 (migration 0433): per-run scope/processing ledgers, shared-proposition links and passage anchors.
     Task SaveWideBranchScopesAsync(IReadOnlyCollection<WideBranchScopeRecord> scopes,Guid userId,CancellationToken cancellationToken=default);
+    Task ReplaceWideBranchScopesAsync(Guid executionId,IReadOnlyCollection<WideBranchScopeRecord> scopes,Guid userId,CancellationToken cancellationToken=default);
+    Task SaveWideBranchPassageMapsAsync(IReadOnlyCollection<WideBranchPassageMapRecord> rows,Guid userId,CancellationToken cancellationToken=default);
     Task SaveWideBranchProcessingAsync(IReadOnlyCollection<WideBranchProcessingRecord> rows,Guid userId,CancellationToken cancellationToken=default);
     Task SaveWidePropositionLinksAsync(IReadOnlyCollection<WidePropositionLinkRecord> links,Guid userId,CancellationToken cancellationToken=default);
     Task SaveWidePropositionAnchorsAsync(IReadOnlyCollection<WidePropositionAnchorRecord> anchors,Guid userId,CancellationToken cancellationToken=default);

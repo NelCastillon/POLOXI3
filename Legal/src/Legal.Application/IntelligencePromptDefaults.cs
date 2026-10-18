@@ -9,6 +9,7 @@ public static class IntelligencePromptCodes
     public const string WideIntent="WIDE_INTENT";
     public const string WideHierarchyStep="WIDE_HIERARCHY_STEP";
     public const string WideL2PriorityReview="WIDE_L2_PRIORITY_REVIEW";
+    public const string WideL2RelevanceReview="WIDE_L2_RELEVANCE_REVIEW";
     public const string WideAnswer="WIDE_ANSWER";
     public const string WideQueryContract="WIDE_QUERY_CONTRACT";
     public const string WideCandidateEnumeration="WIDE_CANDIDATE_ENUMERATION";
@@ -176,6 +177,10 @@ Return JSON ONLY matching the supplied schema: analysisRunId; landscape (present
     // Option 6 (optional): ordinal usefulness ranking of Domain Pack L2 factors for processing ORDER only.
     public const string WideL2PriorityReview="You are the POLOXI Wide L2 priority reviewer. You are given the matter context and a numbered list of configured Domain Pack evaluation factors (Level-2 branches) with their evidence availability. Your ONLY job is to rank which factors are most USEFUL to decompose first for this specific matter - the factors whose atomic propositions are most likely to be decisive, contested, or evidence-rich given the facts. Return VALID JSON ONLY with items: for every supplied branchCode return exactly that branchCode (never invent or rename codes), an integer rank starting at 1 (1 = most useful, unique per item), and a one-sentence reason grounded in the supplied matter context. This is a processing-order signal only: it is NOT a judgement about outcome support, NOT a relevance verdict, and it must never be used to exclude a factor. Every supplied factor will still be processed; you only order them.";
 
+    // 0436 hybrid funnel: optional matter-relevance review over the FIXED Domain Pack L2 catalog. Code validates
+    // every returned code against the catalog; the result only changes tier/order/context density.
+    public const string WideL2RelevanceReview="You are a legal evidence analyst. You receive the SELECTED matter context (saved matter values, facts, personal-injury profile, uploaded-document summaries) and ONE dimension-grouped batch of the configured Domain Pack catalog of Level-2 factors: Evidence Types (EVD_ codes) and Concepts (CPT_ codes). Each line gives the database definition of that factor - 'def' (what the evidence type/concept is), 'matter types' (the matter types it applies to; absent means all), 'keywords' (terms whose presence in a matter indicates this evidence is relevant), 'required coverage' - plus the deterministic relevance score and the matter signals already found in code. Your job is ONLY to assess, for each listed code, how relevant it is to THIS matter (0.0 = plainly inapplicable to these facts, 1.0 = central to proving or rebutting the claim) and give a one-sentence matter-specific reason. Ground the judgment in the definition and keywords against the matter facts; do not rely on the display name alone. RULES: return one item per listed code and no others; never add, rename, merge, or invent an evidence type or concept - the catalog is fixed and authoritative; do not decide applicability as a gate - every code will still be processed downstream, your score only changes processing order and how much matter context each factor receives; prefer reasons that cite a concrete matter value or document, and say explicitly when relevance is inferred from the matter type alone. Output strictly the requested JSON.";
+
     public static readonly IReadOnlyDictionary<string,(string DisplayName,string SystemPrompt)> All=new Dictionary<string,(string DisplayName,string SystemPrompt)>
     {
         [IntelligencePromptCodes.WideLlmOnlyAnswer]=("Wide LLM-only answer",WideLlmOnlyAnswer),
@@ -183,6 +188,7 @@ Return JSON ONLY matching the supplied schema: analysisRunId; landscape (present
         [IntelligencePromptCodes.WideIntent]=("Wide intent proposal",WideIntent),
         [IntelligencePromptCodes.WideHierarchyStep]=("Wide hierarchy step",WideHierarchyStep),
         [IntelligencePromptCodes.WideL2PriorityReview]=("Wide L2 priority review",WideL2PriorityReview),
+        [IntelligencePromptCodes.WideL2RelevanceReview]=("Wide L2 matter-relevance review",WideL2RelevanceReview),
         [IntelligencePromptCodes.WideAnswer]=("Wide final answer",WideAnswer),
         [IntelligencePromptCodes.WideQueryContract]=("Wide query contract",WideQueryContract),
         [IntelligencePromptCodes.WideCandidateEnumeration]=("Wide candidate enumeration",WideCandidateEnumeration),

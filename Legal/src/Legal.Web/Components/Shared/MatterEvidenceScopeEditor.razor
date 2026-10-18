@@ -1,0 +1,367 @@
+@using System.ComponentModel.DataAnnotations
+@using Legal.Application.Features.Intelligence.Decision
+@inject ApiClient Api
+
+@* ── Per-matter Evidence Type scope (migration 0441). ──
+   Shows every Domain Pack L2 target (Evidence Type / Concept) decided for this matter with the deterministic
+   + LLM relevance provenance, and lets the attorney override scope. Only IN_SCOPE / PENDING_REVIEW rows
+   receive L3 atomic-proposition generation. Targets are catalog-bound: the add dropdown only offers pack rows. *@
+
+@if (_loading)
+{
+    <div class="mes-loading"><i class="bi bi-hourglass-split"></i> Loading evidence scope…</div>
+}
+else
+{
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_loadError</div>
+    }
+
+    <div class="pc-kpi-strip">
+        <div class="pc-kpi-card @(_activeFilter == "ALL" ? "pc-kpi-card--active" : null)" title="All evidence types and concepts decided for this matter" @onclick='() => SetFilter("ALL")'>
+            <div class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-collection"></i></div>
+            <div><div class="pc-kpi-value">@_items.Count</div><div class="pc-kpi-label">All targets</div></div>
+        </div>
+        <div class="pc-kpi-card @(_activeFilter == MatterEvidenceScopeStatusCodes.InScope ? "pc-kpi-card--active" : null)" title="Participates in L3 atomic-proposition generation" @onclick="() => SetFilter(MatterEvidenceScopeStatusCodes.InScope)">
+            <div class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-check2-circle"></i></div>
+            <div><div class="pc-kpi-value">@Count(MatterEvidenceScopeStatusCodes.InScope)</div><div class="pc-kpi-label">In scope</div></div>
+        </div>
+        <div class="pc-kpi-card @(_activeFilter == MatterEvidenceScopeStatusCodes.OutOfScope ? "pc-kpi-card--active" : null)" title="Held back from L3 generation for this matter" @onclick="() => SetFilter(MatterEvidenceScopeStatusCodes.OutOfScope)">
+            <div class="pc-kpi-icon pc-kpi-icon--inactive"><i class="bi bi-slash-circle"></i></div>
+            <div><div class="pc-kpi-value">@Count(MatterEvidenceScopeStatusCodes.OutOfScope)</div><div class="pc-kpi-label">Out of scope</div></div>
+        </div>
+        <div class="pc-kpi-card @(_activeFilter == MatterEvidenceScopeStatusCodes.PendingReview ? "pc-kpi-card--active" : null)" title="System could not decide confidently; attorney review requested" @onclick="() => SetFilter(MatterEvidenceScopeStatusCodes.PendingReview)">
+            <div class="pc-kpi-icon"><i class="bi bi-question-circle"></i></div>
+            <div><div class="pc-kpi-value">@Count(MatterEvidenceScopeStatusCodes.PendingReview)</div><div class="pc-kpi-label">Pending review</div></div>
+        </div>
+        <div class="pc-kpi-card @(_activeFilter == "USER" ? "pc-kpi-card--active" : null)" title="Rows decided by an attorney; the system never overwrites these" @onclick='() => SetFilter("USER")'>
+            <div class="pc-kpi-icon"><i class="bi bi-person-check"></i></div>
+            <div><div class="pc-kpi-value">@_items.Count(i => i.DecidedByCode == MatterEvidenceScopeDeciderCodes.User)</div><div class="pc-kpi-label">Attorney overrides</div></div>
+        </div>
+    </div>
+
+    <div class="mes-toolbar">
+        <div class="mes-search">
+            <i class="bi bi-search"></i>
+            <input class="form-control" placeholder="Search code, name, dimension, reason…" value="@_search" @oninput="OnSearchChanged" />
+        </div>
+        <select class="form-select mes-dim-filter" value="@_dimensionFilter" @onchange="OnDimensionChanged">
+            <option value="">All dimensions</option>
+            @foreach (var d in _dimensions) { <option value="@d">@d</option> }
+        </select>
+        <select class="form-select mes-dim-filter" value="@_kindFilter" @onchange="OnKindChanged">
+            <option value="">All kinds</option>
+            <option value="EVIDENCE_TYPE">Evidence types</option>
+            <option value="CONCEPT">Concepts</option>
+        </select>
+        @if (_selected.Count > 0)
+        {
+            <div class="mes-bulk">
+                <span>@_selected.Count selected</span>
+                <select class="form-select" @bind="_bulkStatus">
+                    @foreach (var s in _options.Statuses) { <option value="@s.StatusCode">@s.Name</option> }
+                </select>
+                <button type="button" class="um-btn um-btn-secondary um-btn-sm" @onclick="ApplyBulkStatusAsync" disabled="@_saving"><i class="bi bi-check2-all"></i> Apply</button>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _selected.Clear()">Clear</button>
+            </div>
+        }
+        <button type="button" class="um-btn um-btn-primary um-btn-sm ms-auto" @onclick="OpenAdd"><i class="bi bi-plus-lg"></i> Add target</button>
+        <button type="button" class="um-btn um-btn-ghost um-btn-sm" title="Refresh" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise"></i></button>
+    </div>
+
+    @if (_items.Count == 0)
+    {
+        <div class="mes-empty">
+            <i class="bi bi-funnel"></i>
+            <span>No evidence scope has been evaluated for this matter yet. Run a Wide analysis for this matter to populate it, or add targets manually.</span>
+        </div>
+    }
+    else
+    {
+        <div class="mes-table-wrap">
+            <table class="mes-table">
+                <thead>
+                    <tr>
+                        <th class="mes-col-check"><input type="checkbox" checked="@(_filtered.Count > 0 && _filtered.All(f => _selected.Contains(f.MatterEvidenceScopeId)))" @onchange="ToggleAll" /></th>
+                        <th>Target</th>
+                        <th>Dimension</th>
+                        <th>Status</th>
+                        <th>Decided by</th>
+                        <th class="mes-num" title="Deterministic / LLM / Blended">Det · LLM · Blend</th>
+                        <th>Tier</th>
+                        <th>Signals</th>
+                        <th>Reason</th>
+                        <th class="mes-col-actions"></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var row in _filtered)
+                    {
+                        <tr class="mes-row @(row.DecidedByCode == MatterEvidenceScopeDeciderCodes.User ? "mes-row--user" : null)" @onclick="() => OpenEdit(row)">
+                            <td class="mes-col-check" @onclick:stopPropagation="true"><input type="checkbox" checked="@_selected.Contains(row.MatterEvidenceScopeId)" @onchange="e => ToggleOne(row.MatterEvidenceScopeId, e)" /></td>
+                            <td>
+                                <div class="mes-target-name">@row.DisplayName</div>
+                                <div class="mes-target-code"><span class="mes-kind mes-kind--@row.TargetKindCode.ToLowerInvariant()">@(row.TargetKindCode == "CONCEPT" ? "CPT" : "EVD")</span> @row.TargetCode</div>
+                            </td>
+                            <td><span class="mes-dim">@row.DimensionCode</span></td>
+                            <td><span class="mes-status mes-status--@row.ScopeStatusCode.ToLowerInvariant()">@StatusName(row.ScopeStatusCode)</span></td>
+                            <td><span class="mes-decider">@DeciderName(row.DecidedByCode)</span></td>
+                            <td class="mes-num">@Pct(row.DeterministicScore) · @Pct(row.LlmScore) · <strong>@Pct(row.BlendedScore)</strong></td>
+                            <td>@(row.TierCode ?? "—")</td>
+                            <td class="mes-signals">
+                                @if (row.IsRequiredCoverage) { <span title="Required coverage" class="mes-sig"><i class="bi bi-shield-check"></i></span> }
+                                @if (row.IsPrioritized) { <span title="Prioritized by rule" class="mes-sig"><i class="bi bi-star-fill"></i></span> }
+                                @if (row.DocumentPresent) { <span title="Evidence present in uploaded documents" class="mes-sig"><i class="bi bi-file-earmark-check"></i></span> }
+                                @if (row.MappedPassageCount > 0) { <span title="Mapped passages" class="mes-sig">@row.MappedPassageCount <i class="bi bi-text-paragraph"></i></span> }
+                            </td>
+                            <td class="mes-reason" title="@(row.LlmReason ?? row.RelevanceReasons)">@(row.UserNote ?? row.LlmReason ?? row.RelevanceReasons)</td>
+                            <td class="mes-col-actions">
+                                <button type="button" class="um-btn um-btn-ghost um-btn-sm" title="Edit" @onclick="() => OpenEdit(row)" @onclick:stopPropagation="true"><i class="bi bi-pencil"></i></button>
+                                <button type="button" class="um-btn um-btn-ghost um-btn-sm mes-danger" title="Remove" @onclick="() => ConfirmDelete(row)" @onclick:stopPropagation="true"><i class="bi bi-trash"></i></button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        <div class="mes-footnote">Showing @_filtered.Count of @_items.Count · Pack <strong>@(_options.PackCode ?? "—")</strong> · Last evaluated @(_items.Max(i => i.LastEvaluatedDateUtc)?.ToLocalTime().ToString("g") ?? "never")</div>
+    }
+}
+
+@if (_showForm)
+{
+    <div class="um-modal-backdrop" @onclick="CloseForm"><div class="um-modal mes-modal" @onclick:stopPropagation="true">
+        <div class="um-modal-header"><i class="bi bi-funnel"></i><span>@(_editing is null ? "Add evidence target" : "Edit evidence scope")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg"></i></button></div>
+        <EditForm Model="_form" OnValidSubmit="SaveAsync">
+            <DataAnnotationsValidator />
+            <div class="um-modal-body">
+                <div class="um-form-grid">
+                    @if (_editing is null)
+                    {
+                        <label class="um-field mes-span-2">
+                            <span class="um-field-label">Catalog target</span>
+                            <InputSelect class="form-select" @bind-Value="_form.TargetKey">
+                                <option value="">Select an evidence type or concept…</option>
+                                @foreach (var g in _availableTargets.GroupBy(t => t.DimensionCode))
+                                {
+                                    <optgroup label="@g.Key">
+                                        @foreach (var t in g) { <option value="@($"{t.TargetKindCode}|{t.TargetCode}")">@(t.TargetKindCode == "CONCEPT" ? "CPT" : "EVD") · @t.DisplayName</option> }
+                                    </optgroup>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.TargetKey" class="text-danger" />
+                        </label>
+                        @if (SelectedTarget is { } st && !string.IsNullOrWhiteSpace(st.Description))
+                        {
+                            <div class="mes-span-2 mes-def">@st.Description</div>
+                        }
+                    }
+                    else
+                    {
+                        <div class="mes-span-2 mes-readonly">
+                            <div class="mes-target-name">@_editing.DisplayName</div>
+                            <div class="mes-target-code">@_editing.TargetKindCode · @_editing.TargetCode · @_editing.DimensionCode</div>
+                            <dl class="mes-dl">
+                                <dt>Deterministic</dt><dd>@Pct(_editing.DeterministicScore)</dd>
+                                <dt>LLM</dt><dd>@Pct(_editing.LlmScore)</dd>
+                                <dt>Blended</dt><dd>@Pct(_editing.BlendedScore)</dd>
+                                <dt>Tier</dt><dd>@(_editing.TierCode ?? "—")</dd>
+                                <dt>Decided by</dt><dd>@DeciderName(_editing.DecidedByCode)</dd>
+                                <dt>Required</dt><dd>@(_editing.IsRequiredCoverage ? "Yes" : "No")</dd>
+                                <dt>Prioritized</dt><dd>@(_editing.IsPrioritized ? "Yes" : "No")</dd>
+                                <dt>Document present</dt><dd>@(_editing.DocumentPresent ? "Yes" : "No")</dd>
+                                <dt>Mapped passages</dt><dd>@_editing.MappedPassageCount</dd>
+                                <dt>Last evaluated</dt><dd>@(_editing.LastEvaluatedDateUtc?.ToLocalTime().ToString("g") ?? "never")</dd>
+                            </dl>
+                            @if (!string.IsNullOrWhiteSpace(_editing.RelevanceReasons)) { <div class="mes-def"><strong>Deterministic signals:</strong> @_editing.RelevanceReasons</div> }
+                            @if (!string.IsNullOrWhiteSpace(_editing.LlmReason)) { <div class="mes-def"><strong>LLM reason:</strong> @_editing.LlmReason</div> }
+                        </div>
+                    }
+                    <label class="um-field">
+                        <span class="um-field-label">Scope status</span>
+                        <InputSelect class="form-select" @bind-Value="_form.ScopeStatusCode">
+                            @foreach (var s in _options.Statuses) { <option value="@s.StatusCode">@s.Name — @s.Description</option> }
+                        </InputSelect>
+                        <ValidationMessage For="() => _form.ScopeStatusCode" class="text-danger" />
+                    </label>
+                    <label class="um-field mes-span-2">
+                        <span class="um-field-label">Attorney note</span>
+                        <InputTextArea class="form-control" rows="3" @bind-Value="_form.UserNote" />
+                        <ValidationMessage For="() => _form.UserNote" class="text-danger" />
+                    </label>
+                </div>
+            </div>
+            <div class="um-modal-footer">
+                @if (_saveError is not null) { <span class="text-danger me-auto">@_saveError</span> }
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button>
+                <button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-check-lg"></i> Save</button>
+            </div>
+        </EditForm>
+    </div></div>
+}
+
+@if (_deleting is not null)
+{
+    <div class="um-modal-backdrop" @onclick="() => _deleting = null"><div class="um-modal um-confirm-dialog" @onclick:stopPropagation="true">
+        <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash"></i></div>
+        <h3>Remove evidence target?</h3>
+        <p><strong>@_deleting.DisplayName</strong> (@_deleting.TargetCode) will be removed from this matter's scope. The next Wide run will re-evaluate it from the catalog. To keep an attorney decision instead, set it to <em>Out of scope</em>.</p>
+        <div class="um-modal-footer">
+            @if (_saveError is not null) { <span class="text-danger me-auto">@_saveError</span> }
+            <button type="button" class="um-btn um-btn-ghost" @onclick="() => _deleting = null">Cancel</button>
+            <button type="button" class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Remove</button>
+        </div>
+    </div></div>
+}
+
+@code {
+    [Parameter, EditorRequired] public Guid MatterId { get; set; }
+
+    private bool _loading = true, _saving, _showForm;
+    private string? _loadError, _saveError;
+    private List<MatterEvidenceScopeDto> _items = [];
+    private List<MatterEvidenceScopeDto> _filtered = [];
+    private MatterEvidenceScopeOptionsDto _options = new();
+    private List<string> _dimensions = [];
+    private string _activeFilter = "ALL", _search = string.Empty, _dimensionFilter = string.Empty, _kindFilter = string.Empty;
+    private readonly HashSet<Guid> _selected = [];
+    private string _bulkStatus = MatterEvidenceScopeStatusCodes.OutOfScope;
+    private MatterEvidenceScopeDto? _editing, _deleting;
+    private ScopeForm _form = new();
+    private List<MatterEvidenceScopeTargetOptionDto> _availableTargets = [];
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    public async Task LoadAsync()
+    {
+        _loading = true; _loadError = null;
+        try
+        {
+            _options = await Api.GetLegalDecisionMatterEvidenceScopeOptionsAsync(MatterId);
+            _items = (await Api.GetLegalDecisionMatterEvidenceScopesAsync(MatterId)).ToList();
+            _dimensions = _items.Select(i => i.DimensionCode).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(d => d).ToList();
+            _selected.RemoveWhere(id => _items.All(i => i.MatterEvidenceScopeId != id));
+            ApplyFilter();
+        }
+        catch (Exception ex) { _loadError = $"Failed to load evidence scope: {ex.Message}"; }
+        finally { _loading = false; }
+    }
+
+    private int Count(string status) => _items.Count(i => string.Equals(i.ScopeStatusCode, status, StringComparison.OrdinalIgnoreCase));
+    private string StatusName(string code) => _options.Statuses.FirstOrDefault(s => s.StatusCode == code)?.Name ?? code;
+    private string DeciderName(string code) => _options.Deciders.FirstOrDefault(d => d.DeciderCode == code)?.Name ?? code;
+    private static string Pct(decimal? v) => v is null ? "—" : $"{v.Value * 100:0}%";
+
+    private void SetFilter(string filter) { _activeFilter = filter; ApplyFilter(); }
+    private void OnSearchChanged(ChangeEventArgs e) { _search = e.Value?.ToString() ?? string.Empty; ApplyFilter(); }
+    private void OnDimensionChanged(ChangeEventArgs e) { _dimensionFilter = e.Value?.ToString() ?? string.Empty; ApplyFilter(); }
+    private void OnKindChanged(ChangeEventArgs e) { _kindFilter = e.Value?.ToString() ?? string.Empty; ApplyFilter(); }
+
+    private void ApplyFilter()
+    {
+        IEnumerable<MatterEvidenceScopeDto> q = _items;
+        if (_activeFilter == "USER") q = q.Where(i => i.DecidedByCode == MatterEvidenceScopeDeciderCodes.User);
+        else if (_activeFilter != "ALL") q = q.Where(i => string.Equals(i.ScopeStatusCode, _activeFilter, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(_dimensionFilter)) q = q.Where(i => string.Equals(i.DimensionCode, _dimensionFilter, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(_kindFilter)) q = q.Where(i => string.Equals(i.TargetKindCode, _kindFilter, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(_search))
+        {
+            var s = _search.Trim();
+            q = q.Where(i => (i.DisplayName?.Contains(s, StringComparison.OrdinalIgnoreCase) ?? false)
+                          || i.TargetCode.Contains(s, StringComparison.OrdinalIgnoreCase)
+                          || i.DimensionCode.Contains(s, StringComparison.OrdinalIgnoreCase)
+                          || (i.RelevanceReasons?.Contains(s, StringComparison.OrdinalIgnoreCase) ?? false)
+                          || (i.LlmReason?.Contains(s, StringComparison.OrdinalIgnoreCase) ?? false)
+                          || (i.UserNote?.Contains(s, StringComparison.OrdinalIgnoreCase) ?? false));
+        }
+        _filtered = q.OrderBy(i => i.DimensionCode).ThenByDescending(i => i.BlendedScore ?? -1).ThenBy(i => i.DisplayName).ToList();
+    }
+
+    private void ToggleAll(ChangeEventArgs e)
+    {
+        var on = e.Value is true;
+        foreach (var f in _filtered) { if (on) _selected.Add(f.MatterEvidenceScopeId); else _selected.Remove(f.MatterEvidenceScopeId); }
+    }
+    private void ToggleOne(Guid id, ChangeEventArgs e) { if (e.Value is true) _selected.Add(id); else _selected.Remove(id); }
+
+    private async Task ApplyBulkStatusAsync()
+    {
+        if (_selected.Count == 0) return;
+        _saving = true; _saveError = null;
+        try
+        {
+            await Api.SetLegalDecisionMatterEvidenceScopeStatusAsync(MatterId, new MatterEvidenceScopeBulkStatusRequest(_selected.ToArray(), _bulkStatus, null));
+            _selected.Clear();
+            await LoadAsync();
+        }
+        catch (Exception ex) { _loadError = $"Bulk update failed: {ex.Message}"; }
+        finally { _saving = false; }
+    }
+
+    private void OpenAdd()
+    {
+        _editing = null; _saveError = null;
+        var existing = _items.Select(i => $"{i.TargetKindCode}|{i.TargetCode}").ToHashSet(StringComparer.OrdinalIgnoreCase);
+        _availableTargets = _options.Targets.Where(t => !existing.Contains($"{t.TargetKindCode}|{t.TargetCode}")).ToList();
+        _form = new ScopeForm { ScopeStatusCode = MatterEvidenceScopeStatusCodes.InScope };
+        _showForm = true;
+    }
+
+    private void OpenEdit(MatterEvidenceScopeDto row)
+    {
+        _editing = row; _saveError = null;
+        _form = new ScopeForm { TargetKey = $"{row.TargetKindCode}|{row.TargetCode}", ScopeStatusCode = row.ScopeStatusCode, UserNote = row.UserNote };
+        _showForm = true;
+    }
+
+    private void CloseForm() { _showForm = false; _editing = null; }
+
+    private MatterEvidenceScopeTargetOptionDto? SelectedTarget
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(_form.TargetKey)) return null;
+            var parts = _form.TargetKey.Split('|', 2);
+            return parts.Length == 2 ? _availableTargets.FirstOrDefault(t => t.TargetKindCode == parts[0] && t.TargetCode == parts[1]) : null;
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        var parts = (_form.TargetKey ?? string.Empty).Split('|', 2);
+        if (parts.Length != 2) { _saveError = "Select a catalog target."; return; }
+        _saving = true; _saveError = null;
+        try
+        {
+            await Api.UpsertLegalDecisionMatterEvidenceScopeAsync(MatterId, new MatterEvidenceScopeUpsertRequest(parts[0], parts[1], _form.ScopeStatusCode, string.IsNullOrWhiteSpace(_form.UserNote) ? null : _form.UserNote.Trim()));
+            _showForm = false; _editing = null;
+            await LoadAsync();
+        }
+        catch (Exception ex) { _saveError = $"Save failed: {ex.Message}"; }
+        finally { _saving = false; }
+    }
+
+    private void ConfirmDelete(MatterEvidenceScopeDto row) { _deleting = row; _saveError = null; }
+
+    private async Task ExecuteDeleteAsync()
+    {
+        if (_deleting is null) return;
+        _saving = true; _saveError = null;
+        try
+        {
+            await Api.DeleteLegalDecisionMatterEvidenceScopeAsync(MatterId, _deleting.MatterEvidenceScopeId);
+            _deleting = null;
+            await LoadAsync();
+        }
+        catch (Exception ex) { _saveError = $"Delete failed: {ex.Message}"; }
+        finally { _saving = false; }
+    }
+
+    private sealed class ScopeForm
+    {
+        [Required, StringLength(280)] public string? TargetKey { get; set; }
+        [Required, StringLength(40)] public string ScopeStatusCode { get; set; } = MatterEvidenceScopeStatusCodes.InScope;
+        [StringLength(1000)] public string? UserNote { get; set; }
+    }
+}

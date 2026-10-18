@@ -82,6 +82,9 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     // a specific pack was resolved rather than inferring it from PracticeArea. Null when unresolved.
     private Guid? _resolvedDomainPackId;
     private string? _resolvedDomainPackCode;
+    // Typed matter classification (DB Legal_DecisionMatter.MatterTypeCode/Subtype/ClaimTypeCode) used by the
+    // matter funnel to evaluate Evidence Type MatterTypeCodes; replaces the label-text heuristic.
+    private string[] _matterTypeSignals=[];
     // Canonical Decision Outcome candidates (migration 0396) for the resolved pack. These are the DB-backed
     // first-class competing resolutions/statuses (e.g. PI C1-C5). They are injected into the candidate
     // universe at the start of the EVALUATE run so the Decision Outcome cards are never starved by the
@@ -118,6 +121,10 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     private readonly HashSet<Guid> _explainedParentIds=new();
     private readonly List<WidePropositionAnchorRecord> _pendingAnchors=new();
     private readonly List<WidePropositionLinkRecord> _pendingLinks=new();
+    // 0442 per-matter Atomic Propositions: worker/call provenance per accepted L3+ child (keyed by branch id),
+    // and the most recent generic hierarchy-step call (L4+ path) so deeper propositions keep model provenance.
+    private readonly Dictionary<Guid,AtomicPropositionProvenance> _atomicProvenanceByBranch=new();
+    private AiGenerationResult? _lastHierarchyStepCall;
     // R3 competition accountability: typed status for whether candidate competition ran on this run.
     private string? _candidateCompetitionStatus;
     // R4 Normalization Gate observability: the outcome of routing this run through the shared gate, or
@@ -676,6 +683,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         _decisionIntent=new(DecisionIntent.Evaluate,"No matter context.",false);
         _resolvedDomainPackId=null;
         _resolvedDomainPackCode=null;
+        _matterTypeSignals=[];
         _useDomainPack=false;
         _packDimensionCodes=[];
         _packDimensions=[];
@@ -691,6 +699,9 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         _explainedParentIds.Clear();
         _pendingAnchors.Clear();
         _pendingLinks.Clear();
+        _atomicProvenanceByBranch.Clear();
+        _lastHierarchyStepCall=null;
+        ResetMatterFunnelState();
         _canonicalOutcomeCandidates=[];
         _candidateCompetitionStatus=null;
         _legalNormalization=null;
@@ -726,6 +737,9 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         var branchEvidenceKeys=new Dictionary<Guid,HashSet<string>>();
         var depth=0;
         var terminationReason="LLM_COMPLETE";
+        // Domain Pack L3 complete-coverage audit flag: set when any in-scope L2 parent ended the L3 stage
+        // without propositions or an explained outcome; overrides the natural termination code on completion.
+        var l3CoverageIncomplete=false;
         var aggregateConfidence=0m;
         // Legal decision EVALUATE runs must decompose broad L1/L2 evaluation dimensions into atomic,
         // independently testable L3 factors (the Mendoza/Harper defect). Confidence-based and
@@ -965,9 +979,19 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                     // returned coverage is validated in code against the assignment; thin/missing parents get
                     // one targeted retry; outcomes are persisted per parent. Option 6 (optional, DB switch)
                     // only re-orders: a priority tier is processed first in smaller batches, never excluded.
-                    var coverage=await GenerateDomainPackLevel3Async(request,executionId,narrowingParents,allBranches,parentsByCode,capabilities,configuration,depth+1,evidence,queryContract,llmCalls,cancellationToken);
+                    // Complete-coverage invariant: the L3 parent set is the materialized in-scope L2 catalog
+                    // (every CPT_/EVD_ branch at this level that was not pruned), NOT the lifecycle survivors.
+                    // Branch state (ACTIVE/SECONDARY/DORMANT) is an ordering/audit signal only; it must never
+                    // gate whether a configured Domain Pack factor receives its L3 model pass.
+                    var packParents=allBranches
+                        .Where(branch=>branch.LevelNumber==depth&&!branch.IsEliminated&&(branch.BranchCode.StartsWith("CPT_",StringComparison.OrdinalIgnoreCase)||branch.BranchCode.StartsWith("EVD_",StringComparison.OrdinalIgnoreCase)))
+                        .ToArray();
+                    if(packParents.Length>narrowingParents.Length)logger.LogInformation("Wide2 Domain Pack L3: {Reinstated} in-scope L2 parent(s) below the survivor thresholds were reinstated so the L3 pass covers the full materialized catalog.",packParents.Length-narrowingParents.Length);
+                    var packParentsByCode=packParents.ToDictionary(branch=>branch.BranchCode,StringComparer.OrdinalIgnoreCase);
+                    var coverage=await GenerateDomainPackLevel3Async(request,executionId,packParents,allBranches,packParentsByCode,capabilities,configuration,depth+1,evidence,queryContract,llmCalls,cancellationToken);
                     llmCalls=coverage.LlmCalls;
                     nextLevel=coverage.Children;
+                    if(coverage.UnprocessedParents>0)l3CoverageIncomplete=true;
                 }
                 else
                 {
@@ -1062,6 +1086,10 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                     logger.LogInformation("Wide2 level {Level}: dropped {Dropped} proposed branch(es) with unresolved parent codes.",depth+1,nextLevel.Length-attachedChildren.Length);
                     nextLevel=attachedChildren;
                 }
+                // 0442 per-matter Atomic Propositions (HIGH IMPACT gate): persist every accepted L3+ proposition with
+                // its parent L2 target, worker and call provenance; persisted OUT_OF_SCOPE rows (USER authoritative)
+                // are marked eliminated for this run (MATTER_SCOPE_OUT) - never removed. Fail-soft.
+                if(useDomainPackHierarchy&&depth>=2)nextLevel=await PersistMatterAtomicPropositionsAsync(request,executionId,nextLevel,allBranches,configuration,depth+1,cancellationToken);
                 await wideRepository.SaveWideBranchesAsync(nextLevel,request.UserId,cancellationToken);
                 // Option 5 scope ledger: one durable row per configured L2 target (in-scope rows get their
                 // materialized branch id; rule-excluded rows keep a null branch id). Fail-soft.
@@ -2074,6 +2102,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 }
             }
             timer.Stop();
+            if(l3CoverageIncomplete)terminationReason="L3_COVERAGE_INCOMPLETE";
             await wideRepository.CompleteWideExecutionAsync(request.TenantId,request.UserId,executionId,answerStatus,terminationReason,depth,llmCalls,aggregateConfidence,answer.VerificationCode,finalAnswerText,timer.ElapsedMilliseconds,cancellationToken);
             // POLOXI computation-details for the Candidate Competition tab. DB-backed (Core.ConfigurationSetting);
             // fail-soft so a config read error never blocks the answer \u2014 the UI simply omits the details tile.
@@ -2928,6 +2957,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 await GetWideSystemPromptAsync(request,IntelligencePromptCodes.WideHierarchyStep,cancellationToken),
             userPrompt,
             LevelSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_HIERARCHY_STEP",null,request.CorrelationId,"Intelligent Search Wide"),MechanicalModel(configuration,request),cancellationToken);
+        _lastHierarchyStepCall=result;
         return JsonSerializer.Deserialize<WideLevelProposal>(result.Content,JsonOptions)??throw new ValidationException("The Wide hierarchy step response was empty.");
     }
 
@@ -3053,6 +3083,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 return;
             }
             _matterContext=snapshot;
+            _matterTypeSignals=new[]{matter.MatterTypeCode,matter.Subtype,matter.ClaimTypeCode}.Where(value=>!string.IsNullOrWhiteSpace(value)).Select(value=>value!.Trim()).ToArray();
             // Validated Candidate Competition (0339): load the DB-backed proposition fact-binding config once
             // per run so supplied values are validated BEFORE they can establish a proposition. Fail-soft: a
             // missing/degraded config leaves the validator on its embedded DefaultConfig (guardrails still run).
@@ -4075,7 +4106,13 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             catch(Exception ex)when(!cancellationToken.IsCancellationRequested){logger.LogWarning(ex,"Wide2 Domain Pack presence signals: document evidence graph unavailable for matter {MatterId}; using matter/profile/retrieval signals only.",matterId);}
         }
         _matterPresenceTokens=DomainPackEvidencePresenceMatcher.NormalizeCorpusTokens(DomainPackEvidencePresenceMatcher.BuildCorpus(texts)).ToHashSet(StringComparer.Ordinal);
-        _matterDocumentEvidenceTypeCodes=directCodes;
+        // Catalog-membership guard: a direct document classification only counts as a Domain Pack signal when
+        // its code is a configured Evidence Type of the resolved pack. Non-catalog codes are logged (not dropped
+        // from the corpus tokens) so classifier drift is visible instead of silently missing the 0.35 signal.
+        var catalogCodes=_packEvidenceTypes.Select(e=>e.EvidenceTypeCode).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var nonCatalog=catalogCodes.Count==0?[]:directCodes.Where(code=>!catalogCodes.Contains(code)).ToArray();
+        if(nonCatalog.Length>0)logger.LogWarning("Wide2 Domain Pack presence signals for matter {MatterId}: {Count} direct document EvidenceTypeCode(s) are not in the resolved pack catalog and will not fire the direct-classification signal: {Codes}.",request.MatterId,nonCatalog.Length,string.Join(", ",nonCatalog.Take(12)));
+        _matterDocumentEvidenceTypeCodes=catalogCodes.Count==0?directCodes:directCodes.Where(catalogCodes.Contains).ToHashSet(StringComparer.OrdinalIgnoreCase);
         logger.LogInformation("Wide2 Domain Pack presence signals for matter {MatterId}: tokens={Tokens} directEvidenceTypeCodes={DirectCodes} retrievalItems={Retrieval}.",request.MatterId,_matterPresenceTokens.Count,directCodes.Count,retrievalEvidence.Count);
     }
 

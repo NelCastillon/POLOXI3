@@ -10,7 +10,7 @@ namespace Legal.Infrastructure.Persistence.Repositories;
 
 // Dapper repository for the self-contained POLOXI Legal Decision module. All configuration and
 // decision state is read from / written to POLOXI.Legal_Decision* tables (DB is the source of truth).
-public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFactory) : ILegalDecisionRepository
+public sealed partial class LegalDecisionRepository(ISqlConnectionFactory connectionFactory) : ILegalDecisionRepository
 {
     public async Task<DecisionCoreSettings> GetCoreSettingsAsync(CancellationToken cancellationToken = default)
     {

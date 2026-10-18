@@ -97,6 +97,29 @@ public interface ILegalDecisionRepository
     Task<IReadOnlyCollection<PersonalInjuryDecisionTypeDto>> GetPersonalInjuryDecisionTypesAsync(Guid tenantId, CancellationToken cancellationToken = default);
     Task<IReadOnlyCollection<PersonalInjuryStageDecisionDto>> GetPersonalInjuryStageDecisionMapAsync(Guid tenantId, CancellationToken cancellationToken = default);
 
+    // ── Per-matter Evidence Type scope (migration 0441: POLOXI.Legal_MatterEvidenceScope) ──
+    Task<IReadOnlyCollection<MatterEvidenceScopeDto>> GetMatterEvidenceScopesAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyCollection<MatterEvidenceScopeStatusDto>> GetMatterEvidenceScopeStatusesAsync(Guid tenantId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyCollection<MatterEvidenceScopeDeciderDto>> GetMatterEvidenceScopeDecidersAsync(Guid tenantId, CancellationToken cancellationToken = default);
+    // Attorney upsert: inserts or updates the (matter,pack,kind,code) row as DecidedByCode=USER.
+    Task<Guid> UpsertUserMatterEvidenceScopeAsync(Guid tenantId, Guid userId, Guid decisionMatterId, MatterEvidenceScopeEvaluation row, string? userNote, CancellationToken cancellationToken = default);
+    Task<int> SetMatterEvidenceScopeStatusAsync(Guid tenantId, Guid userId, Guid decisionMatterId, IReadOnlyCollection<Guid> ids, string scopeStatusCode, string? userNote, CancellationToken cancellationToken = default);
+    Task<bool> SoftDeleteMatterEvidenceScopeAsync(Guid tenantId, Guid userId, Guid decisionMatterId, Guid matterEvidenceScopeId, CancellationToken cancellationToken = default);
+    // Pipeline upsert: writes SYSTEM/LLM/RULE evaluations; rows whose DecidedByCode=USER keep their status,
+    // decider and note (scores/provenance still refreshed). Never deletes.
+    Task UpsertSystemMatterEvidenceScopesAsync(Guid tenantId, Guid userId, Guid decisionMatterId, IReadOnlyCollection<MatterEvidenceScopeEvaluation> rows, CancellationToken cancellationToken = default);
+
+    // ── Per-matter Atomic Propositions (0442) ──
+    Task<IReadOnlyCollection<MatterAtomicPropositionDto>> GetMatterAtomicPropositionsAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyCollection<MatterAtomicPropositionStatusDto>> GetMatterAtomicPropositionStatusesAsync(Guid tenantId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyCollection<MatterAtomicPropositionDeciderDto>> GetMatterAtomicPropositionDecidersAsync(Guid tenantId, CancellationToken cancellationToken = default);
+    Task<Guid> UpsertUserMatterAtomicPropositionAsync(Guid tenantId, Guid userId, Guid decisionMatterId, MatterAtomicPropositionEvaluation row, string scopeStatusCode, string? userNote, CancellationToken cancellationToken = default);
+    Task<int> SetMatterAtomicPropositionStatusAsync(Guid tenantId, Guid userId, Guid decisionMatterId, IReadOnlyCollection<Guid> ids, string scopeStatusCode, string? userNote, CancellationToken cancellationToken = default);
+    Task<bool> SoftDeleteMatterAtomicPropositionAsync(Guid tenantId, Guid userId, Guid decisionMatterId, Guid matterAtomicPropositionId, CancellationToken cancellationToken = default);
+    // Pipeline upsert: inserts generated propositions as PENDING_REVIEW/LLM or refreshes model provenance;
+    // USER rows keep their title/statement/status/note. Never deletes.
+    Task UpsertSystemMatterAtomicPropositionsAsync(Guid tenantId, Guid userId, Guid decisionMatterId, IReadOnlyCollection<MatterAtomicPropositionEvaluation> rows, CancellationToken cancellationToken = default);
+
     // Generate-New-Matter draft / provenance persistence (extraction wired later).
     Task<Guid> CreatePersonalInjuryDraftAsync(Guid tenantId, Guid userId, PersonalInjuryMatterDraftCreateRequest request, CancellationToken cancellationToken = default);
     Task<PersonalInjuryMatterDraftDto?> GetPersonalInjuryDraftAsync(Guid tenantId, Guid decisionPIMatterDraftId, CancellationToken cancellationToken = default);
