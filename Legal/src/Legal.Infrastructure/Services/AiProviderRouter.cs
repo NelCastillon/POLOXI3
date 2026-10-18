@@ -16,7 +16,7 @@ public sealed class AiProviderRouter(IAiProviderRouteRepository routeRepository,
         if(safety.MaximumInputCharacters<=0)throw new AiSafetyViolationException("Maximum AI input length is not configured.");
         if(inputLength>safety.MaximumInputCharacters)
         {
-            await RecordViolationAsync(tenantId,safety,"MAXIMUM_INPUT_LENGTH",correlationId,"INPUT_LENGTH_EXCEEDED",inputLength,safety.MaximumInputCharacters,Hash(systemPrompt+userPrompt),cancellationToken);
+            await RecordViolationAsync(tenantId,safety,"MAXIMUM_INPUT_LENGTH",correlationId,executionId,"INPUT_LENGTH_EXCEEDED",inputLength,safety.MaximumInputCharacters,Hash(systemPrompt+userPrompt),cancellationToken);
             throw new AiSafetyViolationException("The AI request exceeded the configured maximum input length.");
         }
         AiGenerationResult result;
@@ -31,14 +31,21 @@ public sealed class AiProviderRouter(IAiProviderRouteRepository routeRepository,
         if(safety.MaximumOutputCharacters<=0)throw new AiSafetyViolationException("Maximum AI output length is not configured.");
         if(result.Content.Length>safety.MaximumOutputCharacters)
         {
-            await RecordViolationAsync(tenantId,safety,"MAXIMUM_OUTPUT_LENGTH",correlationId,"OUTPUT_LENGTH_EXCEEDED",result.Content.Length,safety.MaximumOutputCharacters,null,cancellationToken);
-            throw new AiSafetyViolationException("The AI response exceeded the configured maximum output length.");
+            // Post-execution rejections previously threw without an execution row, so a rejected call was
+            // invisible in AI.Legal_Execution and the caller's fail-soft path looked like a zero-output model
+            // response. Record the FAILED execution (tokens were spent) before rejecting.
+            await RecordViolationAsync(tenantId,safety,"MAXIMUM_OUTPUT_LENGTH",correlationId,executionId,"OUTPUT_LENGTH_EXCEEDED",result.Content.Length,safety.MaximumOutputCharacters,null,cancellationToken);
+            var message=$"The AI response exceeded the configured maximum output length ({result.Content.Length} > {safety.MaximumOutputCharacters} characters).";
+            started.Stop();await routeRepository.RecordExecutionAsync(Execution(executionId,tenantId,featureCode,correlationId,executionContext,"FAILED",started.ElapsedMilliseconds,result,"OUTPUT_LENGTH_EXCEEDED",message),cancellationToken);
+            throw new AiSafetyViolationException(message);
         }
         var structuredControl=safety.Controls.FirstOrDefault(x=>string.Equals(x.ControlCode,"STRUCTURED_OUTPUT_VALIDATION",StringComparison.OrdinalIgnoreCase));
         if(!string.IsNullOrWhiteSpace(outputSchemaJson)&&structuredControl is not null&&!IsJson(result.StructuredOutputJson??result.Content))
         {
-            await RecordViolationAsync(tenantId,safety,"STRUCTURED_OUTPUT_VALIDATION",correlationId,"INVALID_STRUCTURED_OUTPUT",result.Content.Length,null,null,cancellationToken);
-            throw new AiSafetyViolationException("The AI response did not contain valid structured JSON output.");
+            await RecordViolationAsync(tenantId,safety,"STRUCTURED_OUTPUT_VALIDATION",correlationId,executionId,"INVALID_STRUCTURED_OUTPUT",result.Content.Length,null,null,cancellationToken);
+            const string message="The AI response did not contain valid structured JSON output.";
+            started.Stop();await routeRepository.RecordExecutionAsync(Execution(executionId,tenantId,featureCode,correlationId,executionContext,"FAILED",started.ElapsedMilliseconds,result,"INVALID_STRUCTURED_OUTPUT",message),cancellationToken);
+            throw new AiSafetyViolationException(message);
         }
         started.Stop();await routeRepository.RecordExecutionAsync(Execution(executionId,tenantId,featureCode,correlationId,executionContext,"COMPLETED",started.ElapsedMilliseconds,result,null,null),cancellationToken);return result;
     }
@@ -50,7 +57,7 @@ public sealed class AiProviderRouter(IAiProviderRouteRepository routeRepository,
         if(safety.MaximumInputCharacters<=0)throw new AiSafetyViolationException("Maximum AI input length is not configured.");
         if(inputLength>safety.MaximumInputCharacters)
         {
-            await RecordViolationAsync(tenantId,safety,"MAXIMUM_INPUT_LENGTH",correlationId,"EMBEDDING_INPUT_LENGTH_EXCEEDED",inputLength,safety.MaximumInputCharacters,Hash(string.Join('\n',inputs)),cancellationToken);
+            await RecordViolationAsync(tenantId,safety,"MAXIMUM_INPUT_LENGTH",correlationId,Guid.NewGuid(),"EMBEDDING_INPUT_LENGTH_EXCEEDED",inputLength,safety.MaximumInputCharacters,Hash(string.Join('\n',inputs)),cancellationToken);
             throw new AiSafetyViolationException("The embedding request exceeded the configured maximum input length.");
         }
         return await ExecuteAsync(tenantId,featureCode,"EMBEDDING",correlationId,(provider,_,context,token)=>provider.CreateEmbeddingAsync(new(context,inputs,correlationId),token),cancellationToken);
@@ -77,12 +84,14 @@ public sealed class AiProviderRouter(IAiProviderRouteRepository routeRepository,
         throw new AiProviderUnavailableException(featureCode,"All configured AI provider routes were unavailable.",new AggregateException(failures));
     }
 
-    private async Task RecordViolationAsync(Guid tenantId,AiSafetyPolicy safety,string controlCode,string correlationId,string eventTypeCode,int actual,int? configured,string? inputHash,CancellationToken cancellationToken)
+    private async Task RecordViolationAsync(Guid tenantId,AiSafetyPolicy safety,string controlCode,string correlationId,Guid executionId,string eventTypeCode,int actual,int? configured,string? inputHash,CancellationToken cancellationToken)
     {
         var control=safety.Controls.FirstOrDefault(x=>string.Equals(x.ControlCode,controlCode,StringComparison.OrdinalIgnoreCase));
         if(control is null)throw new AiSafetyViolationException($"Required safety control {controlCode} is not active.");
-        var details=JsonSerializer.Serialize(new{correlationId,actual,configured});
-        await routeRepository.RecordSafetyEventAsync(new(tenantId,control.SafetyControlId,eventTypeCode,control.EnforcementStageCode,control.ActionCode,"HIGH",inputHash,details,control.RequiresHumanReview,control.RequiresHumanReview?"PENDING":null,$"{controlCode}:{correlationId}"),cancellationToken);
+        var details=JsonSerializer.Serialize(new{correlationId,executionId,actual,configured});
+        // Idempotency is per execution, not per run correlation: one Wide run issues many calls under the
+        // same correlationId and a run-level key collapsed every rejected call into a single event.
+        await routeRepository.RecordSafetyEventAsync(new(tenantId,control.SafetyControlId,eventTypeCode,control.EnforcementStageCode,control.ActionCode,"HIGH",inputHash,details,control.RequiresHumanReview,control.RequiresHumanReview?"PENDING":null,$"{controlCode}:{correlationId}:{executionId:N}"),cancellationToken);
     }
 
     private static string Hash(string value)=>Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));

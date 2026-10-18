@@ -51,6 +51,7 @@ public interface ILegalDecisionRepository
     Task<IReadOnlyCollection<DecisionTimelineEventDto>> GetSessionTimelineAsync(Guid tenantId, Guid decisionSessionId, CancellationToken cancellationToken = default);
     Task<IReadOnlyCollection<DecisionSessionSummaryDto>> GetMatterSessionsAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default);
     Task<bool> UpdateMatterAsync(Guid tenantId, Guid userId, Guid decisionMatterId, DecisionMatterUpdateRequest request, CancellationToken cancellationToken = default);
+    Task<bool> UpdateMatterAdditionalNarrativeAsync(Guid tenantId, Guid userId, Guid decisionMatterId, string? additionalNarrative, CancellationToken cancellationToken = default);
     Task<bool> UpdateMatterStatusAsync(Guid tenantId, Guid userId, Guid decisionMatterId, string statusCode, CancellationToken cancellationToken = default);
     Task<bool> DeleteMatterAsync(Guid tenantId, Guid userId, Guid decisionMatterId, CancellationToken cancellationToken = default);
     Task<bool> DeleteMatterAsync(Guid tenantId, Guid userId, Guid decisionMatterId, bool includeAllTenants, CancellationToken cancellationToken = default);

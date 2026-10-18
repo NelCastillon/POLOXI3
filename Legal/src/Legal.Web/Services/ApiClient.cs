@@ -422,6 +422,11 @@ public sealed class ApiClient(HttpClient httpClient)
             using var response=await _httpClient.PutAsJsonAsync($"api/legal_decision/matters/{matterId}",request,token);
             await EnsureSuccessWithDetailAsync(response,token);
         }
+        public async Task UpdateLegalDecisionMatterAdditionalNarrativeAsync(Guid matterId,string? additionalNarrative,CancellationToken token=default)
+        {
+            using var response=await _httpClient.PutAsJsonAsync($"api/legal_decision/matters/{matterId}/additional-narrative",new Legal.Application.Features.Intelligence.Decision.DecisionMatterAdditionalNarrativeRequest(additionalNarrative),token);
+            await EnsureSuccessWithDetailAsync(response,token);
+        }
         public async Task UpdateLegalDecisionMatterStatusAsync(Guid matterId,string statusCode,CancellationToken token=default)
         {
             using var response=await _httpClient.PostAsJsonAsync($"api/legal_decision/matters/{matterId}/status",new Legal.Application.Features.Intelligence.Decision.DecisionMatterStatusUpdateRequest(statusCode),token);

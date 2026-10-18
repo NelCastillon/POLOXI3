@@ -136,10 +136,12 @@ public sealed class AnalysisRunLedgerRepository(ISqlConnectionFactory connection
     {
         using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
 
-        // Per-run execution quality metrics plus the aggregated candidate landscape, joined through the
-        // authoritative AnalysisRunId -> WideExecutionId bridge in Legal_WideRunResult. Candidate counts
-        // and composite-score aggregates come from Legal_WideCandidate. All reads are tenant-scoped and
-        // restricted to non-deleted rows; runs without a decision execution simply return no row.
+        // Per-run execution quality metrics plus the aggregated candidate landscape. Candidate counts and
+        // composite-score aggregates come first from the ledger's own lossless capture of the delivered
+        // response (Legal_WideRunCandidate, keyed by WideRunResultId) - this is what the run actually
+        // returned. Only when that capture is empty do we fall back to the pipeline-side Legal_WideCandidate
+        // rows via the WideExecutionId bridge. All reads are tenant-scoped and restricted to non-deleted
+        // rows; runs without a decision execution simply return no row.
         var rows = (await connection.QueryAsync<QualityRow>(new CommandDefinition(
             """
             SELECT r.AnalysisRunId,
@@ -151,11 +153,19 @@ public sealed class AnalysisRunLedgerRepository(ISqlConnectionFactory connection
                    COALESCE(r.DecisionEvidenceCoverage, CAST(0 AS DECIMAL(9,4))) AS DecisionEvidenceCoverage,
                    COALESCE(r.WinnerStability, CAST(0 AS DECIMAL(9,4))) AS WinnerStability,
                    COALESCE(r.TopKStability, CAST(0 AS DECIMAL(9,4))) AS TopKStability,
-                   COALESCE(cand.CandidateCount, 0) AS CandidateCount,
-                   COALESCE(cand.ViableCandidateCount, 0) AS ViableCandidateCount,
-                   COALESCE(cand.TopCompositeScore, CAST(0 AS DECIMAL(9,4))) AS TopCompositeScore,
-                   COALESCE(cand.MeanViableCompositeScore, CAST(0 AS DECIMAL(9,4))) AS MeanViableCompositeScore
+                   COALESCE(CASE WHEN ledger.CandidateCount > 0 THEN ledger.CandidateCount ELSE cand.CandidateCount END, 0) AS CandidateCount,
+                   COALESCE(CASE WHEN ledger.CandidateCount > 0 THEN ledger.ViableCandidateCount ELSE cand.ViableCandidateCount END, 0) AS ViableCandidateCount,
+                   COALESCE(CASE WHEN ledger.CandidateCount > 0 THEN ledger.TopCompositeScore ELSE cand.TopCompositeScore END, CAST(0 AS DECIMAL(9,4))) AS TopCompositeScore,
+                   COALESCE(CASE WHEN ledger.CandidateCount > 0 THEN ledger.MeanViableCompositeScore ELSE cand.MeanViableCompositeScore END, CAST(0 AS DECIMAL(9,4))) AS MeanViableCompositeScore
             FROM POLOXI.Legal_WideRunResult r
+            OUTER APPLY (
+                SELECT COUNT(*) AS CandidateCount,
+                       SUM(CASE WHEN rc.IsConstraintViolation = 0 THEN 1 ELSE 0 END) AS ViableCandidateCount,
+                       MAX(rc.CompositeScore) AS TopCompositeScore,
+                       AVG(CASE WHEN rc.IsConstraintViolation = 0 THEN rc.CompositeScore END) AS MeanViableCompositeScore
+                FROM POLOXI.Legal_WideRunCandidate rc
+                WHERE rc.WideRunResultId = r.WideRunResultId AND rc.TenantId = @TenantId AND rc.IsDeleted = 0
+            ) ledger
             OUTER APPLY (
                 SELECT COUNT(*) AS CandidateCount,
                        SUM(CASE WHEN c.IsConstraintViolation = 0 THEN 1 ELSE 0 END) AS ViableCandidateCount,

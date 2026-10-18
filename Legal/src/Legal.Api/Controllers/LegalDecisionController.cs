@@ -1082,6 +1082,14 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
         return updated ? NoContent() : NotFound();
     }
 
+    [HttpPut("matters/{matterId:guid}/additional-narrative")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> UpdateMatterAdditionalNarrative(Guid matterId, [FromBody] DecisionMatterAdditionalNarrativeRequest request, CancellationToken cancellationToken)
+    {
+        var updated = await service.UpdateMatterAdditionalNarrativeAsync(TenantId, ActorUserId, matterId, request.AdditionalNarrative, cancellationToken);
+        return updated ? NoContent() : NotFound();
+    }
+
     [HttpPost("matters/{matterId:guid}/status")]
     [Authorize(Policy = IntelligencePolicies.Search)]
     public async Task<IActionResult> UpdateMatterStatus(Guid matterId, [FromBody] DecisionMatterStatusUpdateRequest request, CancellationToken cancellationToken)

@@ -41,6 +41,7 @@ public interface ILegalDecisionService
     // Composes the DB-backed Candidate Full Analysis read model for one candidate (1-based rank index).
     Task<CandidateFullAnalysisDto?> GetCandidateFullAnalysisAsync(Guid tenantId, Guid decisionMatterId, int candidateIndex, CancellationToken cancellationToken = default);
     Task<bool> UpdateMatterAsync(Guid tenantId, Guid userId, Guid decisionMatterId, DecisionMatterUpdateRequest request, CancellationToken cancellationToken = default);
+    Task<bool> UpdateMatterAdditionalNarrativeAsync(Guid tenantId, Guid userId, Guid decisionMatterId, string? additionalNarrative, CancellationToken cancellationToken = default);
     Task<bool> UpdateMatterStatusAsync(Guid tenantId, Guid userId, Guid decisionMatterId, string statusCode, CancellationToken cancellationToken = default);
     Task<bool> DeleteMatterAsync(Guid tenantId, Guid userId, Guid decisionMatterId, CancellationToken cancellationToken = default);
     Task<bool> DeleteMatterAsync(Guid tenantId, Guid userId, Guid decisionMatterId, bool includeAllTenants, CancellationToken cancellationToken = default);

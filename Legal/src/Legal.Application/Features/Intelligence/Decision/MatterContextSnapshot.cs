@@ -143,6 +143,8 @@ public static class MatterContextSnapshotBuilder
             Supplied("Current Outcome", matter.CurrentOutcome),
             Supplied("Posture", matter.Posture),
             Supplied("Description", matter.Description),
+            // User-entered prompt text persisted on the matter before this execution. SUPPLIED context only.
+            Supplied("Additional Narrative (user-supplied; not verified evidence)", matter.AdditionalNarrative),
         };
 
         // Legal scope — every field kept DISTINCT. No cross-derivation.

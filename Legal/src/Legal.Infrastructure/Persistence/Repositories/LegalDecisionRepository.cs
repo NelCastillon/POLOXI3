@@ -1294,7 +1294,7 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
                 m.DecisionMatterId, m.Title, m.MatterTypeCode, m.Jurisdiction, m.Posture, m.Description, m.StatusCode,
                 m.PracticeAreaCode, m.ClaimTypeCode, m.DomainPackCode,
                 m.Subtype, m.CourtSystem, m.State, m.CourtLevel, m.County, m.GoverningLaw,
-                m.MovingParty, m.RespondingParty, m.MotionTarget, m.RequestedDisposition,
+                m.MovingParty, m.RespondingParty, m.MotionTarget, m.RequestedDisposition, m.AdditionalNarrative,
                 m.CreatedDateUtc, m.ModifiedDateUtc,
                 s.DecisionSessionId AS LatestSessionId,
                 c.DisplayName       AS CurrentOutcome,
@@ -1328,7 +1328,7 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
                 m.DecisionMatterId, m.Title, m.MatterTypeCode, m.Jurisdiction, m.Posture, m.Description, m.StatusCode,
                 m.PracticeAreaCode, m.ClaimTypeCode, m.DomainPackCode,
                 m.Subtype, m.CourtSystem, m.State, m.CourtLevel, m.County, m.GoverningLaw,
-                m.MovingParty, m.RespondingParty, m.MotionTarget, m.RequestedDisposition,
+                m.MovingParty, m.RespondingParty, m.MotionTarget, m.RequestedDisposition, m.AdditionalNarrative,
                 m.CreatedDateUtc, m.ModifiedDateUtc,
                 s.DecisionSessionId AS LatestSessionId,
                 c.DisplayName       AS CurrentOutcome,
@@ -1381,11 +1381,11 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
                 INSERT INTO POLOXI.Legal_DecisionMatter
                     (DecisionMatterId, Title, MatterTypeCode, Jurisdiction, Posture, Description, StatusCode, TenantId, CreatedByUserId,
                      PracticeAreaCode, ClaimTypeCode, DomainPackCode,
-                     Subtype, CourtSystem, State, CourtLevel, County, GoverningLaw, MovingParty, RespondingParty, MotionTarget, RequestedDisposition)
+                     Subtype, CourtSystem, State, CourtLevel, County, GoverningLaw, MovingParty, RespondingParty, MotionTarget, RequestedDisposition, AdditionalNarrative)
                 VALUES
                     (@DecisionMatterId, @Title, @MatterTypeCode, @Jurisdiction, @Posture, @Description, N'OPEN', @TenantId, @UserId,
                      @PracticeAreaCode, @ClaimTypeCode, @DomainPackCode,
-                     @Subtype, @CourtSystem, @State, @CourtLevel, @County, @GoverningLaw, @MovingParty, @RespondingParty, @MotionTarget, @RequestedDisposition);
+                     @Subtype, @CourtSystem, @State, @CourtLevel, @County, @GoverningLaw, @MovingParty, @RespondingParty, @MotionTarget, @RequestedDisposition, @AdditionalNarrative);
                 """,
                 new
                 {
@@ -1408,6 +1408,7 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
                     request.RespondingParty,
                     request.MotionTarget,
                     request.RequestedDisposition,
+                    request.AdditionalNarrative,
                     TenantId = tenantId,
                     UserId = userId == Guid.Empty ? (Guid?)null : userId
                 },
@@ -2740,6 +2741,7 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
                 RespondingParty = @RespondingParty,
                 MotionTarget = @MotionTarget,
                 RequestedDisposition = @RequestedDisposition,
+                AdditionalNarrative = @AdditionalNarrative,
                 ModifiedDateUtc = SYSUTCDATETIME(),
                 ModifiedByUserId = @UserId
             WHERE IsDeleted = 0 AND TenantId = @TenantId AND DecisionMatterId = @DecisionMatterId;
@@ -2764,6 +2766,29 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
                 request.RespondingParty,
                 request.MotionTarget,
                 request.RequestedDisposition,
+                request.AdditionalNarrative,
+                TenantId = tenantId,
+                DecisionMatterId = decisionMatterId,
+                UserId = userId == Guid.Empty ? (Guid?)null : userId
+            },
+            cancellationToken: cancellationToken));
+        return affected > 0;
+    }
+
+    public async Task<bool> UpdateMatterAdditionalNarrativeAsync(Guid tenantId, Guid userId, Guid decisionMatterId, string? additionalNarrative, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var affected = await connection.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE POLOXI.Legal_DecisionMatter
+            SET AdditionalNarrative = @AdditionalNarrative,
+                ModifiedDateUtc = SYSUTCDATETIME(),
+                ModifiedByUserId = @UserId
+            WHERE IsDeleted = 0 AND TenantId = @TenantId AND DecisionMatterId = @DecisionMatterId;
+            """,
+            new
+            {
+                AdditionalNarrative = additionalNarrative,
                 TenantId = tenantId,
                 DecisionMatterId = decisionMatterId,
                 UserId = userId == Guid.Empty ? (Guid?)null : userId
@@ -2993,6 +3018,7 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
         RespondingParty = r.RespondingParty,
         MotionTarget = r.MotionTarget,
         RequestedDisposition = r.RequestedDisposition,
+        AdditionalNarrative = r.AdditionalNarrative,
         LatestSessionId = r.LatestSessionId,
         CurrentOutcome = r.CurrentOutcome,
         DecisionStatusCode = r.DecisionStatusCode,
@@ -3806,7 +3832,7 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
         string StatusCode,
         string? PracticeAreaCode, string? ClaimTypeCode, string? DomainPackCode,
         string? Subtype, string? CourtSystem, string? State, string? CourtLevel, string? County, string? GoverningLaw,
-        string? MovingParty, string? RespondingParty, string? MotionTarget, string? RequestedDisposition,
+        string? MovingParty, string? RespondingParty, string? MotionTarget, string? RequestedDisposition, string? AdditionalNarrative,
         DateTime CreatedDateUtc, DateTime? ModifiedDateUtc, Guid? LatestSessionId, string? CurrentOutcome,
         string? DecisionStatusCode, DateTime? LastDecidedUtc, int CriticalFlipPointCount);
 

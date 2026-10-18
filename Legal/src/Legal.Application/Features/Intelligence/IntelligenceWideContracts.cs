@@ -1487,6 +1487,20 @@ public sealed record WideCandidateScore(string Name,string? Detail,bool Violates
 
 public sealed record WideCandidateBranchEvidence(string BranchDisplayName,decimal EvidenceScore);
 
+// Raw Candidate x Branch matrix response shape. Mirrors WideCandidateScore, but EvidenceScore is nullable:
+// null is the schema's permitted missing-value convention meaning "the supplied analysis, propositions,
+// evidence, contradictions, and unresolved conditions are insufficient to assess this cell". A null cell is
+// never converted into a numeric score downstream; it is withheld from the composite and recorded as
+// insufficient so no recovery re-ask, interpretive gap fill, or baseline prior can invent support for it.
+public sealed record WideCandidateAssessmentProposal(IReadOnlyCollection<WideCandidateAssessment> Candidates);
+
+public sealed record WideCandidateAssessment(string Name,string? Detail,bool ViolatesConstraint,string? ConstraintViolationReason,IReadOnlyCollection<WideCandidateBranchAssessment>? BranchScores)
+{
+    public bool IsEntityOfRequestedKind{get;init;}=true;
+}
+
+public sealed record WideCandidateBranchAssessment(string BranchDisplayName,decimal? EvidenceScore);
+
 // Persistence records.
 public sealed record WideExecutionStart(Guid TenantId,Guid UserId,string QueryText,string CorrelationId)
 {

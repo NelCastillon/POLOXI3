@@ -235,6 +235,7 @@ public sealed class AnalysisRunLedgerWriter(
             var steps = DeriveWideSteps(response);
             foreach (var step in steps)
             {
+                var stepId = Guid.NewGuid();
                 await connection.ExecuteAsync(new CommandDefinition(
                     """
                     INSERT INTO POLOXI.Legal_AnalysisRunStep
@@ -246,7 +247,7 @@ public sealed class AnalysisRunLedgerWriter(
                     """,
                     new
                     {
-                        AnalysisRunStepId = Guid.NewGuid(),
+                        AnalysisRunStepId = stepId,
                         AnalysisRunId = runId,
                         step.StepCode,
                         step.DisplayName,
@@ -259,6 +260,9 @@ public sealed class AnalysisRunLedgerWriter(
                     },
                     transaction,
                     cancellationToken: cancellationToken));
+
+                await InsertWideStepAttemptsAsync(
+                    connection, transaction, request, response, step.StepCode, stepId, cancellationToken);
             }
 
             await InsertWideInputSnapshotAsync(
@@ -817,7 +821,9 @@ public sealed class AnalysisRunLedgerWriter(
             cancellationToken: cancellationToken));
     }
 
-    // ── Wide response → execution steps. Each step's status reflects actual response content. ──
+    // ── Wide response → execution steps. Each step's status AND description reflect the actual response
+    // content of THIS run (branch counts per level, admitted evidence, candidates, termination reason), so
+    // every ledger entry carries its own recorded facts instead of a shared generic sentence. ──
     private static IReadOnlyList<DerivedStep> DeriveWideSteps(WideSearchResponse response)
     {
         var hasBranches = response.Branches.Count > 0;
@@ -825,29 +831,99 @@ public sealed class AnalysisRunLedgerWriter(
         var hasAnswer = !string.IsNullOrWhiteSpace(response.FinalAnswer);
         var hasActions = response.SuggestedActions.Count > 0;
 
+        var levelCounts = response.Branches
+            .GroupBy(b => b.LevelNumber)
+            .OrderBy(g => g.Key)
+            .Select(g => $"L{g.Key}={g.Count()}")
+            .ToArray();
+        var levelSummary = levelCounts.Length == 0 ? string.Empty : $" ({string.Join(", ", levelCounts)})";
+
+        var intakeText = Truncate(
+            $"Query and decision context registered. Query: \"{(response.Query ?? string.Empty).Trim()}\".", 600);
+
+        var discoveryText = hasBranches
+            ? Truncate($"{response.Branches.Count} branch(es) proposed across {levelCounts.Length} level(s){levelSummary}; depth reached {response.DepthReached}; {response.LlmCallCount} LLM call(s).", 600)
+            : "No candidate branches proposed.";
+
+        var evidenceText = hasEvidence
+            ? Truncate($"{response.Evidence.Count} evidence item(s) admitted; {response.ExternalKnowledge.Count} external snippet(s) retrieved; {response.InterpretiveResults.Count} interpretive result set(s).", 600)
+            : Truncate($"No evidence admitted; {response.ExternalKnowledge.Count} external snippet(s) retrieved; {response.InterpretiveResults.Count} interpretive result set(s).", 600);
+
+        var winner = response.Candidates
+            .OrderByDescending(c => c.CompositeScore)
+            .FirstOrDefault();
+        var evaluationText = hasAnswer
+            ? Truncate($"Terminated {response.TerminationReasonCode}; verification {response.AnswerVerificationCode}; confidence {response.FinalConfidence:P0}; {response.Candidates.Count} candidate(s)" +
+                       (winner is null ? "." : $"; leading: {winner.DisplayName}."), 600)
+            : Truncate($"No terminal answer reached (terminated {response.TerminationReasonCode}).", 600);
+
+        var actionsText = hasActions
+            ? Truncate($"{response.SuggestedActions.Count} suggested action(s): {string.Join("; ", response.SuggestedActions.Select(a => a.DisplayName))}.", 600)
+            : "No suggested actions.";
+
         return
         [
-            new DerivedStep(
-                "INFORMATION_INTAKE", "Information intake",
-                "Query and decision context registered.",
-                1, Status(true)),
-            new DerivedStep(
-                "DECISION_DISCOVERY", "Decision discovery",
-                "Candidate branches and hierarchy proposed.",
-                2, Status(hasBranches)),
-            new DerivedStep(
-                "EVIDENCE_VERIFICATION", "Evidence verification",
-                hasEvidence ? "Sources evaluated and anchored." : "No evidence evaluated.",
-                3, Status(hasEvidence)),
-            new DerivedStep(
-                "POLOXI_EVALUATION", "POLOXI evaluation",
-                hasAnswer ? "Candidate competition evaluated to a terminal state." : "No terminal answer reached.",
-                4, Status(hasAnswer)),
-            new DerivedStep(
-                "NEXT_BEST_ACTION", "Next best action",
-                hasActions ? "Suggested next actions produced." : "No suggested actions.",
-                5, Status(hasActions)),
+            new DerivedStep("INFORMATION_INTAKE", "Information intake", intakeText, 1, Status(true)),
+            new DerivedStep("DECISION_DISCOVERY", "Decision discovery", discoveryText, 2, Status(hasBranches)),
+            new DerivedStep("EVIDENCE_VERIFICATION", "Evidence verification", evidenceText, 3, Status(hasEvidence)),
+            new DerivedStep("POLOXI_EVALUATION", "POLOXI evaluation", evaluationText, 4, Status(hasAnswer)),
+            new DerivedStep("NEXT_BEST_ACTION", "Next best action", actionsText, 5, Status(hasActions)),
         ];
+    }
+
+    // ── Wide response → per-step attempts. Narrowing iterations are recorded under DECISION_DISCOVERY and
+    // information rounds under EVIDENCE_VERIFICATION so the ledger detail shows this run's actual rounds. ──
+    private static async Task InsertWideStepAttemptsAsync(
+        IDbConnection connection, IDbTransaction transaction,
+        WideSearchRequest request, WideSearchResponse response,
+        string stepCode, Guid stepId, CancellationToken cancellationToken)
+    {
+        var createdByUserId = (Guid?)(request.UserId == Guid.Empty ? null : request.UserId);
+        var attempts = new List<(int Number, string Status, string Summary)>();
+
+        if (string.Equals(stepCode, "DECISION_DISCOVERY", StringComparison.Ordinal))
+        {
+            foreach (var iteration in response.NarrowingIterations.OrderBy(i => i.RoundNumber))
+            {
+                attempts.Add((
+                    iteration.RoundNumber,
+                    "Completed",
+                    Truncate($"Narrowing round {iteration.RoundNumber} — {iteration.TrendCode}; active branches {iteration.ActiveBranchCountBefore}→{iteration.ActiveBranchCountAfter}; candidates {iteration.CandidateCountBefore}→{iteration.CandidateCountAfter}; entropy {iteration.NormalizedEntropyBefore:0.00}→{(iteration.NormalizedEntropyAfter is { } ea ? ea.ToString("0.00") : "n/a")}", 400)));
+            }
+        }
+        else if (string.Equals(stepCode, "EVIDENCE_VERIFICATION", StringComparison.Ordinal))
+        {
+            foreach (var round in response.InformationRounds.OrderBy(r => r.RoundNumber))
+            {
+                attempts.Add((
+                    round.RoundNumber,
+                    "Completed",
+                    Truncate($"Information round {round.RoundNumber} — {round.Targets.Count} target(s); entropy {round.NormalizedEntropyBefore:0.00}→{(round.NormalizedEntropyAfter is { } ea ? ea.ToString("0.00") : "n/a")}; gain {(round.ActualInformationGain is { } g ? g.ToString("0.000") : "n/a")}", 400)));
+            }
+        }
+
+        foreach (var attempt in attempts)
+        {
+            await connection.ExecuteAsync(new CommandDefinition(
+                """
+                INSERT INTO POLOXI.Legal_AnalysisRunStepAttempt
+                    (AnalysisRunStepAttemptId, AnalysisRunStepId, AttemptNumber, StatusCode, Summary, TenantId, CreatedByUserId)
+                VALUES
+                    (@AnalysisRunStepAttemptId, @AnalysisRunStepId, @AttemptNumber, @StatusCode, @Summary, @TenantId, @CreatedByUserId);
+                """,
+                new
+                {
+                    AnalysisRunStepAttemptId = Guid.NewGuid(),
+                    AnalysisRunStepId = stepId,
+                    AttemptNumber = attempt.Number,
+                    StatusCode = attempt.Status,
+                    Summary = attempt.Summary,
+                    request.TenantId,
+                    CreatedByUserId = createdByUserId,
+                },
+                transaction,
+                cancellationToken: cancellationToken));
+        }
     }
 
     private static string MapWideExecutionStatus(WideSearchResponse response)

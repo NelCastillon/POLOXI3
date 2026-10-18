@@ -54,9 +54,15 @@ public sealed partial class LegalDecisionService(
     // advisory-only semantic outcome-to-canonical (mappedOutcomeCodes[]) mapping instruction. V3 adds the
     // JUDZ hierarchy + graph + source-faithfulness extension governing L3 → Ln generation quality only
     // (soft MECE sibling coverage/overlap, graph relationships, atomic proposition quality, source
-    // faithfulness); Domain Pack L1/L2 ownership and all prior instructions are preserved unchanged. Used
-    // only when DiscoveryMode == DomainPack.
-    private const string DiscoveryPromptCodeDomainPack = "DECISION_DISCOVERY_DOMAIN_PACK_V3";
+    // faithfulness); Domain Pack L1/L2 ownership and all prior instructions are preserved unchanged. V4
+    // (migration 0427) removes V1's "Dimensions are coverage guidance / do not emit every dimension"
+    // wording — which contradicted the SELECTED_DOMAIN_PACK interpretation rules sent in the same
+    // payload — and binds every active Dimension to exactly one L1 root, matching the deterministic
+    // L1/L2 materialization; it also adds the FULL CONTEXT BOUNDARY / source-first / coverage sections.
+    // V5 (migration 0429, Revision 3) replaces the template with the integrated contract: explicit L1/L2
+    // ownership, per-L2 coverage contract, soft MECE, graph layers, full authorized context incl. saved
+    // Additional Narrative, and advisory-scoring boundary. Used only when DiscoveryMode == DomainPack.
+    private const string DiscoveryPromptCodeDomainPack = "DECISION_DISCOVERY_DOMAIN_PACK_V5";
     private const string AnswerPromptCode = "DECISION_ANSWER";
     private const string GraphPromptCode = "DECISION_GRAPH";
     private const string VerifyPromptCode = "DECISION_VERIFY";
@@ -457,49 +463,88 @@ public sealed partial class LegalDecisionService(
 
         return "\n\n──────── SELECTED_DOMAIN_PACK (database-backed active configuration, advisory) ────────\n"
             + snapshot
-            + "\n\nInterpretation rules for SELECTED_DOMAIN_PACK:\n"
+            + "\n\nInterpretation rules for SELECTED_DOMAIN_PACK — Domain Pack proposition generation (full context, soft MECE, graph):\n"
+            + "PRESERVE THE ORIGINAL TASK. Keep the decision-first analysis, candidate policy, advisory scoring contract, "
+            + "grounding requirements, depth limits, and output schema. OutcomeCandidates remain separate from the "
+            + "L1 \u2192 L2 \u2192 L3 \u2192 \u2026 \u2192 Ln evaluation hierarchy.\n"
+            + "HIERARCHY OWNERSHIP:\n"
             + "- This is configuration, NOT evidence about this matter. Each active Dimension IS its own L1 root: "
             + "emit exactly one L1 per Dimension (DimensionCode as the branch code), do NOT merge, consolidate, "
-            + "or drop Dimensions into fewer roots, and do not invent additional L1 roots that duplicate a Dimension. "
-            + "Below L1 the dynamic hierarchy is primary: decompose each root into L2, L3, and deeper levels "
-            + "(L1 → L2 → L3 → … → Ln) whenever a child materially changes interpretation, a candidate assessment, "
-            + "a discriminator, an evidence need, a verification obligation, a decision dependency, or a material "
-            + "uncertainty.\n"
-            + "- Preserve the supplied OutcomeCandidates' identities, names, roles, and verification requirements; "
-            + "do not remove a configured candidate because support is incomplete, and do not treat preservation "
-            + "as eligibility, support, probability, or selection.\n"
-            + "- EvidenceTypes are DEFAULT L2 children of their parent Dimension's L1 root (each EvidenceType.DimensionCode "
-            + "names the L1 root it hangs under: e.g. MEDICAL_RECORDS \u2192 L1 Injury, PHOTOS_VIDEO \u2192 L1 Liability, "
-            + "EXPERT_REPORTS \u2192 L1 Causation). Seed them as the default L2 evidence nodes under their own dimension, "
-            + "not under a single flat Evidence root. These seeds are advisory: keep them, but still attach any "
-            + "matter-specific evidence that is not in this list, and decompose each into L3+ when a child materially "
-            + "changes interpretation, verification, or a decision dependency.\n"
-            + "- Concepts are DEFAULT factor nodes under their parent Dimension's L1 root (each Concept.DimensionCode "
-            + "names the L1 root; a FACTOR-kind concept such as COMPARATIVE_FAULT under LIABILITY is an L2 scoring "
-            + "sub-issue, a sibling LAYER to the evidence L2s but a distinct ROLE: Concepts are the determining "
-            + "factors, EvidenceTypes are what proves them). Seed them as advisory factor L2s; the dynamic "
-            + "hierarchy stays primary, so still add matter-specific factors and deeper L3+ levels. A Concept is "
-            + "never an OutcomeCandidate.\n"
-            + "- Relations are dependency EDGES, not tree nodes: SourceConceptCode \u2192 TargetConceptCode with "
-            + "RelationTypeCode wire a factor to the evidence/other factor it depends on (e.g. COMPARATIVE_FAULT "
-            + "REQUIRES FAULT_EVIDENCE). Use them to connect the L1/L2 nodes and drive which evidence a factor "
-            + "needs; do not place them at any level.\n"
-            + "- VerificationProfiles are node METADATA, not a level: each ProfileCode keyed by EvidenceTypeCode "
-            + "(or a Concept's VerificationProfileCode) is the verification obligation/requirement attached to that "
-            + "evidence or factor node, not a sibling node.\n"
-            + "- ResolvedMatterTypeCode is the RUN SCOPE selector (above the tree): it scopes which OutcomeCandidates "
-            + "and configuration apply for this matter; it is not a hierarchy node.\n"
-            + "- Any numeric support values required by the original schema are advisory model proposals. POLOXI "
-            + "Core owns their authoritative interpretation, aggregation, competition, and runtime state.\n"
-            + "- L3+ MATERIALITY GATE (deeper levels are LLM-generated, not DB-seeded): create a child L(n+1) ONLY "
-            + "when it materially changes at least one of \u2014 an interpretation, a candidate assessment, a "
-            + "discriminator between candidates, an evidence need, a verification obligation, a decision "
-            + "dependency, or a material uncertainty. If a proposed child does none of these, do NOT add it: "
-            + "fold it into its parent instead. Prefer the shallowest tree that still captures every material "
-            + "distinction \u2014 depth and breadth are costs, not goals. Do not restate a parent, split a node merely "
-            + "for symmetry, mirror the same sub-structure under unrelated branches, or expand a branch that the "
-            + "matter facts do not activate. Every node must be reconstructable from its parent plus the matter "
-            + "facts so the same matter yields a stable hierarchy.\n"
+            + "rename, reparent, or drop Dimensions into fewer roots, and do not invent additional L1 roots that duplicate a Dimension.\n"
+            + "- L2 nodes are supplied by the Domain Pack and sit under their own Dimension's L1 root (Evidence/Concept.DimensionCode "
+            + "names the parent; e.g. MEDICAL_RECORDS \u2192 L1 Injury, EXPERT_REPORTS \u2192 L1 Causation). Two L2 roles are siblings: "
+            + "EvidenceTypes (what proves a factor) and Concepts (FACTOR-kind determining sub-issues such as COMPARATIVE_FAULT under "
+            + "LIABILITY). Preserve their exact codes, names, definitions, and parent links; never place them under a single flat Evidence "
+            + "root. A Concept is never an OutcomeCandidate. An EvidenceType definition guides investigation; it does not establish that a "
+            + "corresponding evidence item exists or that its contents are known.\n"
+            + "- Generate only matter-specific L3 \u2192 Ln proposition proposals beneath the assigned L2 nodes. L3 is not necessarily the final "
+            + "atomic level; decompose further only where materially useful and within the configured depth envelope.\n"
+            + "- Relations are dependency EDGES, not tree nodes: SourceConceptCode \u2192 TargetConceptCode with RelationTypeCode wires a factor to "
+            + "the evidence/other factor it depends on (e.g. COMPARATIVE_FAULT REQUIRES FAULT_EVIDENCE). Use them to connect L1/L2 nodes and "
+            + "drive which evidence a factor needs; do not place them at any level.\n"
+            + "- VerificationProfiles are node METADATA, not a level: each ProfileCode keyed by EvidenceTypeCode (or a Concept's "
+            + "VerificationProfileCode) is the verification obligation attached to that node, not a sibling node.\n"
+            + "- ResolvedMatterTypeCode is the RUN SCOPE selector (above the tree): it scopes which OutcomeCandidates and configuration "
+            + "apply for this matter; it is not a hierarchy node.\n"
+            + "- Preserve the supplied OutcomeCandidates' identities, names, roles, and verification requirements; do not remove a configured "
+            + "candidate because support is incomplete, and do not treat preservation as eligibility, support, probability, or selection.\n"
+            + "FULL CONTEXT BOUNDARY: consider ALL authorized context supplied to this execution \u2014 the decision request, objectives, "
+            + "jurisdiction and procedural posture; matter description, narrative and incident information; the user-supplied Additional Narrative "
+            + "saved on the matter for this execution (SUPPLIED context, not verified evidence); every practice-area profile and "
+            + "profile section; intake responses, custom fields and structured values; parties, participants, roles and relationships; dates, "
+            + "chronology, treatment, expenses, coverage and related records; lifecycle stage, events, milestones and constraints; documents and "
+            + "retrieved passages; correspondence, notes and attributed witness accounts; supplied media observations and machine-data records; "
+            + "supplied legal-authority passages and verification metadata; attorney propositions, interpretations, corrections and review "
+            + "decisions; prior assessment information when explicitly supplied. Do not assume access to information omitted from this "
+            + "execution, and do not treat missing input as proof that the underlying information does not exist. Preserve each input's origin, "
+            + "author/source, version, relevant date, and verification status where available. Profile fields and matter descriptions are usable "
+            + "sources of supplied information; they are not automatically independently verified evidence.\n"
+            + "SOURCE-FIRST, BRANCH-DIRECTED GENERATION. For each assigned L2: (1) interpret its definition in the context of the current "
+            + "decision; (2) inspect relevant supplied context across profiles, descriptions, structured fields, related records and source "
+            + "material; (3) propose independently assessable statements supported by that context; (4) identify unresolved material conditions "
+            + "requiring further information; (5) include contrary interpretations and information where material; (6) propose the appropriate "
+            + "L3 \u2192 Ln decomposition within the depth limit. Do not restrict extraction to documents. Do not infer document contents from a "
+            + "profile's reference to that document. Do not invent assertions merely to populate every L2.\n"
+            + "ATOMICITY: each proposition expresses one independently assessable assertion. Preserve actors, timing, scope, attribution, "
+            + "negation, uncertainty, conditions and material qualifiers. Separate supplied allegations, attributed statements, observations, "
+            + "factual inferences, expert opinions, and legal interpretations. Example: a profile field stating \"incident report supports "
+            + "claimant\" supports the proposition that the supplied profile makes that assertion; it does not establish what the report says "
+            + "or that liability is proven.\n"
+            + "L3+ MATERIALITY GATE (deeper levels are LLM-generated, not DB-seeded): create a child L(n+1) ONLY when it materially changes "
+            + "at least one of \u2014 an interpretation, a candidate assessment, a discriminator between candidates, an evidence need, a "
+            + "verification obligation, a decision dependency, or a material uncertainty. Otherwise fold it into its parent. Prefer the "
+            + "shallowest tree that captures every material distinction; depth and breadth are costs, not goals. Do not restate a parent, split "
+            + "a node merely for symmetry, mirror the same sub-structure under unrelated branches, or expand a branch the matter facts do not "
+            + "activate. Every node must be reconstructable from its parent plus the matter facts so the same matter yields a stable hierarchy.\n"
+            + "SOFT MECE within each generated sibling group: identify semantic duplicates; separate materially different assertions; check for "
+            + "missing material conditions; retain relevant exceptions and contrary interpretations; avoid unnecessary overlap. Merge true "
+            + "duplicates while preserving provenance; do not merge statements with materially different attribution, timing, scope, conditions "
+            + "or meaning. Retain legitimate overlap; do not force legal propositions into artificial mutual exclusivity, and do not claim "
+            + "exhaustive coverage beyond the supplied information boundary.\n"
+            + "GRAPH RELATIONSHIPS: preserve hierarchy placement (one primary parent per node) and propose only schema-supported links using the "
+            + "configured relation types. Identify materially useful supporting/contradicting source relationships, dependencies and essential "
+            + "prerequisites, alternative routes where justified, exceptions and qualifications, contradictions between propositions, and "
+            + "candidate-specific relevance with direction of effect. Explain each proposed relationship; semantic similarity alone does not "
+            + "establish support, dependency, or causation. Keep decomposition and prerequisite relationships acyclic and represent contradictions "
+            + "separately from decomposition. Do not multiply support because one proposition appears through several branches or because the "
+            + "same information appears in multiple records.\n"
+            + "SOURCE-FAITHFULNESS CHECK for every material proposition: does the referenced input support its exact meaning; is attribution "
+            + "preserved; are entities, dates, scope and qualifiers correct; has an unsupported causal or legal conclusion been added; is the "
+            + "available context sufficient; are contrary inputs or conflicting versions present? Use supplied source IDs and exact anchors; for "
+            + "structured values reference the record, field and version where available; for narrative input reference its supplied section or "
+            + "passage identifier. Never invent missing identifiers or anchors. If support is partial, narrow the proposition or expose the "
+            + "limitation; if support is unavailable, preserve a material unresolved condition rather than asserting it as fact. A source-faithful "
+            + "extraction does not prove the underlying assertion true, and attorney acceptance of an interpretation does not establish external fact.\n"
+            + "ADVISORY SCORING: any numeric support values required by the original schema are advisory model proposals. POLOXI Core owns "
+            + "their authoritative interpretation, aggregation, competition, and runtime state. Explain material scores using supporting inputs, "
+            + "contrary inputs, limitations and unresolved dependencies. Do not treat profile completeness, citation count, or repeated "
+            + "information as independent evidentiary strength. Distinguish a proposition's evidentiary assessment from its relevance and "
+            + "direction for each candidate. Do not mechanically average descendants or perform authoritative LPI propagation.\n"
+            + "COVERAGE AND OUTPUT: return an explicit result for every assigned L2 using existing permitted structures, distinguishing "
+            + "processing completed with proposition proposals; completed with unresolved information needs; applicability unresolved; not "
+            + "applicable with an explained basis; and processing incomplete or failed. Do not equate an empty result with non-applicability, and "
+            + "do not equate completed processing with complete evidence. Use only configured fields, IDs, and relation types; expose material "
+            + "representation gaps through existing permitted structures; return only JSON conforming to the original output schema.\n"
             + "- IsHardConstraint describes a configured dependency for validation and engine evaluation. It is "
             + "NOT a conclusion that a candidate is excluded; do not exclude or eliminate a candidate from it.";
     }
@@ -655,6 +700,12 @@ public sealed partial class LegalDecisionService(
 
     public Task<bool> UpdateMatterAsync(Guid tenantId, Guid userId, Guid decisionMatterId, DecisionMatterUpdateRequest request, CancellationToken cancellationToken = default)
         => repository.UpdateMatterAsync(tenantId, userId, decisionMatterId, request, cancellationToken);
+
+    public Task<bool> UpdateMatterAdditionalNarrativeAsync(Guid tenantId, Guid userId, Guid decisionMatterId, string? additionalNarrative, CancellationToken cancellationToken = default)
+    {
+        var normalized = string.IsNullOrWhiteSpace(additionalNarrative) ? null : additionalNarrative.Trim();
+        return repository.UpdateMatterAdditionalNarrativeAsync(tenantId, userId, decisionMatterId, normalized, cancellationToken);
+    }
 
     public Task<bool> UpdateMatterStatusAsync(Guid tenantId, Guid userId, Guid decisionMatterId, string statusCode, CancellationToken cancellationToken = default)
     {

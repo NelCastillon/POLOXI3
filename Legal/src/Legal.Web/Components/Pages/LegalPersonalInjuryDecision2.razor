@@ -61,10 +61,44 @@
             <div class="dfi-console-body">
                 <div class="dfi-matter-head">
                     <div>
-                        <h2 class="dfi-matter-title">@DfiMatterTitle</h2>
+                        <h2 class="dfi-matter-title">@DfiMatterTitle@(_savedRun is { } sr ? $" · Run {sr.RunLabel}" : null)</h2>
                         <p class="dfi-matter-sub">@DfiMatterSubtitle</p>
+                        @if (_savedRun is { } run)
+                        {
+                            <div class="dfi-run-summary">
+                                @if (run.QualityScore is { } q)
+                                {
+                                    <div class="dfi-run-quality">
+                                        <span class="dfi-run-badge dfi-run-badge--@q.GradeTone">
+                                            <span class="dfi-run-grade">@q.Grade</span>
+                                            <span class="dfi-run-score">@q.Score</span>
+                                        </span>
+                                        <span class="dfi-run-headline">@q.Headline</span>
+                                    </div>
+                                }
+                                <div class="dfi-run-meta">
+                                    @run.RequestedUtc.ToLocalTime().ToString("MMM d, h:mm tt")
+                                    @if (run.DurationSeconds is int secs)
+                                    {
+                                        <span> · @SavedRunDurationText(secs)</span>
+                                    }
+                                    <span> · @SavedRunPublishStateText(run)</span>
+                                </div>
+                            </div>
+                        }
                     </div>
-                    <span class="dfi-pill dfi-pill-@(DfiReviewRequired ? "warn" : "ok")">@(DfiReviewRequired ? "Review required" : "Decision ready")</span>
+                    <div class="d-flex align-items-center gap-2 flex-wrap">
+                        @if (EffectiveMatterId is { } backMatterId && backMatterId != Guid.Empty)
+                        {
+                            <a class="um-btn um-btn-secondary um-btn-sm" href="@($"/legal/matters/{backMatterId}")" title="Back to Matter">
+                                <i class="bi bi-arrow-left"></i> Back to Matter
+                            </a>
+                            <a class="um-btn um-btn-secondary um-btn-sm" href="@($"/legal/matters/{backMatterId}?view=history")" title="Back to Run History & Assessment">
+                                <i class="bi bi-clock-history"></i> Back to History
+                            </a>
+                        }
+                        <span class="dfi-pill dfi-pill-@(DfiReviewRequired ? "warn" : "ok")">@(DfiReviewRequired ? "Review required" : "Decision ready")</span>
+                    </div>
                 </div>
                 <div class="dfi-tag-row">
                     @if (!string.IsNullOrWhiteSpace(DfiJurisdictionTag))
@@ -3233,7 +3267,8 @@
             {
                 var nodes = branches
                     .Where(b => b.LevelNumber == level)
-                    .OrderBy(b => b.SortOrder)
+                    .OrderByDescending(b => b.Confidence)
+                    .ThenBy(b => b.SortOrder)
                     .Select(ToNode)
                     .ToList();
                 if (nodes.Count == 0)
@@ -7452,12 +7487,21 @@
     // rather than appearing to compete with them. When no canonical mapping exists the card falls back to the
     // shared classifier role so a pure-LLM outcome still gets a sensible, non-fabricated subtitle. Fail-soft:
     // a blank display name yields the default prospective, assessment-pending subtitle.
-    private OvLifecycle OvLifecycleFor(string displayName)
+    // Assessment state of a prospective pathway, derived ONLY from persisted run values on the candidate.
+    internal enum OvAssessmentState { Pending, Assessed, Leading, RuledOut }
+
+    private OvLifecycle OvLifecycleFor(string displayName, OvAssessmentState state = OvAssessmentState.Pending)
     {
-        var defaultLifecycle = new OvLifecycle("Prospective pathway · Assessment pending", "info", false);
+        var prospective = state switch
+        {
+            OvAssessmentState.Leading => new OvLifecycle("Prospective pathway · Leading", "ok", false),
+            OvAssessmentState.Assessed => new OvLifecycle("Prospective pathway · Assessed", "info", false),
+            OvAssessmentState.RuledOut => new OvLifecycle("Prospective pathway · Ruled out", "danger", false),
+            _ => new OvLifecycle("Prospective pathway · Assessment pending", "info", false),
+        };
         var match = OvCandidateMatch(displayName);
         var mapped = match?.MappedOutcomes;
-        if (mapped is null || mapped.Count == 0) return defaultLifecycle;
+        if (mapped is null || mapped.Count == 0) return prospective;
         // A single mapped outcome whose authoritative role is historical/asserted OR that requires
         // verification is a "Historical status" card. If ANY mapped outcome is historical, the card is
         // treated as historical (verify-first) so a recorded status never masquerades as a live competitor.
@@ -7466,7 +7510,17 @@
             || string.Equals(m.RoleCode, "ASSERTED_HISTORICAL", StringComparison.OrdinalIgnoreCase));
         return isHistorical
             ? new OvLifecycle("Historical status — verification required", "warn", true)
-            : defaultLifecycle;
+            : prospective;
+    }
+
+    // Pending when the Candidate × Branch competition produced no scores for this candidate; otherwise
+    // Ruled out (constraint violation), Leading (rank #1), or Assessed.
+    private static OvAssessmentState OvAssessmentStateFor(WideCandidateDto c, bool isLeader)
+    {
+        if (c.IsConstraintViolation) return OvAssessmentState.RuledOut;
+        var scored = c.BranchScores.Count > 0 && (c.CompositeScore > 0m || c.BranchScores.Any(s => s.EvidenceScore > 0m));
+        if (!scored) return OvAssessmentState.Pending;
+        return isLeader ? OvAssessmentState.Leading : OvAssessmentState.Assessed;
     }
 
     // Resolves the deep, long-form candidate-landscape analysis for a candidate display name, composed in
@@ -7681,7 +7735,7 @@
                     c.EstimatedResolutionLabel,
                     c.EstimatedCostBand,
                     c.BranchScores.Take(8).ToArray())
-                    { Narrative = OvNarrativeFor(c.DisplayName), FullNarrative = OvFullNarrativeFor(c.DisplayName), EvidenceCoverage = c.EvidenceCoverage, MappedOutcomes = OvMappedOutcomesFor(c.DisplayName), Lifecycle = OvLifecycleFor(c.DisplayName) });
+                    { Narrative = OvNarrativeFor(c.DisplayName), FullNarrative = OvFullNarrativeFor(c.DisplayName), EvidenceCoverage = c.EvidenceCoverage, MappedOutcomes = OvMappedOutcomesFor(c.DisplayName), Lifecycle = OvLifecycleFor(c.DisplayName, OvAssessmentStateFor(c, i == 0 && hasCredibleSupport)) });
             }
             return outcomes;
         }
@@ -8821,6 +8875,72 @@
         return "Interpretive reasoning path with limited support; less likely to change the current ranking.";
     }
 
+    private Guid? _loadedRunId;
+    private Legal.Application.Features.Intelligence.RunManagement.AnalysisRunDto? _savedRun;
+
+    private static string SavedRunPublishStateText(Legal.Application.Features.Intelligence.RunManagement.AnalysisRunDto run) => run.PublicationStatusCode switch
+    {
+        "Published" => "Published",
+        "Stale" => "Stale",
+        "Historical" => "Historical",
+        "NotPublished" => "Not published",
+        _ => run.PublicationStatusCode
+    };
+
+    private static string SavedRunDurationText(int seconds)
+    {
+        if (seconds < 60)
+            return $"{seconds} sec";
+        var span = TimeSpan.FromSeconds(seconds);
+        return span.Seconds == 0 ? $"{span.Minutes} min" : $"{span.Minutes} min {span.Seconds:00} sec";
+    }
+
+    private async Task LoadSavedRunAsync(Guid savedRunId)
+    {
+        _savedRunError = null;
+        _savedRun = null;
+        _loadedRunId = savedRunId;
+        try
+        {
+            var saved = await Api.GetSavedWideResultAsync(savedRunId);
+            if (saved is not null)
+                _response = saved;
+            else
+                _savedRunError = "This run has no saved Decision2 results to display.";
+        }
+        catch (Exception ex)
+        {
+            _savedRunError = $"Unable to load saved results: {ex.Message}";
+        }
+
+        // Resolve the ledger run (label, quality, timing) for the header; fail-soft so a ledger outage never hides the run.
+        if (EffectiveMatterId is { } matterId && matterId != Guid.Empty)
+        {
+            try
+            {
+                var page = await Api.GetLegalRunAssessmentPageAsync(matterId);
+                _savedRun = page?.Runs.FirstOrDefault(r => r.AnalysisRunId == savedRunId);
+            }
+            catch (Exception)
+            {
+                _savedRun = null;
+            }
+        }
+    }
+
+    // Run History lives inside this page, so selecting another run only changes the ?runId query string and
+    // OnInitializedAsync does not re-run. Detect the runId change here and rehydrate that run's saved result.
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_initializing)
+            return;
+        if (RunId is { } runId && runId != Guid.Empty && runId != _loadedRunId)
+        {
+            await LoadSavedRunAsync(runId);
+            StateHasChanged();
+        }
+    }
+
     protected override async Task OnInitializedAsync()
     {
         Breadcrumbs.SetCrumbs(new("Home", "/"), new("Intelligence", "/intelligence"), new("Personal Injury Decision 2", "/legal/personalinjury_decision2"));
@@ -8863,22 +8983,11 @@
             // instead of a blank page. The cache is circuit-scoped working memory.
             _response = OverviewState.TryGet(matterId);
 
-            // Analysis History "View Decision2 results": rehydrate the full saved Wide run read-only.
-            if (IsSavedRunView && RunId is { } savedRunId)
-            {
-                try
-                {
-                    var saved = await Api.GetSavedWideResultAsync(savedRunId);
-                    if (saved is not null)
-                        _response = saved;
-                    else
-                        _savedRunError = "This run has no saved Decision2 results to display.";
-                }
-                catch (Exception ex)
-                {
-                    _savedRunError = $"Unable to load saved results: {ex.Message}";
-                }
-            }
+            // Analysis History "View Decision2 results" / "Open saved cockpit": rehydrate the selected run's
+            // persisted Wide result whenever a runId is supplied (not only in read-only mode); otherwise the
+            // circuit-scoped Overview cache would show whichever run was viewed last instead of the selected run.
+            if (RunId is { } savedRunId && savedRunId != Guid.Empty)
+                await LoadSavedRunAsync(savedRunId);
             try
             {
                 // Matter, documents and calibration are all keyed only on matterId (not on each other),
@@ -9043,6 +9152,32 @@
         }
     }
 
+    // Saves the submitted prompt onto the matter as Additional Narrative. Must complete BEFORE the LLM
+    // pipeline is invoked. Returns false (and surfaces the error) when the save fails so the run does not
+    // proceed with stale/absent narrative context. No-op for matter-less searches.
+    private async Task<bool> SaveAdditionalNarrativeAsync(CancellationToken cancellationToken)
+    {
+        if (MatterId is not { } matterId || matterId == Guid.Empty) return true;
+        var narrative = _query.Trim();
+        try
+        {
+            await Api.UpdateLegalDecisionMatterAdditionalNarrativeAsync(matterId, narrative, cancellationToken);
+            if (_matter is not null) _matter = _matter with { AdditionalNarrative = narrative };
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            _loading = false;
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _error = $"Could not save Additional Narrative to the matter before execution: {ex.Message}";
+            _loading = false;
+            return false;
+        }
+    }
+
     private async Task SearchAsync()
     {
         if (string.IsNullOrWhiteSpace(_query) || _query.Trim().Length < 2) return;
@@ -9067,6 +9202,9 @@
         // selected for this answer. Enrichment + CDC were deferred at upload; run them just-in-time so
         // the answer reasons over a fully activated corpus. Fail-soft: activation must not block the answer.
         await ActivateMatterCorpusForAnswerAsync();
+        // Persist the user's prompt as the matter's Additional Narrative BEFORE any LLM prompt executes, so
+        // the server-side Matter Context Snapshot carries it into every authorized-context consumer.
+        if (!await SaveAdditionalNarrativeAsync(_searchCancellation.Token)) return;
         try
         {
             _response = await Api.IntelligentSearchWide2DynamicAsync(new(Guid.Empty, Guid.Empty, _query.Trim(), 50, correlationId) { UsePoloxiEngine = _usePoloxiEngine, UseDomainPack = _useDomainPack, ModelCode = _selectedModelCode, ForceRequestedModelAllStages = !string.IsNullOrWhiteSpace(_selectedModelCode), ContextCode = _selectedContextCode, MatterId = MatterId }, _searchCancellation.Token);
@@ -9273,6 +9411,7 @@
         _searchCancellation = new CancellationTokenSource();
         var correlationId = Guid.NewGuid().ToString("N");
         await StartLiveProgressAsync(correlationId);
+        if (!await SaveAdditionalNarrativeAsync(_searchCancellation.Token)) return;
         try
         {
             _response = await Api.IntelligentSearchWide2DynamicAsync(new(Guid.Empty, Guid.Empty, _query.Trim(), 50, correlationId) { UsePoloxiEngine = _usePoloxiEngine, UseDomainPack = _useDomainPack, ClarificationAnswer = answer.Trim(), ClarificationTarget = target, ClarificationRound = round, PriorIntentEntropy = priorIntentEntropy, OriginalAnswerKind = originalAnswerKind, ParentWideExecutionId = parentExecutionId, ModelCode = _selectedModelCode, ForceRequestedModelAllStages = !string.IsNullOrWhiteSpace(_selectedModelCode), ContextCode = _selectedContextCode, MatterId = MatterId }, _searchCancellation.Token);

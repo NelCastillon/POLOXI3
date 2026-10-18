@@ -590,7 +590,7 @@ WHERE Rn=1 ORDER BY AnswerKindCode;
         var answerKinds=(await multi.ReadAsync<WideAnswerKindRow>())
             .Select(kind=>new WideAnswerKindDefinition(kind.AnswerKindCode.Trim().ToUpperInvariant(),Math.Clamp(kind.DepthCeiling,0,100),kind.MaxInformationRounds is{}rounds?Math.Clamp(rounds,0,10):null,kind.RunsCandidateCompetition))
             .ToArray();
-        return new(Math.Clamp(row.TargetConfidence,0,1),Math.Clamp(row.MinimumBranchConfidence,0,1),Math.Clamp(row.MaximumBranchesPerLevel,1,12),Math.Clamp(row.AbsoluteDepthCeiling,1,100),Math.Clamp(row.MaximumTotalLlmCalls,1,200))
+        return new(Math.Clamp(row.TargetConfidence,0,1),Math.Clamp(row.MinimumBranchConfidence,0,1),Math.Clamp(row.MaximumBranchesPerLevel,1,12),Math.Clamp(row.AbsoluteDepthCeiling,1,100),Math.Clamp(row.MaximumTotalLlmCalls,1,600))
         {
             SecondaryBranchThreshold=Math.Clamp(row.SecondaryBranchThreshold,0,1),
             DormantBranchThreshold=Math.Clamp(row.DormantBranchThreshold,0,1),

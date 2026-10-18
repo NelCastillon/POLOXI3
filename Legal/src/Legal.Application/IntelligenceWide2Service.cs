@@ -39,6 +39,12 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     private const int WideUserPromptBudget=48000;
     /// <summary>Soft budget for the SELECTED DOMAIN PACK context block. Exceeding it logs a warning; the block is never truncated mid-JSON.</summary>
     private const int DomainPackPromptBudgetChars=24000;
+    /// <summary>Budget for the query-contract + matter-snapshot prefix of the contract context. The Domain Pack block that follows it is never cut.</summary>
+    private const int ContractContextPrefixBudgetChars=9500;
+    /// <summary>Answer-stage budget for the SELECTED DOMAIN PACK block. The hierarchy stages consume the pack whole; final synthesis only needs a bounded excerpt so the interpretive paths are never displaced.</summary>
+    private const int AnswerDomainPackBudgetChars=6000;
+    /// <summary>Marker that opens the SELECTED DOMAIN PACK block inside the matter context; everything from here on is configuration that must reach the model intact.</summary>
+    internal const string DomainPackBlockMarker="──────── SELECTED DOMAIN PACK (configuration, not evidence; dynamic hierarchy is primary) ────────";
     // Safe ceiling for the combined system+user prompt sent to a governed AI call. It sits below the
     // configured Intelligence.Safety.MaximumInputCharacters guard (raised to 60000 in migration 0194)
     // with headroom so the large Wide answer system prompt plus the clamped user prompt never trips
@@ -921,11 +927,24 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 }
                 else
                 {
-                    var proposal=await ProposeNextLevelAsync(request,narrowingParents,capabilities,configuration,depth+1,evidence,queryContract,cancellationToken);
-                    llmCalls++;
-                    nextLevel=MaterializeBranches(proposal.Branches,executionId,request.TenantId,depth+1,parentsByCode,configuration);
+                    // Per-parent proposal: a single hierarchy-step call over ALL surviving parents is bounded
+                    // by the parent-summary budget (3000 chars ≈ 15 parents). Domain Pack L2 routinely has 100+
+                    // parents, so the model never saw most of them and they received no atomic propositions
+                    // (L3 count of 9 under 128 L2 factors). Decompose each parent with its own focused call so
+                    // every L2 factor is guaranteed matter-specific atomic children. The LLM-call ceiling still
+                    // bounds the pass, and the sibling-coverage pass below backfills any parent still skipped.
+                    var batches=BuildHierarchyParentBatches(narrowingParents,allBranches);
+                    var batchedChildren=new List<WideBranchRecord>();
+                    foreach(var batch in batches)
+                    {
+                        if(batchedChildren.Count>0&&llmCalls+2>configuration.MaximumTotalLlmCalls)break;
+                        var proposal=await ProposeNextLevelAsync(request,batch,capabilities,configuration,depth+1,evidence,queryContract,cancellationToken);
+                        llmCalls++;
+                        batchedChildren.AddRange(MaterializeBranches(proposal.Branches,executionId,request.TenantId,depth+1,parentsByCode,configuration));
+                    }
+                    nextLevel=batchedChildren.ToArray();
                 }
-                // Degenerate-progress guard AND global BranchCode-uniqueness guard. Excluding only the
+                // Degenerate-progress guard
                 // immediately-preceding level's codes is not enough: the model can re-emit a code that
                 // already exists at a NON-adjacent earlier level (e.g. "WAGE_LOSS_CLAIMED" generated at L1
                 // reappearing at L3). Because survivors accumulate across ALL levels, such a cross-level
@@ -992,6 +1011,15 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                         completionChildren.AddRange(focusedChildren);
                     }
                     if(completionChildren.Count>0)nextLevel=nextLevel.Concat(completionChildren).ToArray();
+                }
+                // Parent-resolution guard (applied AFTER sibling coverage so it never starves depth): a child
+                // whose parentBranchCode matched no surviving parent would persist as a root at Depth>1 and fail
+                // the hierarchy-execution consistency validator. Drop only those; never empty a non-empty level.
+                var attachedChildren=nextLevel.Where(branch=>branch.ParentWideBranchId is not null).ToArray();
+                if(attachedChildren.Length>0&&attachedChildren.Length<nextLevel.Length)
+                {
+                    logger.LogInformation("Wide2 level {Level}: dropped {Dropped} proposed branch(es) with unresolved parent codes.",depth+1,nextLevel.Length-attachedChildren.Length);
+                    nextLevel=attachedChildren;
                 }
                 await wideRepository.SaveWideBranchesAsync(nextLevel,request.UserId,cancellationToken);
                 allBranches.AddRange(nextLevel);
@@ -2848,11 +2876,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     private async Task<WideLevelProposal> ProposeNextLevelAsync(WideSearchRequest request,IReadOnlyCollection<WideBranchRecord> parents,IReadOnlyCollection<PoloxiCapabilityDto> capabilities,WideConfiguration configuration,int levelNumber,List<PoloxiEvidenceDto> evidence,WideQueryContract? queryContract,CancellationToken cancellationToken,string? atomicDecompositionDirective=null)
     {
         var catalog=BuildCatalog(capabilities);
-        var parentSummary=string.Join('\n',parents.Select(parent=>
-        {
-            var samples=evidence.Where(item=>item.HierarchyBranchId==parent.WideBranchId).Take(3).Select(item=>item.Title);
-            return $"- {parent.BranchCode} \"{parent.DisplayName}\" ({parent.GroundingStatusCode}, evidence: {parent.EvidenceCount}, confidence: {parent.Confidence:P0}): {parent.Interpretation}{(parent.EvidenceCount>0?$" | sample evidence: {string.Join("; ",samples)}":string.Empty)}";
-        }));
+        var parentSummary=string.Join('\n',parents.Select(parent=>BuildHierarchyParentLine(parent,evidence)));
         var contractContext=(queryContract is null?string.Empty:$"\n{BuildQueryContractContext(queryContract)}")+BuildMatterContextSection();
         var userPrompt=BuildHierarchyUserPrompt(request.Query,contractContext,parentSummary,catalog,levelNumber,configuration.MaximumBranchesPerLevel,atomicDecompositionDirective);
         var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_HIERARCHY_STEP",
@@ -2862,9 +2886,79 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         return JsonSerializer.Deserialize<WideLevelProposal>(result.Content,JsonOptions)??throw new ValidationException("The Wide hierarchy step response was empty.");
     }
 
+    private static string BuildHierarchyParentLine(WideBranchRecord parent,List<PoloxiEvidenceDto> evidence)
+    {
+        var samples=evidence.Where(item=>item.HierarchyBranchId==parent.WideBranchId).Take(3).Select(item=>item.Title);
+        return $"- {parent.BranchCode} \"{parent.DisplayName}\" ({parent.GroundingStatusCode}, evidence: {parent.EvidenceCount}, confidence: {parent.Confidence:P0}): {parent.Interpretation}{(parent.EvidenceCount>0?$" | sample evidence: {string.Join("; ",samples)}":string.Empty)}";
+    }
+
+    // One focused hierarchy-step call per surviving parent, so every parent is decomposed with the
+    // model's full attention and is guaranteed its own atomic children (no parent can be cut off by the
+    // parent-summary budget or starved by siblings in a shared prompt). The LLM-call ceiling bounds the
+    // pass; any parent it cannot reach is picked up by the sibling-coverage backfill on the next ceiling
+    // headroom. Order follows SortOrder so dimension siblings are decomposed consecutively.
+    internal static IReadOnlyList<WideBranchRecord[]> BuildHierarchyParentBatches(IReadOnlyCollection<WideBranchRecord> parents,IReadOnlyCollection<WideBranchRecord> allBranches)
+    {
+        if(parents.Count==0)return [];
+        return parents.OrderBy(parent=>parent.SortOrder).Select(parent=>new[]{parent}).ToArray();
+    }
+
+    // Bounds the contract context WITHOUT ever cutting the SELECTED DOMAIN PACK block. Only the prefix
+    // (query contract + matter snapshot) is truncated; the pack configuration and its interpretation
+    // rules are appended whole. A plain Truncate(contractContext, N) cut the rules off the tail of every
+    // L3+ hierarchy prompt because the pack block is appended AFTER the matter snapshot.
+    internal static string BoundContractContext(string contractContext,int prefixBudget)
+    {
+        if(string.IsNullOrEmpty(contractContext))return string.Empty;
+        var markerIndex=contractContext.IndexOf(DomainPackBlockMarker,StringComparison.Ordinal);
+        if(markerIndex<0)return Truncate(contractContext,prefixBudget)!;
+        var prefix=contractContext[..markerIndex];
+        var packBlock=contractContext[markerIndex..];
+        return (Truncate(prefix,prefixBudget)??string.Empty)+packBlock;
+    }
+
+    /// <summary>
+    /// Selects up to <paramref name="cap"/> interpretive branches with guaranteed representation per hierarchy level.
+    /// Input is already ordered level-ascending then confidence-descending; a plain Take(cap) lets one wide level
+    /// (e.g. 28 L1 dimensions) consume the whole cap, silently dropping every L2/L3 path from interpretiveResults.
+    /// Round-robin across levels (highest confidence first within each level) keeps all levels present, then
+    /// the result is re-sorted level-ascending so numbering remains stable for the answer model.
+    /// </summary>
+    internal static WideBranchRecord[] SelectLevelBalancedInterpretiveBranches(WideBranchRecord[] ordered,int cap)
+    {
+        if(cap<=0||ordered.Length==0)return [];
+        if(ordered.Length<=cap)return ordered;
+        var queues=ordered.GroupBy(branch=>branch.LevelNumber).OrderBy(group=>group.Key).Select(group=>new Queue<WideBranchRecord>(group.OrderByDescending(branch=>branch.Confidence))).ToList();
+        var selected=new List<WideBranchRecord>(cap);
+        while(selected.Count<cap&&queues.Count>0)
+        {
+            foreach(var queue in queues.ToArray())
+            {
+                if(selected.Count>=cap)break;
+                selected.Add(queue.Dequeue());
+                if(queue.Count==0)queues.Remove(queue);
+            }
+        }
+        return selected.OrderBy(branch=>branch.LevelNumber).ThenByDescending(branch=>branch.Confidence).ToArray();
+    }
+
+    // Answer-stage variant: the pack block is bounded to packBudget (0 drops it entirely) because the final
+    // synthesis prompt must keep room for the numbered interpretive paths. Hierarchy stages keep the
+    // two-argument overload so the pack always reaches them intact.
+    internal static string BoundContractContext(string contractContext,int prefixBudget,int packBudget)
+    {
+        if(string.IsNullOrEmpty(contractContext))return string.Empty;
+        var markerIndex=contractContext.IndexOf(DomainPackBlockMarker,StringComparison.Ordinal);
+        if(markerIndex<0)return Truncate(contractContext,prefixBudget)!;
+        var prefix=Truncate(contractContext[..markerIndex],prefixBudget)??string.Empty;
+        if(packBudget<=0)return prefix;
+        var packBlock=contractContext[markerIndex..];
+        return prefix+(packBlock.Length<=packBudget?packBlock:Truncate(packBlock,packBudget)+"\n[domain pack excerpt bounded for synthesis; full configuration was applied during hierarchy generation]");
+    }
+
     private static string BuildIntentUserPrompt(string query,string contractContext,string catalog,int maximumBranches)
     {
-        var boundedContract=Truncate(contractContext,9500)??string.Empty;
+        var boundedContract=BoundContractContext(contractContext,ContractContextPrefixBudgetChars);
         var boundedCatalog=Truncate(catalog,1500)??string.Empty;
         var envelope=$"{boundedContract}\nMaximum branches: {maximumBranches}\nApproved capability catalog (for optional grounding):\n{boundedCatalog}";
         var boundedQuery=Truncate(query,Math.Max(0,WideUserPromptBudget-"Ambiguous question: ".Length-envelope.Length))??string.Empty;
@@ -2874,7 +2968,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     private static string BuildHierarchyUserPrompt(string query,string contractContext,string parentSummary,string catalog,int levelNumber,int maximumBranches,string? atomicDecompositionDirective=null)
     {
         var boundedQuery=Truncate(query,4500)??string.Empty;
-        var boundedContract=Truncate(contractContext,9500)??string.Empty;
+        var boundedContract=BoundContractContext(contractContext,ContractContextPrefixBudgetChars);
         var boundedParents=Truncate(parentSummary,3000)??string.Empty;
         var boundedCatalog=Truncate(catalog,1000)??string.Empty;
         var directive=string.IsNullOrWhiteSpace(atomicDecompositionDirective)?string.Empty:$"\n{atomicDecompositionDirective.Trim()}";
@@ -3002,7 +3096,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                     if(pack is not null)
                     {
                         var config=LegalDecisionService.BuildDomainPackModeConfiguration(pack,pack.Concepts,pack.ConceptRelations,matter.MatterTypeCode);
-                        var packBlock=$"{_matterContextBlock}\n\n──────── SELECTED DOMAIN PACK (configuration, not evidence; dynamic hierarchy is primary) ────────{config}";
+                        var packBlock=$"{_matterContextBlock}\n\n{DomainPackBlockMarker}{config}";
                         // Never cut the pack block mid-JSON: a truncated snapshot silently drops the tail dimensions
                         // (and their evidence/concepts) from EVERY prompt stage. If the compact serialization still
                         // exceeds the budget, keep the full block and surface the overflow instead of degrading.
@@ -3033,7 +3127,63 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     private string BuildMatterContextSection()
         => string.IsNullOrEmpty(_matterContextBlock)
             ? string.Empty
-            : $"\n\nSELECTED MATTER CONTEXT (first-class proposal input — ground the proposal in these saved values; keep each legal field DISTINCT; do NOT derive Jurisdiction from Governing Law or Incident State; treat [SUPPLIED] allegations as unproven, not verified evidence):{BuildDecisionOwnershipDirective()}\n{_matterContextBlock}";
+            : $"\n\nSELECTED MATTER CONTEXT (first-class proposal input — ground the proposal in these saved values; keep each legal field DISTINCT; do NOT derive Jurisdiction from Governing Law or Incident State; treat [SUPPLIED] allegations as unproven, not verified evidence; the Additional Narrative is user-supplied matter context for this execution and MUST be considered as part of the authorized context, never as verified fact):{BuildDecisionOwnershipDirective()}\n{_matterContextBlock}";
+
+    // Candidate x Branch assessment basis: the deterministic Factor Inventory projection (configured factor
+    // ids, propositions, actual matter values, availability, verification, binding admissibility,
+    // contradictions, outstanding verification obligations) plus the admitted evidence excerpts and the
+    // configured identifiers (BranchCode) of every scoring branch. No LLM call; empty string when no
+    // normalization plan exists so non-legal runs are byte-for-byte unchanged. Bounded so it stays inside
+    // the governed input budget.
+    private string BuildMatrixAssessmentBasis(IReadOnlyCollection<WideBranchRecord> matrixBranches)
+    {
+        if(_legalNormalization is not{Plan.IsValid:true} normalization)return string.Empty;
+        WideFactorInventoryDto inventory;
+        try
+        {
+            inventory=ProjectFactorInventory(normalization.Plan,_matterContext,_resolvedDomainPackId is not null,_resolvedDomainPackCode??_matterContext?.DomainPackCode,false,
+                _factBindingValidator??new Features.Intelligence.Decision.Core.PropositionFactBindingValidator(Features.Intelligence.Decision.Core.PropositionFactBindingValidator.DefaultConfig()),_factBindingSemanticProbe,_factorInventoryAdmittedEvidence,_factorInventoryProposedAuthorities,_factorInventoryChannelContributions);
+        }
+        catch(Exception ex){logger.LogWarning(ex,"Wide2 matrix assessment basis unavailable; matrix proceeds on matter context only.");return string.Empty;}
+        var builder=new StringBuilder();
+        builder.Append("Assessment basis (the ONLY material you may assess against; return evidenceScore=null for any cell this basis cannot support):\n");
+        builder.Append("Configured criterion identifiers:\n");
+        foreach(var branch in matrixBranches)
+            builder.Append("  ").Append(branch.BranchCode).Append(" = ").Append(branch.DisplayName).Append('\n');
+        builder.Append("Propositions and supplied values:\n");
+        foreach(var factor in inventory.Factors.Take(40))
+        {
+            builder.Append("  [").Append(factor.FactorId).Append("] ").Append(Truncate(factor.FactorName,160))
+                .Append(" | availability=").Append(factor.Availability)
+                .Append(" verification=").Append(factor.VerificationStatus)
+                .Append(" admission=").Append(factor.EvidenceAdmissionState)
+                .Append(" binding=").Append(factor.BindingAdmissibility);
+            if(!string.IsNullOrWhiteSpace(factor.ActualValue))builder.Append(" | value=").Append(Truncate(factor.ActualValue,200));
+            if(factor.Contradictions.Count>0)builder.Append(" | CONTRADICTED: ").Append(Truncate(string.Join("; ",factor.Contradictions),240));
+            if(!string.IsNullOrWhiteSpace(factor.MissingInformation))builder.Append(" | missing=").Append(Truncate(factor.MissingInformation,200));
+            if(!string.IsNullOrWhiteSpace(factor.VerificationObligation))builder.Append(" | unresolved=").Append(Truncate(factor.VerificationObligation,200));
+            builder.Append('\n');
+        }
+        var relations=inventory.Relationships.Where(relation=>relation.IsValidatedRelation).Take(80).ToArray();
+        if(relations.Length>0)
+        {
+            builder.Append("Candidate-factor relationships (validated):\n");
+            foreach(var relation in relations)
+                builder.Append("  ").Append(Truncate(relation.CandidateTitle,120)).Append(" -> [").Append(relation.FactorId).Append("] ").Append(relation.RelationType).Append(relation.IsRequired?" (required)":string.Empty).Append('\n');
+        }
+        if(_factorInventoryAdmittedEvidence.Count>0)
+        {
+            builder.Append("Admitted evidence:\n");
+            foreach(var item in _factorInventoryAdmittedEvidence.Take(25))
+                builder.Append("  ").Append(Truncate(item.Title,120)).Append(": ").Append(Truncate(item.Excerpt??string.Empty,240)).Append('\n');
+        }
+        if(inventory.BlockingObligations.Count>0)
+        {
+            builder.Append("Unresolved conditions:\n");
+            foreach(var obligation in inventory.BlockingObligations.Take(15))builder.Append("  ").Append(Truncate(obligation,200)).Append('\n');
+        }
+        return builder.ToString();
+    }
 
     // R3 decision-ownership directive: tells the model how to treat the supplied RequestedDisposition and
     // CurrentOutcome for THIS run. On EVALUATE they are advisory inputs that must COMPETE against genuine
@@ -3673,29 +3823,47 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         // Fetch it up front and shrink the user prompt against the remaining headroom, never below a floor.
         var systemPrompt=await GetWideSystemPromptAsync(request,IntelligencePromptCodes.WideAnswer,cancellationToken);
         var userPromptBudget=Math.Max(3000,Math.Min(WideUserPromptBudget,WideAnswerInputCeiling-systemPrompt.Length));
+        // HIGH IMPACT ordering: the numbered interpretive paths are the ONLY source of interpretiveResults,
+        // so they are placed immediately after the question and shrunk LAST. The contract context (query
+        // contract + matter snapshot + Domain Pack configuration) is placed at the tail: the pack block is
+        // configuration the hierarchy stage already consumed, so for final synthesis it is bounded and, under
+        // pressure, dropped whole rather than letting a tail truncation silently cut the interpretive paths.
+        var packBudget=AnswerDomainPackBudgetChars;var contractPrefixBudget=ContractContextPrefixBudgetChars;var includePack=true;var includePaths=true;
         WideBranchRecord[] topInterpretiveBranches;string userPrompt;
         while(true)
         {
             var paths=string.Join('\n',orderedSurvivors.Take(pathCount).Select(branch=>$"- L{branch.LevelNumber} {branch.DisplayName} ({branch.GroundingStatusCode}, evidence: {branch.EvidenceCount}, confidence: {branch.Confidence:P0}): {Truncate(branch.Interpretation,300)}"));
-            topInterpretiveBranches=allInterpretiveBranches.Take(interpretiveCount).ToArray();
+            topInterpretiveBranches=SelectLevelBalancedInterpretiveBranches(allInterpretiveBranches,interpretiveCount);
             var topInterpretive=string.Join('\n',topInterpretiveBranches.Select((branch,index)=>$"{index+1}. [L{branch.LevelNumber}] {branch.DisplayName} ({branch.Confidence:P0}): {Truncate(branch.Interpretation,300)}"));
             var grounding=ranked.Count==0?"(no enterprise evidence)":string.Join('\n',ranked.Take(evidenceCount).Select(item=>$"[{item.RankNumber}] {Truncate(item.Title,150)} ({item.EntityTypeCode}): {Truncate(item.Excerpt,300)}"));
             // Clamp each live snippet so external grounding cannot blow the answer prompt past the
             // feature-policy input budget (Tavily content blocks can be several thousand characters).
             var externalGrounding=externalKnowledge.Count==0?"(none)":string.Join('\n',externalKnowledge.Take(snippetCount).Select((snippet,index)=>$"E{index+1}. {Truncate(snippet.Title,150)} ({snippet.Url}, retrieved {snippet.RetrievedDateUtc:yyyy-MM-dd}): {Truncate(snippet.Snippet,snippetLength)}"));
-            userPrompt=$"Question: {Truncate(request.Query,4000)}{Truncate(contractContext,9500)}\nOverall confidence: {confidence:P0}\nSurviving disambiguation paths:\n{paths}\nNumbered interpretive narrowing paths ({topInterpretiveBranches.Length} paths - return {topInterpretiveBranches.Length} interpretiveResults entries):\n{(string.IsNullOrEmpty(topInterpretive)?"(none)":topInterpretive)}\nEnterprise evidence:\n{grounding}\nExternal evidence snippets (live web, current figures - use these for TIME_SENSITIVE paths):\n{externalGrounding}";
+            var boundedContract=BoundContractContext(contractContext,contractPrefixBudget,includePack?packBudget:0);
+            var survivingSection=includePaths?$"\nSurviving disambiguation paths:\n{paths}":string.Empty;
+            userPrompt=$"Question: {Truncate(request.Query,4000)}\nOverall confidence: {confidence:P0}\nNumbered interpretive narrowing paths ({topInterpretiveBranches.Length} paths - return {topInterpretiveBranches.Length} interpretiveResults entries):\n{(string.IsNullOrEmpty(topInterpretive)?"(none)":topInterpretive)}\nEnterprise evidence:\n{grounding}\nExternal evidence snippets (live web, current figures - use these for TIME_SENSITIVE paths):\n{externalGrounding}{survivingSection}{boundedContract}";
             if(userPrompt.Length<=userPromptBudget)break;
-            // Shrink in evidence-preserving order: snippet length, snippet count, path list, then interpretive paths.
+            // Shrink in evidence-preserving order: snippet length, snippet count, surviving-path list,
+            // Domain Pack block, contract prefix, evidence; the interpretive paths are reduced only as a last resort.
             if(snippetLength>400){snippetLength=400;continue;}
             if(snippetCount>4){snippetCount=4;continue;}
             if(pathCount>12){pathCount=12;continue;}
+            if(packBudget>3000){packBudget=3000;continue;}
+            if(includePack){includePack=false;continue;}
+            if(contractPrefixBudget>3000){contractPrefixBudget=3000;continue;}
+            if(includePaths){includePaths=false;continue;}
             if(evidenceCount>6){evidenceCount=6;continue;}
+            if(interpretiveCount>12){interpretiveCount=12;continue;}
             if(interpretiveCount>4){interpretiveCount=4;continue;}
             break;
         }
         // Final hard guard: if even the minimum sections exceed the headroom, truncate so the combined
-        // system+user prompt cannot trip the AI safety maximum-input guard.
+        // system+user prompt cannot trip the AI safety maximum-input guard. With the ordering above the
+        // tail now holds the contract context, never the interpretive paths.
+        if(userPrompt.Length>userPromptBudget)
+            logger.LogWarning("Wide2 answer prompt still {Length} chars after shrinking (budget {Budget}); tail-truncating the contract context.",userPrompt.Length,userPromptBudget);
         userPrompt=Truncate(userPrompt,userPromptBudget)!;
+        logger.LogInformation("Wide2 answer prompt assembled: {Length}/{Budget} chars; interpretivePathsSent={Interpretive}/{InterpretiveTotal}; survivingPaths={Paths}; evidence={Evidence}; snippets={Snippets}; domainPackIncluded={Pack}; survivingSectionIncluded={PathsIncluded}.",userPrompt.Length,userPromptBudget,topInterpretiveBranches.Length,allInterpretiveBranches.Length,includePaths?Math.Min(pathCount,orderedSurvivors.Length):0,Math.Min(evidenceCount,ranked.Count),Math.Min(snippetCount,externalKnowledge.Count),includePack,includePaths);
         var result=await aiProviderRouter.GenerateAsync(request.TenantId,AnswerFeatureCode(request),
                 systemPrompt,
             userPrompt,
@@ -6993,6 +7161,11 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 branchList=$"{branchList}\n{childList}";
             }
             var contractContext=(queryContract is null?"(none)":BuildQueryContractContext(queryContract))+BuildMatterContextSection();
+            // Evidence-grounded assessment basis: the deterministic Factor Inventory (configured factor ids,
+            // propositions, actual matter values, availability, verification, contradictions, unresolved
+            // obligations) plus admitted evidence excerpts. This is the ONLY material the matrix may assess
+            // against; the prompt returns null for any cell this basis cannot support.
+            var assessmentBasis=BuildMatrixAssessmentBasis(branches.Concat(childBranches).ToArray());
             var candidateKind=queryContract?.CandidateKind??CandidateKindNamedEntity;
             var matrixBranches=branches.Concat(childBranches).ToArray();
             var branchesByName=matrixBranches.GroupBy(branch=>branch.DisplayName.Trim(),StringComparer.OrdinalIgnoreCase).ToDictionary(group=>group.Key,group=>group.First(),StringComparer.OrdinalIgnoreCase);
@@ -7015,6 +7188,10 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             // the SAME branches, prompt, and schema, and pool candidates still unresolved after the
             // chunked pass get exactly one targeted re-ask call. Each chunk is fail-soft so one bad
             // response degrades coverage instead of zeroing the whole competition.
+            // Cells the model explicitly returned as null (insufficient supplied material). Keyed by resolved
+            // candidate name -> branch ids. These are withheld from recovery re-asks, interpretive gap fill and
+            // the baseline prior so a declared-insufficient cell can never acquire invented numeric support.
+            var insufficientCells=new Dictionary<string,HashSet<Guid>>(StringComparer.OrdinalIgnoreCase);
             async Task<List<WideCandidateScore>> ScoreCandidateChunkAsync((string Name,string? Detail)[] chunk,IReadOnlyCollection<WideBranchRecord>? requestedBranches=null)
             {
                 try
@@ -7025,13 +7202,34 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                         :string.Join('\n',requestedBranches.Select((branch,index)=>$"B{index+1}. {branch.DisplayName}: {branch.Interpretation}"));
                     var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_ANSWER",
                         await GetWideSystemPromptAsync(request,IntelligencePromptCodes.WideCandidateMatrix,cancellationToken),
-                        $"Question: {request.Query}\n{contractContext}\nCandidate kind: {candidateKind}\nInterpretation branches:\n{requestedBranchList}\nCandidates:\n{candidateList}",
+                        $"Question: {request.Query}\n{contractContext}\nCandidate kind: {candidateKind}\nInterpretation branches:\n{requestedBranchList}\n{assessmentBasis}Candidates:\n{candidateList}",
                         CandidateScoringSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_CANDIDATE_MATRIX",executionId,request.CorrelationId,"Intelligent Search Wide"),MechanicalModel(configuration,request),cancellationToken);
-                    var chunkProposal=JsonSerializer.Deserialize<WideCandidateScoringProposal>(result.Content,JsonOptions);
-                    return chunkProposal?.Candidates?.ToList()??[];
+                    var chunkProposal=JsonSerializer.Deserialize<WideCandidateAssessmentProposal>(result.Content,JsonOptions);
+                    var scored=new List<WideCandidateScore>();
+                    var nullCells=0;
+                    foreach(var assessment in chunkProposal?.Candidates??[])
+                    {
+                        var cells=assessment.BranchScores??[];
+                        var resolvedForNull=ResolveCandidateName(assessment.Name);
+                        foreach(var cell in cells.Where(cell=>cell.EvidenceScore is null))
+                        {
+                            nullCells++;
+                            if(resolvedForNull is null||ResolveBranch(cell.BranchDisplayName) is not{} nullBranch)continue;
+                            var set=insufficientCells.TryGetValue(resolvedForNull,out var existingSet)?existingSet:insufficientCells[resolvedForNull]=[];
+                            set.Add(nullBranch.WideBranchId);
+                        }
+                        scored.Add(new WideCandidateScore(assessment.Name,assessment.Detail,assessment.ViolatesConstraint,assessment.ConstraintViolationReason,
+                            cells.Where(cell=>cell.EvidenceScore is not null).Select(cell=>new WideCandidateBranchEvidence(cell.BranchDisplayName,cell.EvidenceScore!.Value)).ToArray())
+                            {IsEntityOfRequestedKind=assessment.IsEntityOfRequestedKind});
+                    }
+                    if(nullCells>0)logger.LogInformation("LEGAL-TRACE stage=candidate-matrix outcome=INSUFFICIENT_CELLS candidates={Candidates} nullCells={NullCells}",chunk.Length,nullCells);
+                    return scored;
                 }
-                catch(Exception)when(!cancellationToken.IsCancellationRequested)
+                catch(Exception ex)when(!cancellationToken.IsCancellationRequested)
                 {
+                    // Fail-soft per chunk, but never silent: a rejected/failed matrix call (e.g. an output-length
+                    // safety rejection) otherwise masquerades as a zero-candidate competition downstream.
+                    logger.LogWarning(ex,"LEGAL-TRACE stage=candidate-matrix outcome=CHUNK_FAILED candidates={Candidates} branches={Branches} message={Message}",chunk.Length,requestedBranches?.Count??matrixBranches.Length,ex.Message);
                     return [];
                 }
             }
@@ -7140,18 +7338,25 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             if(matrixChunks.Count==0&&anchorCandidates.Length>0)matrixChunks.Add(anchorCandidates);
             foreach(var chunk in matrixChunks)MergeScores(CalibrateChunk(await ScoreCandidateChunkAsync(chunk)));
             var requiredBranchIds=matrixBranches.Select(branch=>branch.WideBranchId).ToHashSet();
+            // A cell the model explicitly declared insufficient (null) counts as ANSWERED for coverage: it is
+            // not re-asked, because a re-ask would only pressure the model into inventing support.
+            HashSet<Guid> AnsweredBranchIds(string candidateName,WideCandidateScore score)
+            {
+                var answered=score.BranchScores.Select(branchScore=>ResolveBranch(branchScore.BranchDisplayName)?.WideBranchId).Where(branchId=>branchId is not null).Select(branchId=>branchId!.Value).ToHashSet();
+                if(insufficientCells.TryGetValue(candidateName,out var declared))answered.UnionWith(declared);
+                return answered;
+            }
             var incompleteCandidates=candidateNames.Where(candidate=>
             {
                 if(!scoredByCandidate.TryGetValue(candidate.Name,out var score))return true;
-                var returnedBranchIds=score.BranchScores.Select(branchScore=>ResolveBranch(branchScore.BranchDisplayName)?.WideBranchId).Where(branchId=>branchId is not null).Select(branchId=>branchId!.Value).ToHashSet();
-                return !requiredBranchIds.IsSubsetOf(returnedBranchIds);
+                return !requiredBranchIds.IsSubsetOf(AnsweredBranchIds(candidate.Name,score));
             }).ToArray();
             foreach(var recoveryChunk in incompleteCandidates.Chunk(12))
             {
                 var missingBranches=recoveryChunk.SelectMany(candidate=>
                 {
                     if(!scoredByCandidate.TryGetValue(candidate.Name,out var score))return matrixBranches;
-                    var returnedBranchIds=score.BranchScores.Select(branchScore=>ResolveBranch(branchScore.BranchDisplayName)?.WideBranchId).Where(branchId=>branchId is not null).Select(branchId=>branchId!.Value).ToHashSet();
+                    var returnedBranchIds=AnsweredBranchIds(candidate.Name,score);
                     return matrixBranches.Where(branch=>!returnedBranchIds.Contains(branch.WideBranchId));
                 }).DistinctBy(branch=>branch.WideBranchId).ToArray();
                 if(missingBranches.Length>0)MergeScores(await ScoreCandidateChunkAsync(recoveryChunk,missingBranches));
@@ -7239,12 +7444,18 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 // axis the matrix pass did NOT resolve (ResolveBranch miss / omitted echo), the interpretive Cs
                 // recovers the dimension outright. Nothing is fabricated: every value is the normalized interpretive
                 // Score already produced, and the blend stays bounded in [0,1] and never lowers the admission gate.
+                // A cell the matrix explicitly declared insufficient is NOT gap-filled: the interpretive Cs
+                // may blend into an assessed cell, but it never substitutes for a declared-insufficient one.
+                var declaredInsufficient=insufficientCells.TryGetValue(resolvedName,out var declaredSet)?declaredSet:[];
                 if(interpretiveCsByCandidate.TryGetValue(resolvedName,out var interpretiveCs))
                     foreach(var branch in branches)
                         if(interpretiveCs.TryGetValue(branch.WideBranchId,out var cs))
-                            directScores[branch.WideBranchId]=directScores.TryGetValue(branch.WideBranchId,out var existingDirect)
-                                ?Math.Clamp(0.5m*existingDirect+0.5m*cs,0,1)
-                                :cs;
+                        {
+                            if(directScores.TryGetValue(branch.WideBranchId,out var existingDirect))
+                                directScores[branch.WideBranchId]=Math.Clamp(0.5m*existingDirect+0.5m*cs,0,1);
+                            else if(!declaredInsufficient.Contains(branch.WideBranchId))
+                                directScores[branch.WideBranchId]=cs;
+                        }
                 // V3.5 Hierarchical Roll-Up: each parent dimension's effective score blends the model's
                 // direct parent-level judgment with the confidence-weighted mean of its scored children
                 // (50/50). Children carry the narrowed specifics; the direct score keeps the holistic
@@ -7275,11 +7486,13 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 // a false zero, deterministically score it against EVERY axis: use the candidate's evidence
                 // signal for that branch when present, otherwise the branch's own interpretation prior as a
                 // DISCLOSED neutral baseline. Nothing is fabricated - evidence confidence still derives from
-                // hosts/coverage separately, so a zero-evidence run stays UNVERIFIED.
+                // hosts/coverage separately, so a zero-evidence run stays UNVERIFIED. A cell the matrix
+                // explicitly declared insufficient is NOT baselined: it stays absent (insufficient), never prior.
                 if(effectiveByBranch.Count==0)
                 {
                     foreach(var branch in branches)
                     {
+                        if(declaredInsufficient.Contains(branch.WideBranchId))continue;
                         var signal=ComputeCandidateBranchSignal(resolvedName,branch,externalKnowledge);
                         var baseline=branch.InterpretationPrior>0?branch.InterpretationPrior:branch.PoloxiConfidence>0?branch.PoloxiConfidence:0.5m;
                         effectiveByBranch[branch.WideBranchId]=Math.Clamp(signal>0m?signal:baseline,0,1);
@@ -7701,7 +7914,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
               "type": "object",
               "properties": {
                 "branchDisplayName": { "type": "string" },
-                "evidenceScore": { "type": "number" }
+                "evidenceScore": { "type": ["number", "null"] }
               },
               "required": ["branchDisplayName", "evidenceScore"],
               "additionalProperties": false

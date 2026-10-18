@@ -598,6 +598,10 @@ public sealed record DecisionMatterDto(
     public string? MotionTarget { get; init; }
     public string? RequestedDisposition { get; init; }
 
+    // User-supplied free-text narrative persisted BEFORE any LLM prompt executes for this matter.
+    // SUPPLIED context, never verified evidence.
+    public string? AdditionalNarrative { get; init; }
+
     // Derived from the latest decision session for this matter (null when no decision yet).
     public Guid? LatestSessionId { get; init; }
     public string? CurrentOutcome { get; init; }
@@ -638,6 +642,8 @@ public sealed record DecisionMatterCreateRequest(
     [StringLength(200)] public string? RespondingParty { get; init; }
     [StringLength(300)] public string? MotionTarget { get; init; }
     [StringLength(300)] public string? RequestedDisposition { get; init; }
+
+    [StringLength(20000)] public string? AdditionalNarrative { get; init; }
 }
 
 // Request to update a matter's metadata (status is changed via the status endpoint).
@@ -672,7 +678,15 @@ public sealed record DecisionMatterUpdateRequest(
     [StringLength(200)] public string? RespondingParty { get; init; }
     [StringLength(300)] public string? MotionTarget { get; init; }
     [StringLength(300)] public string? RequestedDisposition { get; init; }
+
+    [StringLength(20000)] public string? AdditionalNarrative { get; init; }
 }
+
+// Focused request that persists ONLY the user's Additional Narrative on a matter. Used by the decision
+// cockpits to save the submitted prompt text before the LLM pipeline runs, without replaying every
+// other matter field.
+public sealed record DecisionMatterAdditionalNarrativeRequest(
+    [StringLength(20000)] string? AdditionalNarrative);
 
 // ── Domain Pack (practice-area domain semantics) DTOs
 // A database-backed Domain Pack supplies terminology, decision-hierarchy dimensions, evidence

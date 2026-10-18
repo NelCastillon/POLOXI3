@@ -68,6 +68,27 @@ public sealed class MatterContextSnapshotBuilderTests
     }
 
     [Fact]
+    public void Build_ProjectsAdditionalNarrative_AsSuppliedContext_IntoPromptBlock()
+    {
+        var matter = BuildMatter() with { AdditionalNarrative = "Plaintiff reports the floor had been mopped minutes earlier with no warning sign." };
+
+        var snapshot = MatterContextSnapshotBuilder.Build(Guid.NewGuid(), "q", matter, null);
+
+        var field = snapshot.Decision.Single(f => f.Label.StartsWith("Additional Narrative", StringComparison.Ordinal));
+        Assert.Equal(matter.AdditionalNarrative, field.Value);
+        Assert.Contains("user-supplied", field.Label, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(matter.AdditionalNarrative!, snapshot.ToPromptBlock(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Build_OmitsAdditionalNarrative_WhenEmpty()
+    {
+        var snapshot = MatterContextSnapshotBuilder.Build(Guid.NewGuid(), "q", BuildMatter(), null);
+
+        Assert.DoesNotContain("Additional Narrative", snapshot.ToPromptBlock(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Build_KeepsGoverningLaw_And_Jurisdiction_And_State_Distinct()
     {
         var matter = BuildMatter();

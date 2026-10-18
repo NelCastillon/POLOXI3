@@ -335,6 +335,9 @@ internal sealed class RecordingDecisionRepository : ILegalDecisionRepository
     public Task<bool> UpdateMatterStatusAsync(Guid tenantId, Guid userId, Guid decisionMatterId, string statusCode, CancellationToken cancellationToken = default)
         => Task.FromResult(true);
 
+    public Task<bool> UpdateMatterAdditionalNarrativeAsync(Guid tenantId, Guid userId, Guid decisionMatterId, string? additionalNarrative, CancellationToken cancellationToken = default)
+        => Task.FromResult(true);
+
     public Task<bool> DeleteMatterAsync(Guid tenantId, Guid userId, Guid decisionMatterId, CancellationToken cancellationToken = default)
         => Task.FromResult(true);
 

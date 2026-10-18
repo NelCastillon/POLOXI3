@@ -123,6 +123,28 @@ public sealed class DecisionDomainPackModeConfigurationTests
     }
 
     [Fact]
+    public void Declares_Full_Context_SoftMece_Graph_And_Source_Faithfulness_Rules()
+    {
+        var pack = Pack();
+
+        var result = LegalDecisionService.BuildDomainPackModeConfiguration(
+            pack, pack.Concepts, pack.ConceptRelations, matterTypeCode: null);
+
+        Assert.Contains("PRESERVE THE ORIGINAL TASK", result);
+        Assert.Contains("FULL CONTEXT BOUNDARY", result);
+        Assert.Contains("do not treat missing input as proof", result);
+        Assert.Contains("Generate only matter-specific L3", result);
+        Assert.Contains("Do not infer document contents from a profile's reference", result);
+        Assert.Contains("SOFT MECE", result);
+        Assert.Contains("GRAPH RELATIONSHIPS", result);
+        Assert.Contains("acyclic", result);
+        Assert.Contains("SOURCE-FAITHFULNESS CHECK", result);
+        Assert.Contains("Never invent missing identifiers or anchors", result);
+        Assert.Contains("Do not equate an empty result with non-applicability", result);
+        Assert.Contains("Do not mechanically average descendants", result);
+    }
+
+    [Fact]
     public void Empty_Collections_Do_Not_Throw()
     {
         var pack = new DecisionDomainPackDto(
