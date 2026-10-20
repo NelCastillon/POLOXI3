@@ -399,6 +399,23 @@ internal sealed class RecordingDecisionRepository : ILegalDecisionRepository
     public Task UpsertSystemMatterEvidenceScopesAsync(Guid tenantId, Guid userId, Guid decisionMatterId, IReadOnlyCollection<MatterEvidenceScopeEvaluation> rows, CancellationToken cancellationToken = default)
         => Task.CompletedTask;
 
+    public readonly List<MatterClassificationProposalEvaluation> ClassificationProposals = [];
+
+    public Task<IReadOnlyCollection<MatterEvidenceRoutingCodeDto>> GetMatterEvidenceRoutingCodesAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyCollection<MatterEvidenceRoutingCodeDto>>([]);
+
+    public Task<IReadOnlyCollection<MatterClassificationProposalDto>> GetMatterClassificationProposalsAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyCollection<MatterClassificationProposalDto>>([]);
+
+    public Task UpsertMatterClassificationProposalsAsync(Guid tenantId, Guid userId, Guid decisionMatterId, IReadOnlyCollection<MatterClassificationProposalEvaluation> rows, CancellationToken cancellationToken = default)
+    {
+        ClassificationProposals.AddRange(rows);
+        return Task.CompletedTask;
+    }
+
+    public Task<bool> DecideMatterClassificationProposalAsync(Guid tenantId, Guid userId, Guid proposalId, string statusCode, string? decisionNote, CancellationToken cancellationToken = default)
+        => Task.FromResult(false);
+
     public Task<IReadOnlyCollection<MatterAtomicPropositionDto>> GetMatterAtomicPropositionsAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default)
         => Task.FromResult<IReadOnlyCollection<MatterAtomicPropositionDto>>([]);
 

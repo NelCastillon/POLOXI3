@@ -579,7 +579,8 @@
                             city: request.County?.Replace(" County", string.Empty),
                             county: request.County,
                             plaintiff: request.MovingParty,
-                            defendant: request.RespondingParty);
+                            defendant: request.RespondingParty,
+                            matterSubtype: request.Subtype);
                         await Api.SaveLegalDecisionPersonalInjuryProfileAsync(id, profile);
                     }
                     catch
@@ -636,12 +637,17 @@
         const string matterType = "Personal Injury";
         const string state = "California";
         const string governingLaw = "California";
-        var subtype = PickFacet(_facets.Subtypes, _subtypes);
+        // 0446: every saved field must be coherent with the Personal Injury matter type, because the saved
+        // record is sent verbatim to the L2 relevance review. Facet subtypes are restricted to PI-coherent values
+        // (the facet list spans every matter in the tenant, e.g. "Copyright"), and motion target / disposition
+        // come from PI-specific pools (no class-certification or contract postures).
+        var piFacetSubtypes = _facets.Subtypes.Where(s => _piSubtypes.Contains(s, StringComparer.OrdinalIgnoreCase)).ToList();
+        var subtype = PickFacet(piFacetSubtypes, _piSubtypes);
         var courtSystem = "United States - California";
         var courtLevel = "Superior Court";
         var county = "Los Angeles County";
-        var motionTarget = Pick(_motionTargets);
-        var disposition = Pick(_dispositions);
+        var motionTarget = Pick(_piMotionTargets);
+        var disposition = Pick(_piDispositions);
         var jurisdiction = $"United States - {state} - {courtLevel} - {county} - Governing law: {governingLaw}";
         var posture = $"{matterType} - Movant: {movant} - Target: {motionTarget} - Requested disposition: {disposition}";
         var title = $"{movant} v. {respondent} - {matterType} ({caseTag})";
@@ -732,6 +738,25 @@
     {
         "judgment as a matter of law", "dismissal with prejudice", "dismissal without prejudice",
         "summary judgment for the movant", "denial of the motion", "partial summary judgment"
+    };
+
+    // Personal Injury-coherent pools used by the General Test Matter generator (individual injury matter;
+    // never class-action, contract or IP postures).
+    private static readonly string[] _piSubtypes =
+    {
+        "Motor Vehicle", "Premises Liability", "Product Liability", "Tort"
+    };
+
+    private static readonly string[] _piMotionTargets =
+    {
+        "the negligence claim", "the comparative-fault defense", "the damages claim",
+        "the statute-of-limitations defense", "the negligence per se claim"
+    };
+
+    private static readonly string[] _piDispositions =
+    {
+        "judgment as a matter of law", "denial of the motion", "summary judgment for the movant",
+        "dismissal without prejudice"
     };
 
     private sealed class MatterForm

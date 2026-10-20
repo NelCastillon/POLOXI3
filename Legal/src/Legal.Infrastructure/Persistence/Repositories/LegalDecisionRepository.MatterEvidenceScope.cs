@@ -11,7 +11,8 @@ public sealed partial class LegalDecisionRepository
         s.MatterEvidenceScopeId, s.DecisionMatterId, s.PackCode, s.TargetKindCode, s.TargetCode, s.DimensionCode, s.DisplayName,
         s.ScopeStatusCode, s.DecidedByCode, s.DeterministicScore, s.LlmScore, s.BlendedScore, s.TierCode, s.RelevanceReasons, s.LlmReason,
         s.IsRequiredCoverage, s.IsPrioritized, s.DocumentPresent, s.MappedPassageCount, s.UserNote, s.LastEvaluatedExecutionId, s.LastEvaluatedDateUtc,
-        s.SortOrder, s.CreatedDateUtc, s.ModifiedDateUtc
+        s.SortOrder, s.CreatedDateUtc, s.ModifiedDateUtc,
+        s.EvidenceAvailabilityCode, s.VerificationStatusCode, s.ExecutionPriorityCode, s.DirectPassageCount, s.VerifiedAssertionCount, s.RoutingReason
         """;
 
     public async Task<IReadOnlyCollection<MatterEvidenceScopeDto>> GetMatterEvidenceScopesAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default)
@@ -131,10 +132,12 @@ public sealed partial class LegalDecisionRepository
                 INSERT POLOXI.Legal_MatterEvidenceScope(MatterEvidenceScopeId, TenantId, DecisionMatterId, PackCode, TargetKindCode, TargetCode, DimensionCode, DisplayName,
                     ScopeStatusCode, DecidedByCode, DeterministicScore, LlmScore, BlendedScore, TierCode, RelevanceReasons, LlmReason,
                     IsRequiredCoverage, IsPrioritized, DocumentPresent, MappedPassageCount, LastEvaluatedExecutionId, LastEvaluatedDateUtc, SortOrder,
+                    EvidenceAvailabilityCode, VerificationStatusCode, ExecutionPriorityCode, DirectPassageCount, VerifiedAssertionCount, RoutingReason,
                     CreatedDateUtc, CreatedByUserId, IsDeleted)
                 VALUES(NEWID(), @TenantId, @DecisionMatterId, @PackCode, @TargetKindCode, @TargetCode, @DimensionCode, @DisplayName,
                     @ScopeStatusCode, @DecidedByCode, @DeterministicScore, @LlmScore, @BlendedScore, @TierCode, @RelevanceReasons, @LlmReason,
                     @IsRequiredCoverage, @IsPrioritized, @DocumentPresent, @MappedPassageCount, @LastEvaluatedExecutionId, SYSUTCDATETIME(), @SortOrder,
+                    @EvidenceAvailabilityCode, @VerificationStatusCode, @ExecutionPriorityCode, @DirectPassageCount, @VerifiedAssertionCount, @RoutingReason,
                     SYSUTCDATETIME(), @UserId, 0);
             ELSE
                 UPDATE POLOXI.Legal_MatterEvidenceScope
@@ -146,6 +149,9 @@ public sealed partial class LegalDecisionRepository
                        RelevanceReasons = @RelevanceReasons, LlmReason = @LlmReason,
                        IsRequiredCoverage = @IsRequiredCoverage, IsPrioritized = @IsPrioritized, DocumentPresent = @DocumentPresent,
                        MappedPassageCount = @MappedPassageCount, LastEvaluatedExecutionId = @LastEvaluatedExecutionId, LastEvaluatedDateUtc = SYSUTCDATETIME(),
+                       -- 0448 routing attributes are system-computed facts (availability/verification/priority) and refresh on every run.
+                       EvidenceAvailabilityCode = @EvidenceAvailabilityCode, VerificationStatusCode = @VerificationStatusCode, ExecutionPriorityCode = @ExecutionPriorityCode,
+                       DirectPassageCount = @DirectPassageCount, VerifiedAssertionCount = @VerifiedAssertionCount, RoutingReason = @RoutingReason,
                        SortOrder = @SortOrder, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @UserId
                  WHERE MatterEvidenceScopeId = @Id;
             """;
@@ -156,7 +162,8 @@ public sealed partial class LegalDecisionRepository
                 TenantId = tenantId, UserId = userId, DecisionMatterId = decisionMatterId,
                 row.PackCode, row.TargetKindCode, row.TargetCode, row.DimensionCode, row.DisplayName, row.ScopeStatusCode, row.DecidedByCode,
                 row.DeterministicScore, row.LlmScore, row.BlendedScore, row.TierCode, row.RelevanceReasons, row.LlmReason,
-                row.IsRequiredCoverage, row.IsPrioritized, row.DocumentPresent, row.MappedPassageCount, row.LastEvaluatedExecutionId, row.SortOrder
+                row.IsRequiredCoverage, row.IsPrioritized, row.DocumentPresent, row.MappedPassageCount, row.LastEvaluatedExecutionId, row.SortOrder,
+                row.EvidenceAvailabilityCode, row.VerificationStatusCode, row.ExecutionPriorityCode, row.DirectPassageCount, row.VerifiedAssertionCount, row.RoutingReason
             }, transaction, cancellationToken: cancellationToken));
         }
         transaction.Commit();

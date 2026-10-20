@@ -1495,7 +1495,7 @@ public sealed partial class LegalDecisionRepository(ISqlConnectionFactory connec
         var evidenceTypes = (await connection.QueryAsync<DecisionDomainPackEvidenceTypeDto>(new CommandDefinition(
             """
             SELECT EvidenceTypeCode, Name, DimensionCode, Description, PoloxiImportanceScore,
-                   IsRequiredCoverage, MatterTypeCodes, RelevanceKeywords
+                   IsRequiredCoverage, MatterTypeCodes, RelevanceKeywords, IncidentFamilyCodes
             FROM POLOXI.Legal_DecisionDomainPackEvidenceType
             WHERE IsDeleted = 0 AND IsActive = 1 AND DecisionDomainPackId = @PackId ORDER BY SortOrder, Name;
             """, new { PackId = pack.DecisionDomainPackId }, cancellationToken: cancellationToken))).ToArray();
@@ -1587,6 +1587,25 @@ public sealed partial class LegalDecisionRepository(ISqlConnectionFactory connec
             ORDER BY Priority, TargetCode;
             """, new { PackId = pack.DecisionDomainPackId, TenantId = tenantId }, cancellationToken: cancellationToken))).ToArray();
 
+        // Incident families (migration 0445). Tenant rows override platform rows by FamilyCode.
+        var incidentFamilies = (await connection.QueryAsync<DecisionDomainPackIncidentFamilyDto>(new CommandDefinition(
+            """
+            WITH RankedFamily AS
+            (
+                SELECT FamilyCode, Name, Description, MatterSignalPatterns, SortOrder,
+                       ROW_NUMBER() OVER
+                       (
+                           PARTITION BY FamilyCode
+                           ORDER BY CASE WHEN TenantId = @TenantId THEN 0 ELSE 1 END, SortOrder
+                       ) AS ScopeRank
+                FROM POLOXI.Legal_DecisionDomainPackIncidentFamily
+                WHERE IsDeleted = 0 AND IsActive = 1 AND DecisionDomainPackId = @PackId
+                  AND (TenantId = @TenantId OR TenantId IS NULL)
+            )
+            SELECT FamilyCode, Name, Description, MatterSignalPatterns, SortOrder
+            FROM RankedFamily WHERE ScopeRank = 1 ORDER BY SortOrder, FamilyCode;
+            """, new { PackId = pack.DecisionDomainPackId, TenantId = tenantId }, cancellationToken: cancellationToken))).ToArray();
+
         return new DecisionDomainPackDto(
             pack.DecisionDomainPackId, pack.PackCode, pack.PracticeAreaCode, pack.Name, pack.Description,
             dimensions, evidenceTypes, profiles, matterTypes)
@@ -1595,6 +1614,7 @@ public sealed partial class LegalDecisionRepository(ISqlConnectionFactory connec
             ConceptRelations = conceptRelations,
             OutcomeCandidates = outcomeCandidates,
             RelevanceRules = relevanceRules,
+            IncidentFamilies = incidentFamilies,
         };
     }
 

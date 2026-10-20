@@ -1,4 +1,4 @@
-using Legal.Application.Abstractions.Persistence;
+﻿using Legal.Application.Abstractions.Persistence;
 using Legal.Application.Features.Intelligence;
 using Dapper;
 using System.Text.Json;
@@ -626,9 +626,20 @@ COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM
 COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.L3PassageMapTopN' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),12) L3PassageMapTopN,
 COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.L3FactorSliceMaxItems' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),6) L3FactorSliceMaxItems,
 COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.EnableL2RelevanceReview' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'true') EnableL2RelevanceReview,
-COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.L2ReviewBatchSize' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),40) L2ReviewBatchSize,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.L2ReviewBatchSize' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),500) L2ReviewBatchSize,
 COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.EnableMatterEvidenceScopeGate' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'true') EnableMatterEvidenceScopeGate,
-COALESCE(TRY_CONVERT(decimal(9,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.MatterScopeOutThreshold' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),0.05) MatterScopeOutThreshold;
+COALESCE(TRY_CONVERT(decimal(9,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.MatterScopeOutThreshold' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),0.20) MatterScopeOutThreshold,
+COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.MatterScopeInclusionFirst' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'true') MatterScopeInclusionFirst,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.DomainPackDepthCeiling' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),3) DomainPackDepthCeiling,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.L2ReviewPromptBudgetChars' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),24000) L2ReviewPromptBudgetChars,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.L2ReviewMaxRetries' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),2) L2ReviewMaxRetries,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.L2ReviewConcurrency' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),4) L2ReviewConcurrency,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.MatterScopeMinimumMappedPassages' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),2) MatterScopeMinimumMappedPassages,
+COALESCE(TRY_CONVERT(decimal(9,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.MatterScopeDecisivePassageScore' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),0.60) MatterScopeDecisivePassageScore,
+COALESCE(TRY_CONVERT(decimal(9,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.MatterScopePendingReviewFloor' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),0.10) MatterScopePendingReviewFloor,
+COALESCE(TRY_CONVERT(decimal(9,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.MatterScopeZeroScoreCeiling' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),0.05) MatterScopeZeroScoreCeiling,
+COALESCE(TRY_CONVERT(decimal(9,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.MatterScopeImmediateRelevance' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),0.60) MatterScopeImmediateRelevance,
+COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.EnableEvidenceAwareL3Routing' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'true') EnableEvidenceAwareL3Routing;
 -- V3.3 POLOXI.Legal_AnswerKind lookup (tenant rows override global rows with the same code).
 SELECT AnswerKindCode,DepthCeiling,MaxInformationRounds,RunsCandidateCompetition
 FROM(SELECT AnswerKindCode,DepthCeiling,MaxInformationRounds,RunsCandidateCompetition,
@@ -744,9 +755,20 @@ WHERE Rn=1 ORDER BY AnswerKindCode;
             L3PassageMapTopN=Math.Clamp(row.L3PassageMapTopN,1,50),
             L3FactorSliceMaxItems=Math.Clamp(row.L3FactorSliceMaxItems,0,20),
             EnableL2RelevanceReview=string.Equals(row.EnableL2RelevanceReview,"true",StringComparison.OrdinalIgnoreCase),
-            L2ReviewBatchSize=Math.Clamp(row.L2ReviewBatchSize,5,120),
+            L2ReviewBatchSize=Math.Clamp(row.L2ReviewBatchSize,5,1000),
             EnableMatterEvidenceScopeGate=string.Equals(row.EnableMatterEvidenceScopeGate,"true",StringComparison.OrdinalIgnoreCase),
-            MatterScopeOutThreshold=Math.Clamp(row.MatterScopeOutThreshold,0m,1m)
+            MatterScopeOutThreshold=Math.Clamp(row.MatterScopeOutThreshold,0m,1m),
+            MatterScopeInclusionFirst=string.Equals(row.MatterScopeInclusionFirst,"true",StringComparison.OrdinalIgnoreCase),
+            DomainPackDepthCeiling=Math.Clamp(row.DomainPackDepthCeiling,0,25),
+            L2ReviewPromptBudgetChars=Math.Clamp(row.L2ReviewPromptBudgetChars,4000,200000),
+            L2ReviewMaxRetries=Math.Clamp(row.L2ReviewMaxRetries,0,5),
+            L2ReviewConcurrency=Math.Clamp(row.L2ReviewConcurrency,1,16),
+            MatterScopeMinimumMappedPassages=Math.Clamp(row.MatterScopeMinimumMappedPassages,1,20),
+            MatterScopeDecisivePassageScore=Math.Clamp(row.MatterScopeDecisivePassageScore,0m,1m),
+            MatterScopePendingReviewFloor=Math.Clamp(row.MatterScopePendingReviewFloor,0m,1m),
+            MatterScopeZeroScoreCeiling=Math.Clamp(row.MatterScopeZeroScoreCeiling,0m,1m),
+            MatterScopeImmediateRelevance=Math.Clamp(row.MatterScopeImmediateRelevance,0m,1m),
+            EnableEvidenceAwareL3Routing=string.Equals(row.EnableEvidenceAwareL3Routing,"true",StringComparison.OrdinalIgnoreCase)
         };
     }
 
@@ -916,7 +938,9 @@ WHERE WideExecutionId=@WideExecutionId AND TenantId=@TenantId AND IsDeleted=0;
         string EnableMarginalValueStopping,int MarginalValueMinimumDepth,decimal MarginalCoverageDeltaFloor,decimal MarginalConfidenceDeltaFloor,string EnableResolutionDeepening,int ResolutionDeepeningMinConditions,int ResolutionDeepeningMaxConditions,
         int L3BatchSize,int L3BatchInputBudgetChars,int L3PassagesPerParent,int L3MinimumPropositionsPerParent,int L3MaxConcurrency,int L3TierOneCount,int L3TierOneBatchSize,int L3TierOneMaxPerDimension,
         decimal L3TierAThreshold,int L3TierABatchSize,int L3TierAPassagesPerParent,int L3PassageMapConcurrency,int L3PassageMapTopN,int L3FactorSliceMaxItems,
-        string EnableL2RelevanceReview,int L2ReviewBatchSize,string EnableMatterEvidenceScopeGate,decimal MatterScopeOutThreshold);
+        string EnableL2RelevanceReview,int L2ReviewBatchSize,string EnableMatterEvidenceScopeGate,decimal MatterScopeOutThreshold,string MatterScopeInclusionFirst,
+        int DomainPackDepthCeiling,int L2ReviewPromptBudgetChars,int L2ReviewMaxRetries,int L2ReviewConcurrency,int MatterScopeMinimumMappedPassages,decimal MatterScopeDecisivePassageScore,decimal MatterScopePendingReviewFloor,
+        decimal MatterScopeZeroScoreCeiling,decimal MatterScopeImmediateRelevance,string EnableEvidenceAwareL3Routing);
 
     private sealed record WideAnswerKindRow(string AnswerKindCode,int DepthCeiling,int? MaxInformationRounds,bool RunsCandidateCompetition);
 

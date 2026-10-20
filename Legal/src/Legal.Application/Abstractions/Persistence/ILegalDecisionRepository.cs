@@ -109,6 +109,12 @@ public interface ILegalDecisionRepository
     // decider and note (scores/provenance still refreshed). Never deletes.
     Task UpsertSystemMatterEvidenceScopesAsync(Guid tenantId, Guid userId, Guid decisionMatterId, IReadOnlyCollection<MatterEvidenceScopeEvaluation> rows, CancellationToken cancellationToken = default);
 
+    // ── 0448: evidence-aware routing codes + matter classification proposals (never mutate the matter) ──
+    Task<IReadOnlyCollection<MatterEvidenceRoutingCodeDto>> GetMatterEvidenceRoutingCodesAsync(Guid tenantId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyCollection<MatterClassificationProposalDto>> GetMatterClassificationProposalsAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default);
+    Task UpsertMatterClassificationProposalsAsync(Guid tenantId, Guid userId, Guid decisionMatterId, IReadOnlyCollection<MatterClassificationProposalEvaluation> rows, CancellationToken cancellationToken = default);
+    Task<bool> DecideMatterClassificationProposalAsync(Guid tenantId, Guid userId, Guid proposalId, string statusCode, string? decisionNote, CancellationToken cancellationToken = default);
+
     // ── Per-matter Atomic Propositions (0442) ──
     Task<IReadOnlyCollection<MatterAtomicPropositionDto>> GetMatterAtomicPropositionsAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default);
     Task<IReadOnlyCollection<MatterAtomicPropositionStatusDto>> GetMatterAtomicPropositionStatusesAsync(Guid tenantId, CancellationToken cancellationToken = default);

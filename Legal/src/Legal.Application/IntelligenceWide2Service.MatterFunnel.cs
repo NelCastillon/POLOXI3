@@ -28,8 +28,19 @@ public sealed partial class IntelligenceWide2Service
     private readonly Dictionary<Guid,decimal> _relevanceByBranch=new();
     // 0441: raw halves behind the blended PriorityScore so the per-matter scope table can show both.
     private readonly Dictionary<Guid,(decimal Deterministic,decimal? Llm,string? LlmReason)> _relevanceDetailByBranch=new();
+    // 0445: branch codes the L2 review never scored after bounded retries (or the review was skipped/failed).
+    // Admission treats these as REVIEW_FAILED unless a deterministic positive signal admits them.
+    private readonly HashSet<string> _l2ReviewUnresolved=new(StringComparer.OrdinalIgnoreCase);
+    // 0445: L2 parents held back by the matter scope gate. Propositions under them are eliminated at every level
+    // (defence in depth: they are not generated, and nothing can propagate from them).
+    private readonly HashSet<Guid> _heldScopeParentIds=new();
+    // 0448: participating parents routed DEFERRED (evidence absent, relevance below immediate threshold). Skipped by
+    // L3 this run, recorded as DEFERRED_ACQUISITION, reopened automatically when evidence arrives.
+    private readonly HashSet<Guid> _deferredScopeParentIds=new();
+    private readonly Dictionary<Guid,string> _deferredScopeReasons=new();
 
-    private void ResetMatterFunnelState(){_passageMapByBranch.Clear();_factorSliceByBranch.Clear();_relevanceByBranch.Clear();_relevanceDetailByBranch.Clear();}
+    private void ResetMatterFunnelState(){_passageMapByBranch.Clear();_factorSliceByBranch.Clear();_relevanceByBranch.Clear();_relevanceDetailByBranch.Clear();
+    _l2ReviewUnresolved.Clear();_heldScopeParentIds.Clear();_deferredScopeParentIds.Clear();_deferredScopeReasons.Clear();}
 
     // ── Stage 1 + 2 + 3: run once before L3 batching ──
     private async Task<int> PrepareMatterFunnelAsync(WideSearchRequest request,Guid executionId,WideBranchRecord[] parents,WideConfiguration configuration,int llmCalls,CancellationToken cancellationToken)
@@ -43,11 +54,29 @@ public sealed partial class IntelligenceWide2Service
         var deterministic=new Dictionary<Guid,(decimal Score,List<string> Reasons)>();
         foreach(var parent in parents)deterministic[parent.WideBranchId]=ComputeDeterministicRelevance(parent);
 
+        // 0445: the full eligible catalog is reviewed in character-budgeted batches (never truncated); targets the
+        // model does not score after bounded retries stay unresolved and admission marks them REVIEW_FAILED.
+        var candidates=parents;
+
         IReadOnlyDictionary<string,(decimal Score,string? Reason)> reviewed=new Dictionary<string,(decimal,string?)>(StringComparer.OrdinalIgnoreCase);
-        if(configuration.EnableL2RelevanceReview&&llmCalls+2<=configuration.MaximumTotalLlmCalls)
+        string? reviewNote=null;
+        if(!configuration.EnableL2RelevanceReview)reviewNote="L2 relevance review disabled (EnableL2RelevanceReview=false)";
+        else if(llmCalls+2>configuration.MaximumTotalLlmCalls)reviewNote=$"L2 relevance review skipped: LLM call budget exhausted ({llmCalls}/{configuration.MaximumTotalLlmCalls})";
+        else
         {
-            try{(reviewed,var used)=await ReviewLevel2RelevanceAsync(request,parents,deterministic,configuration,configuration.MaximumTotalLlmCalls-llmCalls-1,cancellationToken);llmCalls+=used;}
-            catch(Exception ex)when(!cancellationToken.IsCancellationRequested){logger.LogWarning(ex,"Wide2 matter funnel: L2 relevance review failed; deterministic relevance only.");}
+            try
+            {
+                (reviewed,var used,var failedBatches,var rejectedCodes)=await ReviewLevel2RelevanceAsync(request,candidates,deterministic,configuration,configuration.MaximumTotalLlmCalls-llmCalls-1,cancellationToken);llmCalls+=used;
+                reviewNote=used==0?"L2 relevance review produced no batches"
+                    :reviewed.Count==0?$"L2 relevance review ran {used} batch(es) ({failedBatches} failed, {rejectedCodes} code(s) rejected by catalog gate) but returned no usable scores"
+                    :failedBatches>0?$"Not returned by L2 relevance review ({failedBatches}/{used} batch(es) failed, {rejectedCodes} rejected)"
+                    :"Not returned by L2 relevance review";
+            }
+            catch(Exception ex)when(!cancellationToken.IsCancellationRequested)
+            {
+                logger.LogWarning(ex,"Wide2 matter funnel: L2 relevance review failed; deterministic relevance only.");
+                reviewNote=$"L2 relevance review failed: {Truncate(ex.Message,200)}";
+            }
         }
 
         var tierA=0;
@@ -55,13 +84,14 @@ public sealed partial class IntelligenceWide2Service
         {
             var (score,reasons)=deterministic[parent.WideBranchId];
             var deterministicScore=Math.Clamp(score,0,1);
-            decimal? llmScore=null;string? llmReason=null;
+            decimal? llmScore=null;string? llmReason=reviewNote;
             if(reviewed.TryGetValue(parent.BranchCode,out var review))
             {
                 llmScore=Math.Clamp(review.Score,0,1);llmReason=review.Reason?.Trim();
                 score=Math.Round(score*0.5m+review.Score*0.5m,4);
                 if(!string.IsNullOrWhiteSpace(review.Reason))reasons.Add($"LLM: {review.Reason.Trim()}");
             }
+            else if(configuration.EnableL2RelevanceReview)_l2ReviewUnresolved.Add(NormalizeCode(parent.BranchCode));
             _relevanceDetailByBranch[parent.WideBranchId]=(deterministicScore,llmScore,llmReason);
             score=Math.Clamp(score,0,1);
             var tier=score>=configuration.L3TierAThreshold?"TIER_A":"TIER_B";
@@ -84,7 +114,10 @@ public sealed partial class IntelligenceWide2Service
     // the request's matter, then reads the persisted decisions back and returns the parents that must NOT
     // receive an L3 pass. Guarantees:
     //   * USER rows are authoritative - the repository never overwrites their status/decider/note;
-    //   * required-coverage, document-present and PRIORITIZE-fired targets are never auto-excluded;
+    //   * required-coverage, directly-classified-document and PRIORITIZE-fired targets are never auto-excluded;
+    //   * 0443 inclusion-first (MatterScopeInclusionFirst): a target is IN_SCOPE only on a positive matter signal
+    //     (direct document, PRIORITIZE, required coverage, mapped passage, matter-type match, or blended score
+    //     >= MatterScopeOutThreshold); everything else is OUT_OF_SCOPE but retained and attorney-reversible;
     //   * bypassed (nothing held back) when the gate is disabled, there is no matter, or the matter has
     //     neither a matter type nor any uploaded documents (no signal to decide against);
     //   * fail-soft: any persistence/read error logs a warning and holds nothing back (today's behaviour).
@@ -102,6 +135,8 @@ public sealed partial class IntelligenceWide2Service
 
         try
         {
+            var statuses=await legalDecisionRepository.GetMatterEvidenceScopeStatusesAsync(request.TenantId,cancellationToken);
+            var participatingStatuses=statuses.Where(s=>s.ParticipatesInL3).Select(s=>s.StatusCode).ToHashSet(StringComparer.OrdinalIgnoreCase);
             var evaluations=new List<MatterEvidenceScopeEvaluation>(parents.Length);
             var autoOut=0;
             foreach(var parent in parents)
@@ -111,30 +146,100 @@ public sealed partial class IntelligenceWide2Service
                 var blended=ledger.PriorityScore;
                 _relevanceDetailByBranch.TryGetValue(parent.WideBranchId,out var detail);
                 decimal? deterministic=detail.Deterministic;var llmScore=detail.Llm;
-                var protectedTarget=ledger.IsRequiredCoverage||ledger.DocumentPresent||ledger.IsPrioritized||ledger.MappedPassageCount>0;
+                var directDocument=string.Equals(ledger.TargetKindCode,"EVIDENCE_TYPE",StringComparison.OrdinalIgnoreCase)&&_matterDocumentEvidenceTypeCodes.Contains(ledger.TargetCode);
+                var matterTypeMatch=ledger.RelevanceReasons?.Contains("Matter type match",StringComparison.OrdinalIgnoreCase)==true;
+                _passageMapByBranch.TryGetValue(parent.WideBranchId,out var mappedPassagesForRouting);
+                var directPassagesForRouting=mappedPassagesForRouting?.Count(m=>string.Equals(m.Method,"EVIDENCE_TYPE",StringComparison.Ordinal))??0;
+                var verifiedAssertions=_verifiedAssertionCountsByEvidenceType.GetValueOrDefault(ledger.TargetCode);
                 var status=MatterEvidenceScopeStatusCodes.InScope;
-                if(!protectedTarget&&blended is{}score&&score<configuration.MatterScopeOutThreshold){status=MatterEvidenceScopeStatusCodes.OutOfScope;autoOut++;}
-                var decidedBy=string.Equals(ledger.DecidedByCode,"RULE",StringComparison.OrdinalIgnoreCase)?MatterEvidenceScopeDeciderCodes.Rule
+                string? decisionReason=null;
+                if(string.Equals(ledger.ScopeStatusCode,WideScopeStatuses.ExcludedDeterministic,StringComparison.OrdinalIgnoreCase))
+                {
+                    // Deterministic eligibility (incident family / jurisdiction / SUPERSEDES) already excluded the target.
+                    status=MatterEvidenceScopeStatusCodes.OutOfScope;decisionReason=ledger.Reason;autoOut++;
+                }
+                else if(configuration.MatterScopeInclusionFirst)
+                {
+                    // 0445 inclusion-first with integrity: passage floor / decisive passage, LLM-reviewed score only,
+                    // REVIEW_FAILED for unscored targets, PENDING_REVIEW band - all dormant except IN_SCOPE.
+                    _passageMapByBranch.TryGetValue(parent.WideBranchId,out var mappedPassages);
+                    var maxPassage=mappedPassages is{Length:>0}?mappedPassages.Max(m=>m.Score):0m;
+                    var directPassages=mappedPassages?.Count(m=>string.Equals(m.Method,"EVIDENCE_TYPE",StringComparison.Ordinal))??0;
+                    var decision=MatterEvidenceScopeDecider.Decide(
+                        new(directDocument,ledger.IsRequiredCoverage,ledger.IsPrioritized,ledger.MappedPassageCount,maxPassage,matterTypeMatch,blended,llmScore,configuration.EnableL2RelevanceReview,_l2ReviewUnresolved.Contains(NormalizeCode(parent.BranchCode)),directPassages),
+                        new(configuration.MatterScopeOutThreshold,configuration.MatterScopePendingReviewFloor,configuration.MatterScopeMinimumMappedPassages,configuration.MatterScopeDecisivePassageScore,configuration.MatterScopeZeroScoreCeiling));
+                    status=decision.StatusCode;decisionReason=decision.Reason;
+                    if(!string.Equals(status,MatterEvidenceScopeStatusCodes.InScope,StringComparison.OrdinalIgnoreCase))autoOut++;
+                }
+                else
+                {
+                    var protectedTarget=ledger.IsRequiredCoverage||ledger.DocumentPresent||ledger.IsPrioritized||ledger.MappedPassageCount>0;
+                    if(!protectedTarget&&blended is{}score&&score<configuration.MatterScopeOutThreshold){status=MatterEvidenceScopeStatusCodes.OutOfScope;autoOut++;}
+                }
+                // 0446: RULE is recorded as the decider only when a PRIORITIZE rule actually admitted the target; a
+                // prioritized target the LLM rejected is an LLM decision (PENDING_REVIEW), not a rule admission.
+                var ruleAdmitted=string.Equals(ledger.DecidedByCode,"RULE",StringComparison.OrdinalIgnoreCase)&&string.Equals(status,MatterEvidenceScopeStatusCodes.InScope,StringComparison.OrdinalIgnoreCase)&&decisionReason?.StartsWith("PRIORITIZE",StringComparison.OrdinalIgnoreCase)==true;
+                var decidedBy=ruleAdmitted?MatterEvidenceScopeDeciderCodes.Rule
                     :llmScore is not null?MatterEvidenceScopeDeciderCodes.Llm:MatterEvidenceScopeDeciderCodes.System;
+                // 0448: routing attributes are independent of ScopeStatusCode. Participation is resolved from the
+                // persisted status after USER authority is applied (below); here the system status is used to route.
+                var route=MatterEvidenceRouting.Decide(
+                    new(ledger.TargetKindCode,status,participatingStatuses.Contains(status),directDocument,directPassagesForRouting,verifiedAssertions,ledger.IsRequiredCoverage,ledger.IsPrioritized,llmScore,blended),
+                    new(configuration.MatterScopeImmediateRelevance,configuration.EnableEvidenceAwareL3Routing));
                 evaluations.Add(new MatterEvidenceScopeEvaluation(packCode,ledger.TargetKindCode,ledger.TargetCode,ledger.DimensionCode,ledger.DisplayName,status,decidedBy,
-                    deterministic,llmScore,blended,ledger.TierCode,ledger.RelevanceReasons,Truncate(detail.LlmReason,400),
-                    ledger.IsRequiredCoverage,ledger.IsPrioritized,ledger.DocumentPresent,ledger.MappedPassageCount,executionId,ledger.SortOrder));
+                    deterministic,llmScore,blended,ledger.TierCode,ledger.RelevanceReasons,Truncate(string.IsNullOrWhiteSpace(detail.LlmReason)?decisionReason:llmScore is null&&decisionReason is not null?$"{decisionReason} | {detail.LlmReason}":detail.LlmReason,400),
+                    ledger.IsRequiredCoverage,ledger.IsPrioritized,ledger.DocumentPresent,ledger.MappedPassageCount,executionId,ledger.SortOrder)
+                    {EvidenceAvailabilityCode=route.AvailabilityCode,VerificationStatusCode=route.VerificationCode,ExecutionPriorityCode=route.PriorityCode,DirectPassageCount=directPassagesForRouting,VerifiedAssertionCount=verifiedAssertions,RoutingReason=Truncate(route.Reason,400)});
             }
+            // 0446 complete catalog disposition: targets excluded BEFORE branch materialization (deterministic
+            // incident-family / jurisdiction / SUPERSEDES exclusions and EXCLUDE rules) never become parents, so
+            // they are persisted here from the ledger as OUT_OF_SCOPE (SYSTEM/RULE) with their exclusion reason.
+            // Every catalog target therefore has exactly one documented matter-scope disposition.
+            var evaluatedKeys=evaluations.Select(e=>$"{e.TargetKindCode}|{e.TargetCode}").ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var excludedPersisted=0;
+            foreach(var ledger in _scopeLedger)
+            {
+                if(!string.Equals(ledger.ScopeStatusCode,WideScopeStatuses.ExcludedDeterministic,StringComparison.OrdinalIgnoreCase)
+                 &&!string.Equals(ledger.ScopeStatusCode,WideScopeStatuses.ExcludedByRule,StringComparison.OrdinalIgnoreCase))continue;
+                if(!evaluatedKeys.Add($"{ledger.TargetKindCode}|{ledger.TargetCode}"))continue;
+                var decider=string.Equals(ledger.DecidedByCode,"RULE",StringComparison.OrdinalIgnoreCase)?MatterEvidenceScopeDeciderCodes.Rule:MatterEvidenceScopeDeciderCodes.System;
+                evaluations.Add(new MatterEvidenceScopeEvaluation(packCode,ledger.TargetKindCode,ledger.TargetCode,ledger.DimensionCode,ledger.DisplayName,MatterEvidenceScopeStatusCodes.OutOfScope,decider,
+                    null,null,null,null,ledger.ScopeStatusCode,Truncate(ledger.Reason,400),ledger.IsRequiredCoverage,false,false,0,executionId,ledger.SortOrder)
+                    {EvidenceAvailabilityCode=string.Equals(ledger.TargetKindCode,"CONCEPT",StringComparison.OrdinalIgnoreCase)?MatterEvidenceAvailabilityCodes.NotApplicable:MatterEvidenceAvailabilityCodes.Absent,VerificationStatusCode=MatterEvidenceVerificationCodes.Unknown,ExecutionPriorityCode=MatterEvidenceExecutionPriorityCodes.Dormant,RoutingReason="Excluded before branch materialization"});
+                excludedPersisted++;autoOut++;
+            }
+            var catalogTotal=_packConcepts.Select(c=>c.ConceptCode).Distinct(StringComparer.OrdinalIgnoreCase).Count()+_packEvidenceTypes.Select(e=>e.EvidenceTypeCode).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+            if(evaluations.Count!=catalogTotal)
+                logger.LogWarning("Wide2 matter scope COVERAGE_INCOMPLETE for matter {MatterId}: catalog={Catalog} dispositions={Dispositions} (parents={Parents} excludedFromLedger={Excluded}). Every catalog target must carry exactly one disposition.",matterId,catalogTotal,evaluations.Count,parents.Length,excludedPersisted);
+            else
+                logger.LogInformation("Wide2 matter scope coverage reconciled for matter {MatterId}: catalog={Catalog} dispositions={Dispositions} excludedFromLedger={Excluded}.",matterId,catalogTotal,evaluations.Count,excludedPersisted);
             await legalDecisionRepository.UpsertSystemMatterEvidenceScopesAsync(request.TenantId,request.UserId,matterId,evaluations,cancellationToken);
 
             var persisted=await legalDecisionRepository.GetMatterEvidenceScopesAsync(request.TenantId,matterId,cancellationToken);
-            var statuses=await legalDecisionRepository.GetMatterEvidenceScopeStatusesAsync(request.TenantId,cancellationToken);
-            var participating=statuses.Where(s=>s.ParticipatesInL3).Select(s=>s.StatusCode).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var participating=participatingStatuses;
             var byTarget=persisted.Where(p=>string.Equals(p.PackCode,packCode,StringComparison.OrdinalIgnoreCase))
                 .ToDictionary(p=>$"{p.TargetKindCode}|{p.TargetCode}",StringComparer.OrdinalIgnoreCase);
-            var userHeld=0;
+            var userHeld=0;var deferred=0;
             foreach(var parent in parents)
             {
                 if(!_scopeLedgerByBranchCode.TryGetValue(NormalizeCode(parent.BranchCode),out var index))continue;
                 var ledger=_scopeLedger[index];
                 if(!byTarget.TryGetValue($"{ledger.TargetKindCode}|{ledger.TargetCode}",out var row))continue;
-                if(participating.Contains(row.ScopeStatusCode))continue;
-                held.Add(parent.WideBranchId);
+                if(participating.Contains(row.ScopeStatusCode))
+                {
+                    // 0448: a USER-admitted row keeps its system-computed routing; deferral applies only to SYSTEM/LLM
+                    // decisions so an attorney's explicit IN_SCOPE always receives its L3 pass.
+                    if(configuration.EnableEvidenceAwareL3Routing
+                     &&string.Equals(row.ExecutionPriorityCode,MatterEvidenceExecutionPriorityCodes.Deferred,StringComparison.OrdinalIgnoreCase)
+                     &&!string.Equals(row.DecidedByCode,MatterEvidenceScopeDeciderCodes.User,StringComparison.OrdinalIgnoreCase))
+                    {
+                        _deferredScopeParentIds.Add(parent.WideBranchId);
+                        _deferredScopeReasons[parent.WideBranchId]=row.RoutingReason??"Deferred to acquisition";
+                        deferred++;
+                    }
+                    continue;
+                }
+                held.Add(parent.WideBranchId);_heldScopeParentIds.Add(parent.WideBranchId);
                 if(string.Equals(row.DecidedByCode,MatterEvidenceScopeDeciderCodes.User,StringComparison.OrdinalIgnoreCase))userHeld++;
                 _scopeLedger[index]=ledger with{ScopeStatusCode=row.ScopeStatusCode,DecidedByCode=row.DecidedByCode,Reason=Truncate(row.UserNote??row.LlmReason??$"Matter scope {row.ScopeStatusCode} ({row.DecidedByCode})",1000)};
             }
@@ -144,12 +249,17 @@ public sealed partial class IntelligenceWide2Service
                 logger.LogWarning("Wide2 matter scope gate for matter {MatterId} would hold back all {Parents} parents; ignoring the gate for this run.",matterId,parents.Length);
                 held.Clear();
             }
-            logger.LogInformation("Wide2 matter scope gate for matter {MatterId}: parents={Parents} autoOut={AutoOut} heldBack={Held} (userDecided={UserHeld}) threshold={Threshold}.",matterId,parents.Length,autoOut,held.Count,userHeld,configuration.MatterScopeOutThreshold);
+            if(_deferredScopeParentIds.Count>0&&held.Count+_deferredScopeParentIds.Count>=parents.Length)
+            {
+                logger.LogWarning("Wide2 evidence-aware routing for matter {MatterId} would defer every remaining parent ({Deferred}); ignoring deferral for this run.",matterId,_deferredScopeParentIds.Count);
+                _deferredScopeParentIds.Clear();_deferredScopeReasons.Clear();deferred=0;
+            }
+            logger.LogInformation("Wide2 matter scope gate for matter {MatterId}: parents={Parents} autoOut={AutoOut} heldBack={Held} (userDecided={UserHeld}) deferredToAcquisition={Deferred} threshold={Threshold} immediateRelevance={Immediate}.",matterId,parents.Length,autoOut,held.Count,userHeld,deferred,configuration.MatterScopeOutThreshold,configuration.MatterScopeImmediateRelevance);
         }
         catch(Exception ex)when(!cancellationToken.IsCancellationRequested)
         {
             logger.LogWarning(ex,"Wide2 matter scope gate failed for matter {MatterId}; all parents proceed to L3.",matterId);
-            held.Clear();
+            held.Clear();_deferredScopeParentIds.Clear();_deferredScopeReasons.Clear();
         }
         return held;
     }
@@ -174,6 +284,7 @@ public sealed partial class IntelligenceWide2Service
             var byId=allBranches.Concat(level).GroupBy(branch=>branch.WideBranchId).ToDictionary(group=>group.Key,group=>group.First());
             var evaluations=new List<MatterAtomicPropositionEvaluation>(level.Length);
             var parentKeyByBranch=new Dictionary<Guid,string>();
+            var heldChildren=new Dictionary<Guid,WideBranchScopeRecord>();
             foreach(var child in level)
             {
                 // Walk up to the L2 catalog target (CPT_/EVD_ branch with a scope-ledger row); the direct parent
@@ -188,6 +299,7 @@ public sealed partial class IntelligenceWide2Service
                 }
                 if(l2 is null||!_scopeLedgerByBranchCode.TryGetValue(NormalizeCode(l2.BranchCode),out var index))continue;
                 var ledger=_scopeLedger[index];
+                if(_heldScopeParentIds.Contains(l2.WideBranchId)){heldChildren[child.WideBranchId]=ledger;continue;}
                 _atomicProvenanceByBranch.TryGetValue(child.WideBranchId,out var prov);
                 var call=prov?.Call??_lastHierarchyStepCall;
                 parentKeyByBranch[child.WideBranchId]=$"{ledger.TargetKindCode}|{ledger.TargetCode}|{NormalizeCode(child.BranchCode)}";
@@ -199,7 +311,11 @@ public sealed partial class IntelligenceWide2Service
                     Truncate(call?.ModelCode,120),Truncate(call?.ProviderCode,60),call?.InputTokenCount,call?.OutputTokenCount,call is null?null:(int)Math.Min(int.MaxValue,call.Duration.TotalMilliseconds),Truncate(call?.ProviderRequestId,200),
                     child.WideBranchId,executionId,child.SortOrder));
             }
-            if(evaluations.Count==0)return level;
+            WideBranchRecord[] ApplyHeld(WideBranchRecord[] input)=>heldChildren.Count==0?input:input.Select(child=>heldChildren.TryGetValue(child.WideBranchId,out var l2)
+                ?child with{IsEliminated=true,EliminationReason=Truncate($"MATTER_SCOPE_HELD: parent {l2.TargetCode} is {l2.ScopeStatusCode} ({l2.DecidedByCode}); no proposition may generate or propagate from it",1000),ContinueNarrowing=false}
+                :child).ToArray();
+            if(heldChildren.Count>0)logger.LogWarning("Wide2 atomic propositions for matter {MatterId}: {Count} level-{Level} proposition(s) sit under held-back L2 parents and are eliminated.",matterId,heldChildren.Count,levelNumber);
+            if(evaluations.Count==0)return ApplyHeld(level);
             await legalDecisionRepository.UpsertSystemMatterAtomicPropositionsAsync(request.TenantId,request.UserId,matterId,evaluations,cancellationToken);
 
             var persisted=await legalDecisionRepository.GetMatterAtomicPropositionsAsync(request.TenantId,matterId,cancellationToken);
@@ -215,17 +331,17 @@ public sealed partial class IntelligenceWide2Service
                 if(participating.Contains(row.ScopeStatusCode))continue;
                 eliminated[child.WideBranchId]=row;
             }
-            if(eliminated.Count>0&&eliminated.Count>=level.Length)
+            if(eliminated.Count>0&&eliminated.Count>=level.Length-heldChildren.Count)
             {
                 logger.LogWarning("Wide2 atomic-proposition gate for matter {MatterId} would eliminate all {Count} level-{Level} propositions; ignoring the gate for this run.",matterId,level.Length,levelNumber);
-                return level;
+                return ApplyHeld(level);
             }
             var userHeld=eliminated.Values.Count(r=>string.Equals(r.DecidedByCode,MatterAtomicPropositionDeciderCodes.User,StringComparison.OrdinalIgnoreCase));
             logger.LogInformation("Wide2 atomic propositions for matter {MatterId}: level={Level} persisted={Persisted} eliminated={Eliminated} (userDecided={UserHeld}).",matterId,levelNumber,evaluations.Count,eliminated.Count,userHeld);
-            if(eliminated.Count==0)return level;
-            return level.Select(child=>eliminated.TryGetValue(child.WideBranchId,out var row)
+            if(eliminated.Count==0)return ApplyHeld(level);
+            return ApplyHeld(level.Select(child=>eliminated.TryGetValue(child.WideBranchId,out var row)
                 ?child with{IsEliminated=true,EliminationReason=Truncate($"MATTER_SCOPE_OUT: {row.UserNote??$"Atomic proposition {row.ScopeStatusCode} ({row.DecidedByCode})"}",1000),ContinueNarrowing=false}
-                :child).ToArray();
+                :child).ToArray());
         }
         catch(Exception ex)when(!cancellationToken.IsCancellationRequested)
         {
@@ -258,7 +374,9 @@ public sealed partial class IntelligenceWide2Service
                 if(hits.Length>0){score+=Math.Min(0.2m,0.05m*hits.Length);reasons.Add($"Relevance keywords in matter: {string.Join(", ",hits)}");}
             }
             if(evidence.IsRequiredCoverage){score+=0.05m;reasons.Add("Required coverage");}
-            if(evidence.PoloxiImportanceScore is{}importance)score+=Math.Clamp(importance,0,1)*0.1m;
+            // Catalog importance is a prior, not a matter signal: it only amplifies an existing signal so
+            // importance-only rows score 0 and cannot clear the inclusion-first threshold on their own.
+            if(evidence.PoloxiImportanceScore is{}importance&&reasons.Count>0){score+=Math.Clamp(importance,0,1)*0.1m;reasons.Add($"Catalog importance {Math.Clamp(importance,0,1):0.00}");}
         }
         var nameHits=DomainPackEvidencePresenceMatcher.NormalizeCorpusTokens(parent.DisplayName).Where(t=>t.Length>3&&_matterPresenceTokens.Contains(t)).Distinct().Take(4).ToArray();
         if(nameHits.Length>0){score+=Math.Min(0.15m,0.05m*nameHits.Length);reasons.Add($"Name terms in matter: {string.Join(", ",nameHits)}");}
@@ -269,71 +387,96 @@ public sealed partial class IntelligenceWide2Service
         return(Math.Round(Math.Clamp(score,0,1),4),reasons);
     }
 
-    // ── Stage 2: optional LLM relevance review, strictly bound to the catalog, batched by dimension ──
-    private async Task<(IReadOnlyDictionary<string,(decimal Score,string? Reason)> Reviewed,int LlmCalls)> ReviewLevel2RelevanceAsync(WideSearchRequest request,WideBranchRecord[] parents,IReadOnlyDictionary<Guid,(decimal Score,List<string> Reasons)> deterministic,WideConfiguration configuration,int callBudget,CancellationToken cancellationToken)
+    // ── Stage 2: optional LLM relevance review, strictly bound to the catalog, batched by CHARACTER BUDGET ──
+    // 0445: batches are sized from the serialized line lengths (L2ReviewPromptBudgetChars) so no catalog row is
+    // ever truncated out of the prompt; coverage is validated per batch and missing/invalid targets are retried
+    // (L2ReviewMaxRetries) in fresh batches. Targets still unscored afterwards are reported as unresolved and
+    // admission marks them REVIEW_FAILED - they are never auto-admitted.
+    private async Task<(IReadOnlyDictionary<string,(decimal Score,string? Reason)> Reviewed,int LlmCalls,int FailedBatches,int Rejected)> ReviewLevel2RelevanceAsync(WideSearchRequest request,WideBranchRecord[] parents,IReadOnlyDictionary<Guid,(decimal Score,List<string> Reasons)> deterministic,WideConfiguration configuration,int callBudget,CancellationToken cancellationToken)
     {
         var evidenceByCode=_packEvidenceTypes.ToDictionary(e=>e.EvidenceTypeCode,StringComparer.OrdinalIgnoreCase);
         var conceptByCode=_packConcepts.GroupBy(c=>c.ConceptCode,StringComparer.OrdinalIgnoreCase).ToDictionary(g=>g.Key,g=>g.First(),StringComparer.OrdinalIgnoreCase);
-        var batchSize=Math.Max(5,configuration.L2ReviewBatchSize);
-        var batches=parents
-            .GroupBy(parent=>DimensionCodeFor(parent,evidenceByCode,conceptByCode),StringComparer.OrdinalIgnoreCase)
-            .OrderBy(group=>group.Key,StringComparer.OrdinalIgnoreCase)
-            .SelectMany(group=>group.OrderBy(p=>p.SortOrder).Chunk(batchSize).Select(chunk=>(Dimension:group.Key,Parents:chunk)))
-            .ToArray();
-        if(batches.Length>callBudget)
-        {
-            logger.LogWarning("Wide2 matter funnel: relevance review needs {Needed} batch call(s) but only {Budget} remain; reviewing the first {Budget} batch(es), remaining parents keep deterministic relevance.",batches.Length,callBudget,callBudget);
-            batches=batches.Take(Math.Max(0,callBudget)).ToArray();
-        }
-        if(batches.Length==0)return(new Dictionary<string,(decimal,string?)>(StringComparer.OrdinalIgnoreCase),0);
+        var accepted=new Dictionary<string,(decimal,string?)>(StringComparer.OrdinalIgnoreCase);
+        if(parents.Length==0||callBudget<=0)return(accepted,0,0,0);
 
         var matterContext=BoundContractContext(BuildMatterContextSection(),ContractContextPrefixBudgetChars);
         var systemPrompt=await GetWideSystemPromptAsync(request,IntelligencePromptCodes.WideL2RelevanceReview,cancellationToken);
-        var gate=new SemaphoreSlim(Math.Max(1,configuration.L3PassageMapConcurrency));
-        var results=await Task.WhenAll(batches.Select(async batch=>
-        {
-            await gate.WaitAsync(cancellationToken);
-            try{return await ReviewOneBatchAsync(request,batch.Dimension,batch.Parents,deterministic,evidenceByCode,conceptByCode,matterContext,systemPrompt,configuration,cancellationToken);}
-            finally{gate.Release();}
-        }));
+        var question=Truncate(request.Query,3000)??string.Empty;
+        var overhead=question.Length+(matterContext?.Length??0)+600;
+        var lineByBranch=parents.ToDictionary(p=>p.WideBranchId,p=>BuildReviewLine(p,deterministic[p.WideBranchId],evidenceByCode,conceptByCode));
+        var ordered=parents
+            .Select(parent=>(Dimension:DimensionCodeFor(parent,evidenceByCode,conceptByCode),Parent:parent))
+            .OrderBy(x=>x.Dimension,StringComparer.OrdinalIgnoreCase).ThenBy(x=>x.Parent.SortOrder)
+            .Select(x=>x.Parent).ToArray();
 
-        var accepted=new Dictionary<string,(decimal,string?)>(StringComparer.OrdinalIgnoreCase);
-        var rejected=0;var failed=0;
-        foreach(var (items,batchRejected,ok) in results)
+        var gate=new SemaphoreSlim(Math.Max(1,configuration.L2ReviewConcurrency));
+        var calls=0;var failed=0;var rejected=0;
+        var pending=ordered;
+        for(var attempt=0;attempt<=configuration.L2ReviewMaxRetries&&pending.Length>0;attempt++)
         {
-            rejected+=batchRejected;if(!ok)failed++;
-            foreach(var (code,value) in items)if(!accepted.ContainsKey(code))accepted[code]=value;
+            var batches=L2ReviewBatcher.Split(pending,p=>lineByBranch[p.WideBranchId],configuration.L2ReviewPromptBudgetChars,overhead,Math.Max(5,configuration.L2ReviewBatchSize));
+            var remainingCalls=callBudget-calls;
+            if(batches.Count>remainingCalls)
+            {
+                logger.LogWarning("Wide2 matter funnel: L2 review attempt {Attempt} needs {Needed} batch call(s) but only {Budget} remain; reviewing the first {Budget}, the rest stay unresolved.",attempt+1,batches.Count,remainingCalls,remainingCalls);
+                batches=batches.Take(Math.Max(0,remainingCalls)).ToList();
+            }
+            if(batches.Count==0)break;
+            var attemptNumber=attempt+1;
+            var results=await Task.WhenAll(batches.Select(async (batch,index)=>
+            {
+                await gate.WaitAsync(cancellationToken);
+                try{return await ReviewOneBatchAsync(request,$"attempt {attemptNumber} batch {index+1}/{batches.Count}",batch.Items.ToArray(),lineByBranch,question,matterContext,systemPrompt,configuration,cancellationToken);}
+                finally{gate.Release();}
+            }));
+            calls+=batches.Count;
+            foreach(var (items,batchRejected,ok) in results)
+            {
+                rejected+=batchRejected;if(!ok)failed++;
+                foreach(var (code,value) in items)if(!accepted.ContainsKey(code))accepted[code]=value;
+            }
+            var missing=L2ReviewBatcher.Missing(pending.Select(p=>p.BranchCode),accepted.Keys);
+            pending=pending.Where(p=>missing.Contains(p.BranchCode,StringComparer.OrdinalIgnoreCase)).ToArray();
+            logger.LogInformation("Wide2 matter funnel: L2 review attempt {Attempt} batches={Batches} (budget {BudgetChars} chars) failed={Failed} accepted={Accepted} missing={Missing}.",attemptNumber,batches.Count,configuration.L2ReviewPromptBudgetChars,results.Count(r=>!r.Ok),accepted.Count,pending.Length);
         }
-        var unreviewed=parents.Count(p=>!accepted.ContainsKey(NormalizeCode(p.BranchCode)));
         if(rejected>0)logger.LogWarning("Wide2 matter funnel: relevance review returned {Rejected} code(s) outside the Domain Pack catalog; dropped.",rejected);
-        logger.LogInformation("Wide2 matter funnel: relevance review batches={Batches} failed={Failed} batchSize={BatchSize} reviewed={Reviewed} unreviewed={Unreviewed} of {Parents}.",batches.Length,failed,batchSize,accepted.Count,unreviewed,parents.Length);
-        return(accepted,batches.Length);
+        if(pending.Length>0)logger.LogWarning("Wide2 matter funnel: {Unresolved} of {Parents} catalog targets were NOT scored by the L2 review after {Attempts} attempt(s); they will be REVIEW_FAILED unless a deterministic signal admits them.",pending.Length,parents.Length,configuration.L2ReviewMaxRetries+1);
+        logger.LogInformation("Wide2 matter funnel: relevance review calls={Calls} failed={Failed} reviewed={Reviewed} unreviewed={Unreviewed} of {Parents}.",calls,failed,accepted.Count,pending.Length,parents.Length);
+        return(accepted,calls,failed,rejected);
     }
 
-    private async Task<(List<KeyValuePair<string,(decimal,string?)>> Items,int Rejected,bool Ok)> ReviewOneBatchAsync(WideSearchRequest request,string dimension,WideBranchRecord[] batch,IReadOnlyDictionary<Guid,(decimal Score,List<string> Reasons)> deterministic,IReadOnlyDictionary<string,DecisionDomainPackEvidenceTypeDto> evidenceByCode,IReadOnlyDictionary<string,DecisionDomainConceptDto> conceptByCode,string? matterContext,string systemPrompt,WideConfiguration configuration,CancellationToken cancellationToken)
+    private async Task<(List<KeyValuePair<string,(decimal,string?)>> Items,int Rejected,bool Ok)> ReviewOneBatchAsync(WideSearchRequest request,string label,WideBranchRecord[] batch,IReadOnlyDictionary<Guid,string> lineByBranch,string question,string? matterContext,string systemPrompt,WideConfiguration configuration,CancellationToken cancellationToken)
     {
         var items=new List<KeyValuePair<string,(decimal,string?)>>();
         var catalog=batch.Select(parent=>parent.BranchCode).ToHashSet(StringComparer.OrdinalIgnoreCase);
         try
         {
-            var lines=string.Join('\n',batch.Select(parent=>BuildReviewLine(parent,deterministic[parent.WideBranchId],evidenceByCode,conceptByCode)));
-            var prompt=Truncate($"Original question: {Truncate(request.Query,3000)}{matterContext}\nConfigured Domain Pack Level-2 catalog, dimension {dimension} (FIXED - return exactly these {batch.Length} codes, no additions). Each line gives the DB definition of the evidence type/concept: description, applicable matter types, relevance keywords, and the deterministic matter signals already found:\n{lines}",WideUserPromptBudget)!;
+            var lines=string.Join('\n',batch.Select(parent=>lineByBranch[parent.WideBranchId]));
+            // No truncation: the batcher already sized this batch to the prompt budget. Every submitted code must come back.
+            var prompt=$"Original question: {question}{matterContext}\nConfigured Domain Pack Level-2 catalog batch ({label}) (FIXED - return exactly these {batch.Length} codes, no additions, no omissions). Each line gives the DB definition of the evidence type/concept: description, applicable matter types, relevance keywords, and the deterministic matter signals already found:\n{lines}";
+            if(prompt.Length>configuration.L2ReviewPromptBudgetChars)logger.LogWarning("Wide2 matter funnel: L2 review {Label} prompt is {Length} chars (budget {Budget}); sent intact to avoid dropping catalog rows.",label,prompt.Length,configuration.L2ReviewPromptBudgetChars);
             var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_HIERARCHY_STEP",systemPrompt,
                 prompt,L2RelevanceSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_L2_RELEVANCE_REVIEW",null,request.CorrelationId,"Intelligent Search Wide"),MechanicalModel(configuration,request),cancellationToken);
             var proposal=JsonSerializer.Deserialize<WideL2RelevanceProposal>(result.Content,JsonOptions);
             // Catalog gate: only codes that exist in this batch's materialized Domain Pack L2 set are accepted.
-            var rejected=0;var seen=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            // Tolerant to the model echoing the bare catalog code (MEDICAL_RECORDS) instead of the branch code (EVD_MEDICAL_RECORDS).
+            var rejected=0;var returned=0;var seen=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach(var item in proposal?.Items??[])
             {
-                var code=NormalizeCode(item.BranchCode);
-                if(!catalog.Contains(code)){rejected++;continue;}
+                returned++;
+                var code=ResolveCatalogCode(item.BranchCode,catalog);
+                if(code is null){rejected++;continue;}
                 if(seen.Add(code))items.Add(new(code,(Math.Clamp(item.Relevance,0,1),Truncate(item.Reason,300))));
             }
+            if(returned==0||items.Count==0)
+                logger.LogWarning("Wide2 matter funnel: relevance review {Label} returned {Returned} item(s), {Rejected} rejected, {Accepted} accepted. Content head: {Head}",label,returned,rejected,items.Count,Truncate(result.Content,300));
+            else if(items.Count<batch.Length)
+                logger.LogInformation("Wide2 matter funnel: relevance review {Label} covered {Accepted}/{Submitted} codes; the rest are retried.",label,items.Count,batch.Length);
             return(items,rejected,true);
         }
         catch(Exception ex)when(!cancellationToken.IsCancellationRequested)
         {
-            logger.LogWarning(ex,"Wide2 matter funnel: relevance review batch for dimension {Dimension} ({Count} parents) failed; deterministic relevance only for this batch.",dimension,batch.Length);
+            logger.LogWarning(ex,"Wide2 matter funnel: relevance review {Label} ({Count} parents) failed; its targets are retried.",label,batch.Length);
             return(items,0,false);
         }
     }
@@ -347,22 +490,22 @@ public sealed partial class IntelligenceWide2Service
 
     private static string BuildReviewLine(WideBranchRecord parent,(decimal Score,List<string> Reasons) deterministic,IReadOnlyDictionary<string,DecisionDomainPackEvidenceTypeDto> evidenceByCode,IReadOnlyDictionary<string,DecisionDomainConceptDto> conceptByCode)
     {
+        // Compact (~110 chars/line): the batcher sizes batches from these lengths against L2ReviewPromptBudgetChars.
         var sb=new StringBuilder();
-        sb.Append("- ").Append(parent.BranchCode).Append(" \"").Append(parent.DisplayName).Append('"');
+        sb.Append("- ").Append(parent.BranchCode).Append(" \"").Append(Truncate(parent.DisplayName,40)).Append('"');
         if(parent.BranchCode.StartsWith("EVD_",StringComparison.OrdinalIgnoreCase)&&evidenceByCode.TryGetValue(parent.BranchCode["EVD_".Length..],out var evidence))
         {
-            if(!string.IsNullOrWhiteSpace(evidence.Description))sb.Append(" | def: ").Append(Truncate(evidence.Description.Trim(),220));
-            if(!string.IsNullOrWhiteSpace(evidence.MatterTypeCodes))sb.Append(" | matter types: ").Append(Truncate(evidence.MatterTypeCodes.Trim(),160));
-            if(!string.IsNullOrWhiteSpace(evidence.RelevanceKeywords))sb.Append(" | keywords: ").Append(Truncate(evidence.RelevanceKeywords.Trim(),240));
-            if(evidence.IsRequiredCoverage)sb.Append(" | required coverage");
+            if(!string.IsNullOrWhiteSpace(evidence.MatterTypeCodes))sb.Append(" |mt:").Append(Truncate(evidence.MatterTypeCodes.Trim(),40));
+            if(evidence.IsRequiredCoverage)sb.Append(" |req");
         }
         else if(parent.BranchCode.StartsWith("CPT_",StringComparison.OrdinalIgnoreCase)&&conceptByCode.TryGetValue(parent.BranchCode["CPT_".Length..],out var concept))
         {
-            if(!string.IsNullOrWhiteSpace(concept.Description))sb.Append(" | def: ").Append(Truncate(concept.Description.Trim(),220));
-            if(!string.IsNullOrWhiteSpace(concept.MatterTypeCode))sb.Append(" | matter type: ").Append(concept.MatterTypeCode.Trim());
-            if(concept.IsRequiredCoverage)sb.Append(" | required coverage");
+            if(!string.IsNullOrWhiteSpace(concept.MatterTypeCode))sb.Append(" |mt:").Append(Truncate(concept.MatterTypeCode.Trim(),40));
+            if(concept.IsRequiredCoverage)sb.Append(" |req");
         }
-        sb.Append(" | deterministic ").Append(deterministic.Score.ToString("0.00")).Append(": ").Append(Truncate(string.Join("; ",deterministic.Reasons),200));
+        sb.Append(" |det ").Append(deterministic.Score.ToString("0.00"));
+        var signals=deterministic.Reasons.Where(r=>!r.StartsWith("Catalog",StringComparison.OrdinalIgnoreCase)).ToArray();
+        if(signals.Length>0)sb.Append(": ").Append(Truncate(string.Join("; ",signals),70));
         return sb.ToString();
     }
 
@@ -429,6 +572,16 @@ public sealed partial class IntelligenceWide2Service
         var builder=new StringBuilder();
         foreach(var (field,_) in fields)builder.Append("\n    [matter ").Append(field.Provenance.ToString().ToUpperInvariant()).Append("] ").Append(field.Label).Append(": ").Append(Truncate(field.Value?.Trim(),240));
         return builder.ToString();
+    }
+
+    private static string? ResolveCatalogCode(string? raw,HashSet<string> catalog)
+    {
+        if(string.IsNullOrWhiteSpace(raw))return null;
+        var code=NormalizeCode(raw);
+        if(catalog.TryGetValue(code,out var exact))return exact;
+        if(catalog.TryGetValue("EVD_"+code,out var evd))return evd;
+        if(catalog.TryGetValue("CPT_"+code,out var cpt))return cpt;
+        return null;
     }
 
     private sealed record WideL2RelevanceProposal(IReadOnlyCollection<WideL2RelevanceItem>? Items);

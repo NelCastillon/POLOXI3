@@ -57,6 +57,35 @@ public static class TestPersonalInjuryProfileFactory
 
     // Builds a complete fictional PI profile. Context (state/city/county/incidentSummary/etc.)
     // is optional and, when supplied, aligns the profile with the generated matter narrative.
+    private sealed record IncidentTemplate(string FamilyKey, string FallbackTypeCode, string LocationTemplate, string SummaryTemplate)
+    {
+        public string TypeCode { get; init; } = FallbackTypeCode;
+    }
+
+    private static readonly IncidentTemplate[] _incidentTemplates =
+    {
+        new("motor", "Motor Vehicle Accident", "Intersection of Main St and 5th Ave, {0}", "{0} was injured in a rear-end vehicle collision allegedly caused by a driver employed by {1}."),
+        new("premises", "Slip and Fall", "Retail premises of the defendant, {0}", "{0} slipped and fell on an unmarked wet floor at premises owned and operated by {1}."),
+        new("product", "Product Liability", "Plaintiff's residence, {0}", "{0} was injured when a consumer product manufactured and sold by {1} failed during ordinary use."),
+    };
+
+    // Match subtype -> incident family; then prefer a DB-backed incident type of that family.
+    private static IncidentTemplate ResolveIncident(IReadOnlyCollection<string> incidentTypes, string? matterSubtype)
+    {
+        var subtype = (matterSubtype ?? string.Empty).ToLowerInvariant();
+        var template = subtype.Contains("premises") || subtype.Contains("slip") ? _incidentTemplates[1]
+            : subtype.Contains("product") ? _incidentTemplates[2]
+            : _incidentTemplates[0];
+        var familyTerms = template.FamilyKey switch
+        {
+            "premises" => new[] { "premises", "slip", "trip", "fall" },
+            "product" => new[] { "product", "defect" },
+            _ => new[] { "motor", "vehicle", "collision", "auto", "car" },
+        };
+        var dbMatches = (incidentTypes ?? []).Where(t => familyTerms.Any(term => t.Contains(term, StringComparison.OrdinalIgnoreCase))).ToList();
+        return dbMatches.Count > 0 ? template with { TypeCode = Pick(dbMatches) } : template;
+    }
+
     public static PersonalInjuryProfileSaveRequest Build(
         PersonalInjuryOptionsDto options,
         string? state = null,
@@ -68,9 +97,15 @@ public static class TestPersonalInjuryProfileFactory
         string? treatmentSummary = null,
         string? damagesSummary = null,
         string? plaintiff = null,
-        string? defendant = null)
+        string? defendant = null,
+        string? matterSubtype = null)
     {
         options ??= new();
+
+        // 0447: the incident type, location and narrative must agree with the matter subtype, because the saved
+        // record is the authoritative context for incident-family scoping. Pick the DB option that matches the
+        // subtype family when one exists; otherwise fall back to a representative value of that family.
+        var incident = ResolveIncident(options.IncidentTypes, matterSubtype);
 
         var incidentDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-_rng.Next(210, 420)));
         var firstTreat = incidentDate.AddDays(_rng.Next(0, 3));
@@ -91,17 +126,21 @@ public static class TestPersonalInjuryProfileFactory
 
         return new PersonalInjuryProfileSaveRequest
         {
-            IncidentTypeCode = PickCodeOrNull(options.IncidentTypes, "Motor Vehicle Accident"),
+            IncidentTypeCode = incident.TypeCode,
             IncidentDate = incidentDate,
             IncidentTime = new TimeOnly(_rng.Next(6, 20), _rng.Next(0, 60)),
-            IncidentLocation = $"Intersection of Main St and 5th Ave, {city ?? "Springfield"}",
+            IncidentLocation = string.Format(incident.LocationTemplate, city ?? "Springfield"),
             IncidentCity = city ?? "Springfield",
             IncidentCounty = county,
             IncidentState = state,
             IncidentSummary = incidentSummary
-                ?? $"{plaintiff ?? "The plaintiff"} was injured in a collision allegedly caused by {defendant ?? "the defendant"}.",
+                ?? string.Format(incident.SummaryTemplate, plaintiff ?? "The plaintiff", defendant ?? "the defendant"),
             LiabilitySummary = liabilitySummary
-                ?? "Liability is supported by the police report and an independent witness; defendant disputes comparative fault.",
+                ?? (incident.FamilyKey == "premises"
+                    ? "Liability is supported by an incident report and store surveillance; defendant disputes notice of the hazard and asserts comparative fault."
+                    : incident.FamilyKey == "product"
+                        ? "Liability is supported by the retained product and a preliminary engineering inspection; defendant disputes the defect and asserts misuse."
+                        : "Liability is supported by the police report and an independent witness; defendant disputes comparative fault."),
             InjurySummary = injurySummary
                 ?? "Plaintiff sustained orthopedic injuries requiring imaging, specialist care, and ongoing therapy.",
             TreatmentSummary = treatmentSummary

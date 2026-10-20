@@ -114,10 +114,20 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     // passage id), per-run scope ledger rows, and the per-run passage-id -> graph item lookup used to
     // validate model-cited anchors (unknown ids are dropped; fabricated anchors never persist).
     private IReadOnlyList<DecisionDomainPackRelevanceRuleDto> _packRelevanceRules=[];
+    // Migration 0445: deterministic eligibility inputs (incident families, concept relations), the resolved
+    // matter families and the authoritative matter jurisdiction. Every catalog target gets an explicit
+    // disposition before any L2 LLM review; deterministic exclusions never reach the model or L3.
+    private IReadOnlyList<DecisionDomainPackIncidentFamilyDto> _packIncidentFamilies=[];
+    private IReadOnlyList<DecisionDomainConceptRelationDto> _packConceptRelations=[];
+    private IReadOnlySet<string> _matterIncidentFamilies=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    private string? _matterJurisdiction;
+    private readonly Dictionary<string,string> _deterministicExclusions=new(StringComparer.OrdinalIgnoreCase);
     private IReadOnlyList<LegalEvidenceGraphItemDto> _matterPassageIndex=[];
     private readonly List<WideBranchScopeRecord> _scopeLedger=new();
     private readonly Dictionary<string,int> _scopeLedgerByBranchCode=new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string,int> _scopePassageCounts=new(StringComparer.OrdinalIgnoreCase);
+    // 0448: VERIFIED source assertions anchored to evidence items, per EvidenceTypeCode (routing verification state).
+    private readonly Dictionary<string,int> _verifiedAssertionCountsByEvidenceType=new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<Guid> _explainedParentIds=new();
     private readonly List<WidePropositionAnchorRecord> _pendingAnchors=new();
     private readonly List<WidePropositionLinkRecord> _pendingLinks=new();
@@ -692,10 +702,16 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         _matterPresenceTokens=new HashSet<string>(StringComparer.Ordinal);
         _matterDocumentEvidenceTypeCodes=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         _packRelevanceRules=[];
+        _packIncidentFamilies=[];
+        _packConceptRelations=[];
+        _matterIncidentFamilies=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        _matterJurisdiction=null;
+        _deterministicExclusions.Clear();
         _matterPassageIndex=[];
         _scopeLedger.Clear();
         _scopeLedgerByBranchCode.Clear();
         _scopePassageCounts.Clear();
+        _verifiedAssertionCountsByEvidenceType.Clear();
         _explainedParentIds.Clear();
         _pendingAnchors.Clear();
         _pendingLinks.Clear();
@@ -835,6 +851,17 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             {
                 logger.LogInformation("Wide2 Domain Pack mode: raising effective depth ceiling from {Previous} to 3 so configured L2 parents reach Option 5 L3 generation.",effectiveDepthCeiling);
                 effectiveDepthCeiling=3;
+            }
+            // 0445 Domain Pack automatic-deepening ceiling (DB dial Intelligence.SearchWide.DomainPackDepthCeiling).
+            // Bounds ONLY this serial loop (L1 Dimensions -> L2 catalog targets -> L3 atomic propositions) in Domain
+            // Pack mode; reaching it records DEPTH_CEILING_REACHED (same circuit-breaker path, never "resolved").
+            // Off-path hierarchies, already-persisted deeper nodes, evidence propagation and explicitly targeted
+            // deepening are untouched. 0 = no Domain Pack ceiling (AbsoluteDepthCeiling applies).
+            if(useDomainPackHierarchy&&configuration.DomainPackDepthCeiling>0&&effectiveDepthCeiling>configuration.DomainPackDepthCeiling)
+            {
+                logger.LogInformation("Wide2 Domain Pack mode: capping automatic deepening at depth {Ceiling} (was {Previous}); deeper nodes, propagation and targeted deepening are unaffected.",configuration.DomainPackDepthCeiling,effectiveDepthCeiling);
+                effectiveDepthCeiling=Math.Max(3,configuration.DomainPackDepthCeiling);
+                answerKindRoutingApplied=false;
             }
             if(_useDomainPack&&!useDomainPackHierarchy)
                 logger.LogWarning("Wide2 Domain Pack mode is ON but the deterministic hierarchy gate FAILED (resolvedPackId={ResolvedPackId}, packDimensions={DimensionCount}); L1 falls back to the LLM intent proposal, which may consolidate dimensions.",_resolvedDomainPackId?.ToString()??"(null)",_packDimensions.Count);
@@ -3083,7 +3110,14 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 return;
             }
             _matterContext=snapshot;
-            _matterTypeSignals=new[]{matter.MatterTypeCode,matter.Subtype,matter.ClaimTypeCode}.Where(value=>!string.IsNullOrWhiteSpace(value)).Select(value=>value!.Trim()).ToArray();
+            // 0446: advisory coherence warning on the SAVED posture. Never mutates the matter - the saved record
+            // stays authoritative and is sent verbatim; the operator is told exactly which fields to repair.
+            foreach(var warning in MatterContextCoherence.Evaluate(new(matter.MatterTypeCode,matter.Subtype,matter.MotionTarget,matter.RequestedDisposition,matter.Posture)))
+                logger.LogWarning("Wide2 MATTER_CONTEXT_INCOHERENT for matter {MatterId}: {Warning} The saved value is sent to the model unchanged; repair the matter record to avoid contaminated relevance explanations.",matterId,warning);
+            // The PI profile IncidentTypeCode (e.g. "Side-impact Collision") is the most specific incident signal the
+            // matter carries; MatterTypeCode/Subtype alone ("Personal Injury") cannot narrow the evidence catalog.
+            _matterTypeSignals=new[]{matter.MatterTypeCode,matter.Subtype,matter.ClaimTypeCode,profile?.IncidentTypeCode}.Where(value=>!string.IsNullOrWhiteSpace(value)).Select(value=>value!.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            _matterJurisdiction=!string.IsNullOrWhiteSpace(matter.Jurisdiction) ? matter.Jurisdiction.Trim() : !string.IsNullOrWhiteSpace(profile?.IncidentState) ? profile.IncidentState.Trim() : null;
             // Validated Candidate Competition (0339): load the DB-backed proposition fact-binding config once
             // per run so supplied values are validated BEFORE they can establish a proposition. Fail-soft: a
             // missing/degraded config leaves the validator on its embedded DefaultConfig (guardrails still run).
@@ -3149,6 +3183,36 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                             _packConcepts=pack.Concepts.Count>0 ? pack.Concepts.ToArray() : [];
                             _packEvidenceTypes=pack.EvidenceTypes.Count>0 ? pack.EvidenceTypes.ToArray() : [];
                             _packRelevanceRules=pack.RelevanceRules.Count>0 ? pack.RelevanceRules.ToArray() : [];
+                            _packIncidentFamilies=pack.IncidentFamilies.Count>0 ? pack.IncidentFamilies.ToArray() : [];
+                            _packConceptRelations=pack.ConceptRelations.Count>0 ? pack.ConceptRelations.ToArray() : [];
+                            // 0447: families are resolved from structured signals AND the incident narrative. A
+                            // disagreement (e.g. subtype "Premises Liability" / incident type "Slip and Fall" while the
+                            // summary describes a vehicle collision) is INCIDENT_FAMILY_CONFLICT: no family exclusion is
+                            // applied (union), every tagged target reaches LLM review, and the conflict is surfaced.
+                            // Narrative sources are FACT text only (incident/liability summaries, user narrative) - never
+                            // Description, which echoes the structured subtype and would mask the conflict.
+                            var familyScope=DomainPackScopeEligibility.ResolveMatterFamilyScope(_packIncidentFamilies,_matterTypeSignals,
+                                new[]{profile?.IncidentSummary,profile?.LiabilitySummary,matter.AdditionalNarrative});
+                            _matterIncidentFamilies=familyScope.Effective;
+                            if(familyScope.IsConflict)
+                            {
+                                logger.LogWarning("Wide2 Domain Pack matter {MatterId} {Conflict} Repair the matter subtype / PI incident type so deterministic family scoping can resume.",matterId,familyScope.ConflictReason);
+                                // 0448: persist confidence-qualified PROPOSED classification rows for attorney review.
+                                // Authoritative Legal_DecisionMatter / PI profile fields are NEVER mutated here. Fail-soft.
+                                try
+                                {
+                                    var proposerInput=new MatterClassificationProposer.Inputs(matter.MatterTypeCode,matter.Subtype,matter.ClaimTypeCode,profile?.IncidentTypeCode,matter.MotionTarget,matter.RequestedDisposition,matter.Posture,familyScope,_packIncidentFamilies,null);
+                                    var proposals=MatterClassificationProposer.Propose(proposerInput).ToList();
+                                    if(MatterClassificationProposer.DecisionContextNote(proposerInput) is{}note)proposals.Add(note);
+                                    if(proposals.Count>0)
+                                    {
+                                        await legalDecisionRepository.UpsertMatterClassificationProposalsAsync(tenantId,Guid.Empty,matterId,proposals,cancellationToken);
+                                        logger.LogInformation("Wide2 Domain Pack matter {MatterId}: {Count} classification proposal(s) recorded as PROPOSED [{Fields}]; saved matter fields unchanged.",matterId,proposals.Count,string.Join(",",proposals.Select(p=>p.FieldCode)));
+                                    }
+                                }
+                                catch(Exception ex)when(!cancellationToken.IsCancellationRequested){logger.LogWarning(ex,"Wide2 Domain Pack matter {MatterId}: classification proposal persistence failed (advisory).",matterId);}
+                            }
+                            logger.LogInformation("Wide2 Domain Pack matter {MatterId} resolved incident families [{Families}] (structured [{Structured}], narrative [{Narrative}]) from signals [{Signals}]; jurisdiction '{Jurisdiction}'.",matterId,string.Join(",",_matterIncidentFamilies),string.Join(",",familyScope.Structured),string.Join(",",familyScope.Narrative),string.Join(",",_matterTypeSignals),_matterJurisdiction);
                         }
                     }
                 }
@@ -4023,12 +4087,16 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         var parentCode=$"DIM_{dimensionCode}";
         var children=new List<WideProposedBranch>();
         var excluded=0;
+        var deterministicExcluded=0;
+        var conceptsByCode=_packConcepts.GroupBy(c=>c.ConceptCode,StringComparer.OrdinalIgnoreCase).ToDictionary(g=>g.Key,g=>g.First(),StringComparer.OrdinalIgnoreCase);
         foreach(var concept in _packConcepts.Where(c=>string.Equals(c.DimensionCode,dimensionCode,StringComparison.OrdinalIgnoreCase)))
         {
             var rule=ResolveRelevanceRule("CONCEPT",concept.ConceptCode);
             var code=$"CPT_{concept.ConceptCode}";
             var name=string.IsNullOrWhiteSpace(concept.Name)?concept.ConceptCode:concept.Name;
             if(rule is{EffectCode:"EXCLUDE"}){excluded++;RecordScope(code,"CONCEPT",concept.ConceptCode,dimensionCode,name,WideScopeStatuses.ExcludedByRule,"RULE",rule.Reason??$"{rule.SignalKindCode}={rule.SignalValue}",false,concept.IsRequiredCoverage,false);continue;}
+            var eligibility=DomainPackScopeEligibility.EvaluateConcept(concept,_matterJurisdiction,_packConceptRelations,conceptsByCode);
+            if(!eligibility.IsEligible){deterministicExcluded++;_deterministicExclusions[concept.ConceptCode]=$"{eligibility.ExclusionCode}: {eligibility.Reason}";RecordScope(code,"CONCEPT",concept.ConceptCode,dimensionCode,name,WideScopeStatuses.ExcludedDeterministic,"SYSTEM",_deterministicExclusions[concept.ConceptCode],false,concept.IsRequiredCoverage,false);continue;}
             RecordScope(code,"CONCEPT",concept.ConceptCode,dimensionCode,name,WideScopeStatuses.InScope,rule is null?"DEFAULT":"RULE",rule?.Reason,rule is{EffectCode:"PRIORITIZE"},concept.IsRequiredCoverage,DomainPackEvidencePresenceMatcher.NormalizeCorpusTokens(name).Any(_matterPresenceTokens.Contains));
             children.Add(new WideProposedBranch(code,name,concept.Description??string.Empty,null,null,0.8m,true,null,parentCode));
         }
@@ -4039,12 +4107,16 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             var code=$"EVD_{evidence.EvidenceTypeCode}";
             var name=string.IsNullOrWhiteSpace(evidence.Name)?evidence.EvidenceTypeCode:evidence.Name;
             if(rule is{EffectCode:"EXCLUDE"}){excluded++;RecordScope(code,"EVIDENCE_TYPE",evidence.EvidenceTypeCode,dimensionCode,name,WideScopeStatuses.ExcludedByRule,"RULE",rule.Reason??$"{rule.SignalKindCode}={rule.SignalValue}",false,evidence.IsRequiredCoverage,false);continue;}
-            var isPresent=DomainPackEvidencePresenceMatcher.IsPresent(evidence,_matterPresenceTokens,_matterDocumentEvidenceTypeCodes);
+            var eligibility=DomainPackScopeEligibility.EvaluateEvidenceType(evidence,_matterIncidentFamilies);
+            if(!eligibility.IsEligible){deterministicExcluded++;_deterministicExclusions[evidence.EvidenceTypeCode]=$"{eligibility.ExclusionCode}: {eligibility.Reason}";RecordScope(code,"EVIDENCE_TYPE",evidence.EvidenceTypeCode,dimensionCode,name,WideScopeStatuses.ExcludedDeterministic,"SYSTEM",_deterministicExclusions[evidence.EvidenceTypeCode],false,evidence.IsRequiredCoverage,false);continue;}
+            // DocumentPresent is INDEPENDENT of lexical/passage matching: only a DIRECT classification of an
+            // uploaded document proves a document of this type exists. Lexical presence stays an ordering signal.
+            var isPresent=_matterDocumentEvidenceTypeCodes.Contains(evidence.EvidenceTypeCode);
             if(isPresent)present++;
             RecordScope(code,"EVIDENCE_TYPE",evidence.EvidenceTypeCode,dimensionCode,name,WideScopeStatuses.InScope,rule is null?"DEFAULT":"RULE",rule?.Reason,rule is{EffectCode:"PRIORITIZE"},evidence.IsRequiredCoverage,isPresent);
             children.Add(new WideProposedBranch(code,name,evidence.Description??string.Empty,null,null,DomainPackInterpretationPrior(evidence.PoloxiImportanceScore),true,null,parentCode));
         }
-        logger.LogInformation("Wide2 Domain Pack L2 for {Dimension}: materialized={Materialized} evidencePresent={Present} excludedByRule={Excluded}.",dimensionCode,children.Count,present,excluded);
+        logger.LogInformation("Wide2 Domain Pack L2 for {Dimension}: materialized={Materialized} documentPresent={Present} excludedByRule={Excluded} excludedDeterministic={Deterministic}.",dimensionCode,children.Count,present,excluded,deterministicExcluded);
         return children;
     }
 
@@ -4102,6 +4174,15 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 }
                 foreach(var proposition in graph.Propositions)texts.Add(proposition.PropositionText);
                 foreach(var assertion in graph.SourceAssertions)texts.Add(assertion.QuotedText);
+                // 0448: verification is a property of VERIFIED source assertions anchored to a classified evidence item;
+                // passage mapping, LLM score and DocumentPresent never contribute here.
+                var evidenceTypeByItem=graph.Evidence.Where(item=>!string.IsNullOrWhiteSpace(item.EvidenceTypeCode)).GroupBy(item=>item.LegalEvidenceItemId).ToDictionary(g=>g.Key,g=>g.First().EvidenceTypeCode);
+                foreach(var assertion in graph.SourceAssertions)
+                {
+                    if(!string.Equals(assertion.VerificationStateCode,LegalSourceAssertionStates.Verified,StringComparison.OrdinalIgnoreCase)||assertion.LegalEvidenceItemId is not{}itemId)continue;
+                    if(!evidenceTypeByItem.TryGetValue(itemId,out var code))continue;
+                    _verifiedAssertionCountsByEvidenceType[code]=_verifiedAssertionCountsByEvidenceType.GetValueOrDefault(code)+1;
+                }
             }
             catch(Exception ex)when(!cancellationToken.IsCancellationRequested){logger.LogWarning(ex,"Wide2 Domain Pack presence signals: document evidence graph unavailable for matter {MatterId}; using matter/profile/retrieval signals only.",matterId);}
         }

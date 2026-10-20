@@ -717,7 +717,16 @@ public sealed record DecisionDomainPackDto(
     // Concept/EvidenceType only when the named matter signal is present; pack membership alone never
     // excludes. Advisory ordering/scope configuration only; POLOXI Core owns scoring.
     public IReadOnlyCollection<DecisionDomainPackRelevanceRuleDto> RelevanceRules { get; init; } = [];
+
+    // Incident families (migration 0445). A matter resolves to zero or more families by matching
+    // MatterSignalPatterns against its matter-type/subtype/claim-type/profile incident type; Evidence Types
+    // tagged with IncidentFamilyCodes are deterministically excluded when the matter resolves to at least one
+    // family and none of them is tagged. Untagged Evidence Types apply to every family.
+    public IReadOnlyCollection<DecisionDomainPackIncidentFamilyDto> IncidentFamilies { get; init; } = [];
 }
+
+// Migration 0445: MatterSignalPatterns is a comma-separated list of SQL-LIKE style patterns ('%' wildcard).
+public sealed record DecisionDomainPackIncidentFamilyDto(string FamilyCode, string Name, string? Description, string MatterSignalPatterns, int SortOrder);
 
 // Migration 0433: TargetKindCode CONCEPT|EVIDENCE_TYPE; SignalKindCode MATTER_TYPE|CLAIM|DEFENSE|
 // JURISDICTION|PROFILE_FIELD|KEYWORD|DOCUMENT_PRESENT; EffectCode EXCLUDE|PRIORITIZE.
@@ -734,16 +743,19 @@ public sealed record DecisionDomainPackEvidenceTypeDto(string EvidenceTypeCode, 
     public bool IsRequiredCoverage { get; init; }
     public string? MatterTypeCodes { get; init; }
     public string? RelevanceKeywords { get; init; }
+    // Migration 0445 (nullable/additive): comma list of incident family codes; null/empty = all families.
+    public string? IncidentFamilyCodes { get; init; }
 
     // Dapper materialization constructor: matches the full column set selected by
     // LegalDecisionRepository.BuildDomainPackAsync (Dapper requires a constructor whose signature
     // covers every selected column when no parameterless constructor exists).
-    public DecisionDomainPackEvidenceTypeDto(string EvidenceTypeCode, string Name, string? DimensionCode, string? Description, decimal? PoloxiImportanceScore, bool IsRequiredCoverage, string? MatterTypeCodes, string? RelevanceKeywords)
+    public DecisionDomainPackEvidenceTypeDto(string EvidenceTypeCode, string Name, string? DimensionCode, string? Description, decimal? PoloxiImportanceScore, bool IsRequiredCoverage, string? MatterTypeCodes, string? RelevanceKeywords, string? IncidentFamilyCodes)
         : this(EvidenceTypeCode, Name, DimensionCode, Description, PoloxiImportanceScore)
     {
         this.IsRequiredCoverage = IsRequiredCoverage;
         this.MatterTypeCodes = MatterTypeCodes;
         this.RelevanceKeywords = RelevanceKeywords;
+        this.IncidentFamilyCodes = IncidentFamilyCodes;
     }
 }
 
@@ -1419,6 +1431,9 @@ public static class MatterEvidenceScopeStatusCodes
     public const string InScope = "IN_SCOPE";
     public const string OutOfScope = "OUT_OF_SCOPE";
     public const string PendingReview = "PENDING_REVIEW";
+    // Migration 0445: the L2 review never returned a valid score after bounded retries and no deterministic
+    // signal admitted the target. Dormant like PENDING_REVIEW; never auto-admitted to L3.
+    public const string ReviewFailed = "REVIEW_FAILED";
 }
 
 public static class MatterEvidenceScopeDeciderCodes
@@ -1454,7 +1469,101 @@ public sealed record MatterEvidenceScopeDto(
     DateTime? LastEvaluatedDateUtc,
     int SortOrder,
     DateTime CreatedDateUtc,
+    DateTime? ModifiedDateUtc)
+{
+    // 0448: independent routing attributes (Legal_MatterEvidenceRoutingCode). Null on rows not yet re-evaluated.
+    public string? EvidenceAvailabilityCode { get; init; }
+    public string? VerificationStatusCode { get; init; }
+    public string? ExecutionPriorityCode { get; init; }
+    public int DirectPassageCount { get; init; }
+    public int VerifiedAssertionCount { get; init; }
+    public string? RoutingReason { get; init; }
+}
+
+// 0448: DB-backed routing vocabularies (POLOXI.Legal_MatterEvidenceRoutingCode). Constants mirror seed codes.
+public static class MatterEvidenceRoutingCodeKinds
+{
+    public const string EvidenceAvailability = "EVIDENCE_AVAILABILITY";
+    public const string VerificationStatus = "VERIFICATION_STATUS";
+    public const string ExecutionPriority = "EXECUTION_PRIORITY";
+    public const string ClassificationProposalStatus = "CLASSIFICATION_PROPOSAL_STATUS";
+}
+
+public static class MatterEvidenceAvailabilityCodes
+{
+    public const string Present = "PRESENT";
+    public const string Referenced = "REFERENCED";
+    public const string Absent = "ABSENT";
+    public const string NotApplicable = "NOT_APPLICABLE";
+}
+
+public static class MatterEvidenceVerificationCodes
+{
+    public const string Verified = "VERIFIED";
+    public const string Unverified = "UNVERIFIED";
+    public const string Contradicted = "CONTRADICTED";
+    public const string Unknown = "UNKNOWN";
+}
+
+public static class MatterEvidenceExecutionPriorityCodes
+{
+    public const string Immediate = "IMMEDIATE";
+    public const string Normal = "NORMAL";
+    public const string Deferred = "DEFERRED";
+    public const string Dormant = "DORMANT";
+}
+
+public sealed record MatterEvidenceRoutingCodeDto(string CodeKind, string Code, string Name, string? Description, bool RunsL3, int SortOrder);
+
+// 0448: confidence-qualified classification proposal (POLOXI.Legal_DecisionMatterClassificationProposal).
+// The authoritative Legal_DecisionMatter / PI profile fields are never mutated by the system.
+public static class MatterClassificationProposalStatusCodes
+{
+    public const string Proposed = "PROPOSED";
+    public const string Accepted = "ACCEPTED";
+    public const string Rejected = "REJECTED";
+}
+
+public static class MatterClassificationFieldCodes
+{
+    public const string Subtype = "SUBTYPE";
+    public const string IncidentTypeCode = "INCIDENT_TYPE_CODE";
+    public const string IncidentFamily = "INCIDENT_FAMILY";
+    public const string DecisionContext = "DECISION_CONTEXT";
+}
+
+public sealed record MatterClassificationProposalDto(
+    Guid DecisionMatterClassificationProposalId,
+    Guid DecisionMatterId,
+    string FieldCode,
+    string? CurrentValue,
+    string? ProposedValue,
+    decimal Confidence,
+    string? StructuredSignals,
+    string? NarrativeSignals,
+    string Rationale,
+    string StatusCode,
+    Guid? DecidedByUserId,
+    DateTime? DecidedDateUtc,
+    string? DecisionNote,
+    Guid? LastProposedExecutionId,
+    DateTime CreatedDateUtc,
     DateTime? ModifiedDateUtc);
+
+// Pipeline write: upserts the single open PROPOSED row per matter/field. Decided rows are history and untouched.
+public sealed record MatterClassificationProposalEvaluation(
+    string FieldCode,
+    string? CurrentValue,
+    string? ProposedValue,
+    decimal Confidence,
+    string? StructuredSignals,
+    string? NarrativeSignals,
+    string Rationale,
+    Guid? LastProposedExecutionId);
+
+public sealed record MatterClassificationProposalDecisionRequest(
+    [property: Required, StringLength(40)] string StatusCode,
+    [property: StringLength(1000)] string? DecisionNote);
 
 public sealed record MatterEvidenceScopeStatusDto(string StatusCode, string Name, string? Description, bool ParticipatesInL3, int SortOrder);
 
@@ -1503,9 +1612,18 @@ public sealed record MatterEvidenceScopeEvaluation(
     bool DocumentPresent,
     int MappedPassageCount,
     Guid? LastEvaluatedExecutionId,
-    int SortOrder);
+    int SortOrder)
+{
+    // 0448: routing attributes computed independently of ScopeStatusCode (see MatterEvidenceRouting).
+    public string? EvidenceAvailabilityCode { get; init; }
+    public string? VerificationStatusCode { get; init; }
+    public string? ExecutionPriorityCode { get; init; }
+    public int DirectPassageCount { get; init; }
+    public int VerifiedAssertionCount { get; init; }
+    public string? RoutingReason { get; init; }
+}
 
-// ── Per-matter Atomic Propositions (migration 0442: POLOXI.Legal_MatterAtomicProposition) ───────────
+// ── Per-matter Atomic Propositions
 // One row per Decision Matter x parent L2 target x LLM-generated atomic proposition (L3+). Captures every
 // model-returned value, the worker/batch that produced it and call provenance. USER decisions are
 // authoritative; the pipeline refreshes model values but never overwrites a USER status/note.

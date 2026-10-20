@@ -1254,13 +1254,34 @@ public sealed record WideConfiguration(decimal TargetConfidence,decimal MinimumB
     public bool EnableL2RelevanceReview{get;init;}=true;
     // Migration 0440: the review runs in dimension-grouped batches so the whole catalog is reviewed
     // (a single call truncated the catalog past the prompt budget).
-    public int L2ReviewBatchSize{get;init;}=40;
+    public int L2ReviewBatchSize{get;init;}=500;
     // Migration 0441: per-matter Evidence Type scope. When enabled, L3 generation reads
     // POLOXI.Legal_MatterEvidenceScope and only IN_SCOPE/PENDING_REVIEW targets receive atomic propositions.
     // Blended relevance below MatterScopeOutThreshold is auto-marked OUT_OF_SCOPE unless required-coverage,
     // document-present or PRIORITIZE-fired. USER decisions are never overwritten.
     public bool EnableMatterEvidenceScopeGate{get;init;}=true;
-    public decimal MatterScopeOutThreshold{get;init;}=0.05m;
+    public decimal MatterScopeOutThreshold{get;init;}=0.20m;
+    // Migration 0443: inclusion-first scope. true = a target is IN_SCOPE only on a positive matter signal
+    // (classified evidence item, PRIORITIZE rule, required coverage, mapped passage, matter-type match, or
+    // blended relevance >= MatterScopeOutThreshold); false = legacy exclusion-first behaviour.
+    public bool MatterScopeInclusionFirst{get;init;}=true;
+    // Migration 0445: scope-gate integrity. L2 review batches are sized by serialized prompt characters (never
+    // silently truncated), retried within bounds, and unscored targets end as REVIEW_FAILED - never admitted.
+    // Passage admission needs MatterScopeMinimumMappedPassages distinct passages or one decisive passage.
+    // DomainPackDepthCeiling bounds AUTOMATIC serial deepening in Domain Pack mode only (0 = no ceiling).
+    public int DomainPackDepthCeiling{get;init;}=3;
+    public int L2ReviewPromptBudgetChars{get;init;}=24000;
+    public int L2ReviewMaxRetries{get;init;}=2;
+    public int L2ReviewConcurrency{get;init;}=4;
+    public int MatterScopeMinimumMappedPassages{get;init;}=2;
+    public decimal MatterScopeDecisivePassageScore{get;init;}=0.60m;
+    public decimal MatterScopePendingReviewFloor{get;init;}=0.10m;
+    // Migration 0448: zero-score cleanup + evidence-aware L3 routing. LLM score <= ZeroScoreCeiling is OUT_OF_SCOPE
+    // unless a concrete reopening trigger exists; IN_SCOPE Evidence Types with ABSENT evidence and LLM score below
+    // ImmediateRelevance are DEFERRED to acquisition (no L3 call) when EnableEvidenceAwareL3Routing is true.
+    public decimal MatterScopeZeroScoreCeiling{get;init;}=0.05m;
+    public decimal MatterScopeImmediateRelevance{get;init;}=0.60m;
+    public bool EnableEvidenceAwareL3Routing{get;init;}=true;
 }
 
 // V3.3 answer-kind definition row from POLOXI.AnswerKind. DepthCeiling 0 and MaxInformationRounds
@@ -1486,7 +1507,7 @@ public sealed record WideL2PriorityProposal(IReadOnlyCollection<WideL2PriorityIt
 public sealed record WideL2PriorityItem(string BranchCode,int Rank,string? Reason);
 
 // ── Option 5 ledgers (migration 0433) ──
-public static class WideScopeStatuses{public const string InScope="IN_SCOPE";public const string ExcludedByRule="EXCLUDED_BY_RULE";}
+public static class WideScopeStatuses{public const string InScope="IN_SCOPE";public const string ExcludedByRule="EXCLUDED_BY_RULE";public const string ExcludedDeterministic="EXCLUDED_DETERMINISTIC";}
 public static class WideProcessingResults
 {
     public const string PropositionsGenerated="PROPOSITIONS_GENERATED";
@@ -1495,6 +1516,9 @@ public static class WideProcessingResults
     public const string ThinResult="THIN_RESULT";
     public const string UnprocessedCallCeiling="UNPROCESSED_CALL_CEILING";
     public const string Failed="FAILED";
+    // 0448: IN_SCOPE Evidence Type with ABSENT evidence and relevance below MatterScopeImmediateRelevance.
+    // Routed to acquisition; no L3 model call this run; not counted as unprocessed coverage.
+    public const string DeferredAcquisition="DEFERRED_ACQUISITION";
 }
 
 // One row per configured L2 target (Concept or EvidenceType) per run. WideBranchId is null only for
