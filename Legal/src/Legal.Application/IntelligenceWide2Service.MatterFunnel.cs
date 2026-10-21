@@ -258,7 +258,9 @@ public sealed partial class IntelligenceWide2Service
         }
         catch(Exception ex)when(!cancellationToken.IsCancellationRequested)
         {
-            logger.LogWarning(ex,"Wide2 matter scope gate failed for matter {MatterId}; all parents proceed to L3.",matterId);
+            // HIGH IMPACT fail-soft: the whole catalog (every OUT_OF_SCOPE / PENDING_REVIEW / DEFERRED target) goes
+            // to L3 when this throws. Logged at Error so the blast radius (2-3x L3 calls) is never silent.
+            logger.LogError(ex,"Wide2 matter scope gate FAILED for matter {MatterId}; scope + evidence-aware routing bypassed and ALL {Parents} parents proceed to L3.",matterId,parents.Length);
             held.Clear();_deferredScopeParentIds.Clear();_deferredScopeReasons.Clear();
         }
         return held;

@@ -989,11 +989,11 @@ VALUES(@WideBranchPassageMapId,@WideExecutionId,@WideBranchId,@LegalDocumentPass
     {
         if(rows.Count==0)return;
         const string sql="""
-INSERT POLOXI.Legal_WideBranchProcessing(WideBranchProcessingId,WideExecutionId,WideBranchId,TenantId,LevelNumber,BatchNumber,AttemptNumber,ProcessingResultCode,PropositionCount,Reason,CreatedDateUtc,CreatedByUserId,IsDeleted)
-VALUES(@WideBranchProcessingId,@WideExecutionId,@WideBranchId,@TenantId,@LevelNumber,@BatchNumber,@AttemptNumber,@ProcessingResultCode,@PropositionCount,@Reason,SYSUTCDATETIME(),@UserId,0);
+INSERT POLOXI.Legal_WideBranchProcessing(WideBranchProcessingId,WideExecutionId,WideBranchId,TenantId,LevelNumber,BatchNumber,AttemptNumber,ProcessingResultCode,PropositionCount,Reason,ParentsInBatch,BatchTierCode,DurationMs,InputTokenCount,OutputTokenCount,ModelCode,ProviderCode,ProviderRequestId,CreatedDateUtc,CreatedByUserId,IsDeleted)
+VALUES(@WideBranchProcessingId,@WideExecutionId,@WideBranchId,@TenantId,@LevelNumber,@BatchNumber,@AttemptNumber,@ProcessingResultCode,@PropositionCount,@Reason,@ParentsInBatch,@BatchTierCode,@DurationMs,@InputTokenCount,@OutputTokenCount,@ModelCode,@ProviderCode,@ProviderRequestId,SYSUTCDATETIME(),@UserId,0);
 """;
         using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        await connection.ExecuteAsync(new CommandDefinition(sql,rows.Select(r=>new{r.WideBranchProcessingId,r.WideExecutionId,r.WideBranchId,r.TenantId,r.LevelNumber,r.BatchNumber,r.AttemptNumber,r.ProcessingResultCode,r.PropositionCount,r.Reason,UserId=userId}),cancellationToken:cancellationToken));
+        await connection.ExecuteAsync(new CommandDefinition(sql,rows.Select(r=>new{r.WideBranchProcessingId,r.WideExecutionId,r.WideBranchId,r.TenantId,r.LevelNumber,r.BatchNumber,r.AttemptNumber,r.ProcessingResultCode,r.PropositionCount,r.Reason,r.ParentsInBatch,r.BatchTierCode,r.DurationMs,r.InputTokenCount,r.OutputTokenCount,r.ModelCode,r.ProviderCode,r.ProviderRequestId,UserId=userId}),cancellationToken:cancellationToken));
     }
 
     public async Task SaveWidePropositionLinksAsync(IReadOnlyCollection<WidePropositionLinkRecord> links,Guid userId,CancellationToken cancellationToken=default)

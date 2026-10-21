@@ -1533,7 +1533,19 @@ public sealed record WideBranchScopeRecord(Guid WideBranchScopeId,Guid WideExecu
 public sealed record WideBranchPassageMapRecord(Guid WideBranchPassageMapId,Guid WideExecutionId,Guid WideBranchId,Guid LegalDocumentPassageId,Guid TenantId,string MatchMethodCode,decimal Score,int RankOrder);
 
 // One row per in-scope L2 per generation attempt.
-public sealed record WideBranchProcessingRecord(Guid WideBranchProcessingId,Guid WideExecutionId,Guid WideBranchId,Guid TenantId,int LevelNumber,int BatchNumber,int AttemptNumber,string ProcessingResultCode,int PropositionCount,string? Reason);
+public sealed record WideBranchProcessingRecord(Guid WideBranchProcessingId,Guid WideExecutionId,Guid WideBranchId,Guid TenantId,int LevelNumber,int BatchNumber,int AttemptNumber,string ProcessingResultCode,int PropositionCount,string? Reason)
+{
+    // Per-call telemetry (0449). One provider call is shared by every parent in the batch; group by
+    // ProviderRequestId to count distinct calls. Null when no model call happened (deferred / ceiling / throttled).
+    public int? ParentsInBatch{get;init;}
+    public string? BatchTierCode{get;init;}
+    public int? DurationMs{get;init;}
+    public int? InputTokenCount{get;init;}
+    public int? OutputTokenCount{get;init;}
+    public string? ModelCode{get;init;}
+    public string? ProviderCode{get;init;}
+    public string? ProviderRequestId{get;init;}
+}
 
 // Shared-proposition reconciliation: the canonical child is kept once; every other parent that
 // produced the same proposition is linked here so scoring counts the proposition once per parent path.

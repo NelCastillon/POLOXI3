@@ -1469,16 +1469,15 @@ public sealed record MatterEvidenceScopeDto(
     DateTime? LastEvaluatedDateUtc,
     int SortOrder,
     DateTime CreatedDateUtc,
-    DateTime? ModifiedDateUtc)
-{
+    DateTime? ModifiedDateUtc,
     // 0448: independent routing attributes (Legal_MatterEvidenceRoutingCode). Null on rows not yet re-evaluated.
-    public string? EvidenceAvailabilityCode { get; init; }
-    public string? VerificationStatusCode { get; init; }
-    public string? ExecutionPriorityCode { get; init; }
-    public int DirectPassageCount { get; init; }
-    public int VerifiedAssertionCount { get; init; }
-    public string? RoutingReason { get; init; }
-}
+    // Constructor parameters (not init-only extras) so Dapper's constructor mapping covers every selected column.
+    string? EvidenceAvailabilityCode = null,
+    string? VerificationStatusCode = null,
+    string? ExecutionPriorityCode = null,
+    int DirectPassageCount = 0,
+    int VerifiedAssertionCount = 0,
+    string? RoutingReason = null);
 
 // 0448: DB-backed routing vocabularies (POLOXI.Legal_MatterEvidenceRoutingCode). Constants mirror seed codes.
 public static class MatterEvidenceRoutingCodeKinds
