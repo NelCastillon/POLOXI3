@@ -1295,6 +1295,7 @@ public sealed partial class LegalDecisionRepository(ISqlConnectionFactory connec
                 m.PracticeAreaCode, m.ClaimTypeCode, m.DomainPackCode,
                 m.Subtype, m.CourtSystem, m.State, m.CourtLevel, m.County, m.GoverningLaw,
                 m.MovingParty, m.RespondingParty, m.MotionTarget, m.RequestedDisposition, m.AdditionalNarrative,
+                m.MatterScopeOutThreshold,
                 m.CreatedDateUtc, m.ModifiedDateUtc,
                 s.DecisionSessionId AS LatestSessionId,
                 c.DisplayName       AS CurrentOutcome,
@@ -1329,6 +1330,7 @@ public sealed partial class LegalDecisionRepository(ISqlConnectionFactory connec
                 m.PracticeAreaCode, m.ClaimTypeCode, m.DomainPackCode,
                 m.Subtype, m.CourtSystem, m.State, m.CourtLevel, m.County, m.GoverningLaw,
                 m.MovingParty, m.RespondingParty, m.MotionTarget, m.RequestedDisposition, m.AdditionalNarrative,
+                m.MatterScopeOutThreshold,
                 m.CreatedDateUtc, m.ModifiedDateUtc,
                 s.DecisionSessionId AS LatestSessionId,
                 c.DisplayName       AS CurrentOutcome,
@@ -1562,7 +1564,7 @@ public sealed partial class LegalDecisionRepository(ISqlConnectionFactory connec
             WITH RankedOutcome AS
             (
                 SELECT OutcomeCode, Name, Description, RoleCode, RequiresVerification, MatterTypeCode, SortOrder,
-                       RequiresFactualPredicate, FactualPredicateKeywords,
+                       RequiresFactualPredicate, FactualPredicateKeywords, ArchetypeCode, DecisionContractCode, ContractKind,
                        ROW_NUMBER() OVER
                        (
                            PARTITION BY OutcomeCode
@@ -1573,7 +1575,7 @@ public sealed partial class LegalDecisionRepository(ISqlConnectionFactory connec
                   AND (TenantId = @TenantId OR TenantId IS NULL)
             )
             SELECT OutcomeCode, Name, Description, RoleCode, RequiresVerification, MatterTypeCode, SortOrder,
-                   RequiresFactualPredicate, FactualPredicateKeywords
+                   RequiresFactualPredicate, FactualPredicateKeywords, ArchetypeCode, DecisionContractCode, ContractKind
             FROM RankedOutcome WHERE ScopeRank = 1 ORDER BY SortOrder, OutcomeCode;
             """, new { PackId = pack.DecisionDomainPackId, TenantId = tenantId }, cancellationToken: cancellationToken))).ToArray();
 
@@ -1606,6 +1608,63 @@ public sealed partial class LegalDecisionRepository(ISqlConnectionFactory connec
             FROM RankedFamily WHERE ScopeRank = 1 ORDER BY SortOrder, FamilyCode;
             """, new { PackId = pack.DecisionDomainPackId, TenantId = tenantId }, cancellationToken: cancellationToken))).ToArray();
 
+        // Decision contracts (migration 0451). Independent decision landscapes; tenant rows override global by ContractCode.
+        var decisionContracts = (await connection.QueryAsync<DecisionDomainPackDecisionContractDto>(new CommandDefinition(
+            """
+            WITH RankedContract AS
+            (
+                SELECT ContractCode, ContractKind, Name, Description, DecisionQuestion, SortOrder,
+                       ROW_NUMBER() OVER
+                       (
+                           PARTITION BY ContractCode
+                           ORDER BY CASE WHEN TenantId = @TenantId THEN 0 ELSE 1 END, SortOrder
+                       ) AS ScopeRank
+                FROM POLOXI.Legal_DecisionDomainPackDecisionContract
+                WHERE IsDeleted = 0 AND IsActive = 1 AND DecisionDomainPackId = @PackId
+                  AND (TenantId = @TenantId OR TenantId IS NULL)
+            )
+            SELECT ContractCode, ContractKind, Name, Description, DecisionQuestion, SortOrder
+            FROM RankedContract WHERE ScopeRank = 1 ORDER BY SortOrder, ContractCode;
+            """, new { PackId = pack.DecisionDomainPackId, TenantId = tenantId }, cancellationToken: cancellationToken))).ToArray();
+
+        // Directional candidate x dimension vectors (migration 0451). Tenant rows override global by (OutcomeCode, DimensionCode).
+        var outcomeCandidateDimensions = (await connection.QueryAsync<DecisionDomainPackOutcomeCandidateDimensionDto>(new CommandDefinition(
+            """
+            WITH RankedOcd AS
+            (
+                SELECT OutcomeCode, DimensionCode, DirectionCode, Weight, IsEssentialElement, Rationale, SortOrder,
+                       ROW_NUMBER() OVER
+                       (
+                           PARTITION BY OutcomeCode, DimensionCode
+                           ORDER BY CASE WHEN TenantId = @TenantId THEN 0 ELSE 1 END, SortOrder
+                       ) AS ScopeRank
+                FROM POLOXI.Legal_DecisionDomainPackOutcomeCandidateDimension
+                WHERE IsDeleted = 0 AND IsActive = 1 AND DecisionDomainPackId = @PackId
+                  AND (TenantId = @TenantId OR TenantId IS NULL)
+            )
+            SELECT OutcomeCode, DimensionCode, DirectionCode, Weight, IsEssentialElement, Rationale, SortOrder
+            FROM RankedOcd WHERE ScopeRank = 1 ORDER BY OutcomeCode, SortOrder, DimensionCode;
+            """, new { PackId = pack.DecisionDomainPackId, TenantId = tenantId }, cancellationToken: cancellationToken))).ToArray();
+
+        // Essential/corroborating evidence requirements (migration 0451). Tenant rows override global by (OutcomeCode, EvidenceTypeCode).
+        var outcomeCandidateEvidenceRequirements = (await connection.QueryAsync<DecisionDomainPackOutcomeCandidateEvidenceRequirementDto>(new CommandDefinition(
+            """
+            WITH RankedReq AS
+            (
+                SELECT OutcomeCode, EvidenceTypeCode, IsEssential, MinVerificationProfileCode, Rationale, SortOrder,
+                       ROW_NUMBER() OVER
+                       (
+                           PARTITION BY OutcomeCode, EvidenceTypeCode
+                           ORDER BY CASE WHEN TenantId = @TenantId THEN 0 ELSE 1 END, SortOrder
+                       ) AS ScopeRank
+                FROM POLOXI.Legal_DecisionDomainPackOutcomeCandidateEvidenceRequirement
+                WHERE IsDeleted = 0 AND IsActive = 1 AND DecisionDomainPackId = @PackId
+                  AND (TenantId = @TenantId OR TenantId IS NULL)
+            )
+            SELECT OutcomeCode, EvidenceTypeCode, IsEssential, MinVerificationProfileCode, Rationale, SortOrder
+            FROM RankedReq WHERE ScopeRank = 1 ORDER BY OutcomeCode, SortOrder, EvidenceTypeCode;
+            """, new { PackId = pack.DecisionDomainPackId, TenantId = tenantId }, cancellationToken: cancellationToken))).ToArray();
+
         return new DecisionDomainPackDto(
             pack.DecisionDomainPackId, pack.PackCode, pack.PracticeAreaCode, pack.Name, pack.Description,
             dimensions, evidenceTypes, profiles, matterTypes)
@@ -1615,6 +1674,9 @@ public sealed partial class LegalDecisionRepository(ISqlConnectionFactory connec
             OutcomeCandidates = outcomeCandidates,
             RelevanceRules = relevanceRules,
             IncidentFamilies = incidentFamilies,
+            DecisionContracts = decisionContracts,
+            OutcomeCandidateDimensions = outcomeCandidateDimensions,
+            OutcomeCandidateEvidenceRequirements = outcomeCandidateEvidenceRequirements,
         };
     }
 
@@ -2065,15 +2127,15 @@ public sealed partial class LegalDecisionRepository(ISqlConnectionFactory connec
             ON target.DecisionDomainPackId = source.PackId AND target.OutcomeCode = source.OutcomeCode
                AND ((target.TenantId = @TenantId) OR (target.TenantId IS NULL AND @TenantId IS NULL)) AND target.IsDeleted = 0
             WHEN MATCHED THEN
-                UPDATE SET Name = @Name, Description = @Description, RoleCode = @RoleCode, RequiresVerification = @RequiresVerification,
-                           MatterTypeCode = @MatterTypeCode, SortOrder = @SortOrder, RequiresFactualPredicate = @RequiresFactualPredicate,
-                           FactualPredicateKeywords = @FactualPredicateKeywords, IsActive = @IsActive,
-                           ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @ActorUserId
-            WHEN NOT MATCHED THEN
-                INSERT (DecisionDomainPackId, OutcomeCode, Name, Description, RoleCode, RequiresVerification, MatterTypeCode, SortOrder,
-                        RequiresFactualPredicate, FactualPredicateKeywords, IsActive, TenantId, CreatedByUserId)
-                VALUES (@PackId, @OutcomeCode, @Name, @Description, @RoleCode, @RequiresVerification, @MatterTypeCode, @SortOrder,
-                        @RequiresFactualPredicate, @FactualPredicateKeywords, @IsActive, @TenantId, @ActorUserId);
+                     UPDATE SET Name = @Name, Description = @Description, RoleCode = @RoleCode, RequiresVerification = @RequiresVerification,
+                                MatterTypeCode = @MatterTypeCode, SortOrder = @SortOrder, RequiresFactualPredicate = @RequiresFactualPredicate,
+                                FactualPredicateKeywords = @FactualPredicateKeywords, ArchetypeCode = @ArchetypeCode, IsActive = @IsActive,
+                                ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @ActorUserId
+                WHEN NOT MATCHED THEN
+                    INSERT (DecisionDomainPackId, OutcomeCode, Name, Description, RoleCode, RequiresVerification, MatterTypeCode, SortOrder,
+                            RequiresFactualPredicate, FactualPredicateKeywords, ArchetypeCode, IsActive, TenantId, CreatedByUserId)
+                    VALUES (@PackId, @OutcomeCode, @Name, @Description, @RoleCode, @RequiresVerification, @MatterTypeCode, @SortOrder,
+                            @RequiresFactualPredicate, @FactualPredicateKeywords, @ArchetypeCode, @IsActive, @TenantId, @ActorUserId);
             """,
             new
             {
@@ -2088,6 +2150,7 @@ public sealed partial class LegalDecisionRepository(ISqlConnectionFactory connec
                 request.RequiresFactualPredicate,
                 FactualPredicateKeywords = string.IsNullOrWhiteSpace(request.FactualPredicateKeywords) ? null : request.FactualPredicateKeywords.Trim(),
                 request.IsActive,
+                ArchetypeCode = string.IsNullOrWhiteSpace(request.ArchetypeCode) ? null : request.ArchetypeCode.Trim().ToUpperInvariant(),
                 TenantId = tenantId == Guid.Empty ? (Guid?)null : tenantId,
                 ActorUserId = actorUserId == Guid.Empty ? (Guid?)null : actorUserId,
             },
@@ -2830,6 +2893,28 @@ public sealed partial class LegalDecisionRepository(ISqlConnectionFactory connec
         return affected > 0;
     }
 
+    public async Task<bool> UpdateMatterScopeOutThresholdAsync(Guid tenantId, Guid userId, Guid decisionMatterId, decimal? matterScopeOutThreshold, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var affected = await connection.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE POLOXI.Legal_DecisionMatter
+            SET MatterScopeOutThreshold = @MatterScopeOutThreshold,
+                ModifiedDateUtc = SYSUTCDATETIME(),
+                ModifiedByUserId = @UserId
+            WHERE IsDeleted = 0 AND TenantId = @TenantId AND DecisionMatterId = @DecisionMatterId;
+            """,
+            new
+            {
+                MatterScopeOutThreshold = matterScopeOutThreshold.HasValue ? Math.Clamp(matterScopeOutThreshold.Value, 0m, 1m) : (decimal?)null,
+                TenantId = tenantId,
+                DecisionMatterId = decisionMatterId,
+                UserId = userId == Guid.Empty ? (Guid?)null : userId
+            },
+            cancellationToken: cancellationToken));
+        return affected > 0;
+    }
+
     public async Task<bool> UpdateMatterStatusAsync(Guid tenantId, Guid userId, Guid decisionMatterId, string statusCode, CancellationToken cancellationToken = default)
     {
         using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
@@ -3052,6 +3137,7 @@ public sealed partial class LegalDecisionRepository(ISqlConnectionFactory connec
         MotionTarget = r.MotionTarget,
         RequestedDisposition = r.RequestedDisposition,
         AdditionalNarrative = r.AdditionalNarrative,
+        MatterScopeOutThreshold = r.MatterScopeOutThreshold,
         LatestSessionId = r.LatestSessionId,
         CurrentOutcome = r.CurrentOutcome,
         DecisionStatusCode = r.DecisionStatusCode,
@@ -3866,6 +3952,7 @@ public sealed partial class LegalDecisionRepository(ISqlConnectionFactory connec
         string? PracticeAreaCode, string? ClaimTypeCode, string? DomainPackCode,
         string? Subtype, string? CourtSystem, string? State, string? CourtLevel, string? County, string? GoverningLaw,
         string? MovingParty, string? RespondingParty, string? MotionTarget, string? RequestedDisposition, string? AdditionalNarrative,
+        decimal? MatterScopeOutThreshold,
         DateTime CreatedDateUtc, DateTime? ModifiedDateUtc, Guid? LatestSessionId, string? CurrentOutcome,
         string? DecisionStatusCode, DateTime? LastDecidedUtc, int CriticalFlipPointCount);
 

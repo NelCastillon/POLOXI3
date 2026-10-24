@@ -234,7 +234,10 @@ public sealed record SaveDomainPackOutcomeCandidateRequest(
     int SortOrder,
     bool RequiresFactualPredicate,
     [StringLength(2000)] string? FactualPredicateKeywords,
-    bool IsActive);
+    bool IsActive,
+    // Disposition-archetype gate (migration 0450): PLAINTIFF_MERITS | DEFENSE_MERITS | SETTLEMENT |
+    // NEUTRAL. Drives how the outcome is aggregated over the legal-element axes during competition.
+    [StringLength(40)] string? ArchetypeCode = null);
 
 // Root Domain Pack upsert (practice-area domain semantics). Tenant-scoped create/update only; the
 // repository never modifies global (TenantId NULL) seed packs. Upserted by PackCode within the tenant.

@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.Text.Json.Serialization;
 
 namespace Legal.Application.Features.Intelligence.Decision;
 
@@ -602,6 +603,10 @@ public sealed record DecisionMatterDto(
     // SUPPLIED context, never verified evidence.
     public string? AdditionalNarrative { get; init; }
 
+    // Per-matter Blended Score scope-gate override (decimal 0-1). When set, it is used as the
+    // MatterScopeOutThreshold for THIS matter's runs; null falls back to the tenant/platform default.
+    public decimal? MatterScopeOutThreshold { get; init; }
+
     // Derived from the latest decision session for this matter (null when no decision yet).
     public Guid? LatestSessionId { get; init; }
     public string? CurrentOutcome { get; init; }
@@ -688,6 +693,11 @@ public sealed record DecisionMatterUpdateRequest(
 public sealed record DecisionMatterAdditionalNarrativeRequest(
     [StringLength(20000)] string? AdditionalNarrative);
 
+// Focused request that persists ONLY the per-matter Blended Score scope-gate threshold. Used by the
+// Decision2 dial to remember the attorney's last value PER MATTER without replaying other fields.
+public sealed record DecisionMatterScopeThresholdRequest(
+    [Range(0, 1)] decimal? MatterScopeOutThreshold);
+
 // ── Domain Pack (practice-area domain semantics) DTOs
 // A database-backed Domain Pack supplies terminology, decision-hierarchy dimensions, evidence
 // classifications, verification profiles, and matter-type taxonomy for a practice area. POLOXI Core
@@ -723,6 +733,23 @@ public sealed record DecisionDomainPackDto(
     // tagged with IncidentFamilyCodes are deterministically excluded when the matter resolves to at least one
     // family and none of them is tagged. Untagged Evidence Types apply to every family.
     public IReadOnlyCollection<DecisionDomainPackIncidentFamilyDto> IncidentFamilies { get; init; } = [];
+
+    // Decision contracts (migration 0451). Each contract is an INDEPENDENT decision landscape with its own
+    // competing candidate set and its own relative-support denominator (e.g. PROCEDURAL_DISPOSITION vs
+    // MATTER_RESOLUTION). Outcome candidates carry DecisionContractCode membership; candidates without a
+    // contract (legacy C1-C9) belong to the default/global landscape. Advisory configuration only.
+    public IReadOnlyCollection<DecisionDomainPackDecisionContractDto> DecisionContracts { get; init; } = [];
+
+    // Directional candidate x dimension vectors (migration 0451). A row declares how a dimension's strength
+    // influences an outcome: SUPPORTS raises it, OPPOSES lowers it, NEUTRAL is tension/irrelevant, UNKNOWN is
+    // explicitly unmodeled (never treated as negative). Mirror outcomes carry opposite directions on shared
+    // element axes so the same proposition cannot inflate contradictory dispositions. Advisory only.
+    public IReadOnlyCollection<DecisionDomainPackOutcomeCandidateDimensionDto> OutcomeCandidateDimensions { get; init; } = [];
+
+    // Essential/corroborating evidence requirements per outcome (migration 0451). Separates scored coverage
+    // from verified-evidence coverage and decision readiness; a missing requirement is a readiness GAP, never
+    // negative evidence. MinVerificationProfileCode names the verification profile that satisfies it.
+    public IReadOnlyCollection<DecisionDomainPackOutcomeCandidateEvidenceRequirementDto> OutcomeCandidateEvidenceRequirements { get; init; } = [];
 }
 
 // Migration 0445: MatterSignalPatterns is a comma-separated list of SQL-LIKE style patterns ('%' wildcard).
@@ -736,6 +763,7 @@ public sealed record DecisionDomainPackRelevanceRuleDto(string TargetKindCode, s
 // how decisive the node is to the decision. POLOXI Core owns authoritative scoring; this is configuration only.
 public sealed record DecisionDomainPackDimensionDto(string DimensionCode, string Name, string? Description, decimal? PoloxiImportanceScore = null);
 
+[method: JsonConstructor]
 public sealed record DecisionDomainPackEvidenceTypeDto(string EvidenceTypeCode, string Name, string? DimensionCode, string? Description, decimal? PoloxiImportanceScore = null)
 {
     // Migration 0433 (nullable/additive): required-coverage flag, applicable matter types (comma list,
@@ -779,7 +807,48 @@ public sealed record DecisionDomainPackOutcomeCandidateDto(
     // (at least one FactualPredicateKeywords entry is present in the matter facts). This keeps the
     // eligibility rule data-driven per row; no outcome name is hardcoded in application code.
     bool RequiresFactualPredicate = false,
-    string? FactualPredicateKeywords = null);
+    string? FactualPredicateKeywords = null,
+    // Disposition-archetype gate (migration 0450). Declares how this outcome is aggregated over the
+    // decision-factor (legal element) axes during Candidate x Branch competition:
+    // PLAINTIFF_MERITS (conjunctive), DEFENSE_MERITS (disjunctive over failures), SETTLEMENT (tension),
+    // NEUTRAL (membership-weighted average). Null => application falls back to keyword classification.
+    string? ArchetypeCode = null,
+    // Decision contract membership (migration 0451). Associates this candidate with an independent decision
+    // landscape (PROCEDURAL_DISPOSITION | MATTER_RESOLUTION | ...). Null = legacy/default landscape (C1-C9).
+    // ContractKind mirrors the contract's kind so future packs can group candidates generically.
+    string? DecisionContractCode = null,
+    string? ContractKind = null);
+
+// Decision contract (migration 0451): an independent decision landscape with its own competing candidate set
+// and its own relative-support denominator. Advisory configuration only; POLOXI Core owns competition.
+public sealed record DecisionDomainPackDecisionContractDto(
+    string ContractCode,
+    string ContractKind,
+    string Name,
+    string? Description,
+    string? DecisionQuestion,
+    int SortOrder);
+
+// Directional candidate x dimension mapping (migration 0451). DirectionCode is SUPPORTS | OPPOSES | NEUTRAL |
+// UNKNOWN; Weight (0..1) is relative influence; IsEssentialElement flags a gating legal element for readiness.
+public sealed record DecisionDomainPackOutcomeCandidateDimensionDto(
+    string OutcomeCode,
+    string DimensionCode,
+    string DirectionCode,
+    decimal Weight,
+    bool IsEssentialElement,
+    string? Rationale,
+    int SortOrder);
+
+// Essential/corroborating evidence requirement per outcome (migration 0451). IsEssential distinguishes a
+// gating requirement from a corroborating one; MinVerificationProfileCode names the profile that satisfies it.
+public sealed record DecisionDomainPackOutcomeCandidateEvidenceRequirementDto(
+    string OutcomeCode,
+    string EvidenceTypeCode,
+    bool IsEssential,
+    string? MinVerificationProfileCode,
+    string? Rationale,
+    int SortOrder);
 
 public sealed record DecisionDomainConceptDto(
     Guid DecisionDomainConceptId,

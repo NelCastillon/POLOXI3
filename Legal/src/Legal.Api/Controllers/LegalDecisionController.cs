@@ -1090,6 +1090,14 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
         return updated ? NoContent() : NotFound();
     }
 
+    [HttpPut("matters/{matterId:guid}/scope-threshold")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> UpdateMatterScopeThreshold(Guid matterId, [FromBody] DecisionMatterScopeThresholdRequest request, CancellationToken cancellationToken)
+    {
+        var updated = await service.UpdateMatterScopeOutThresholdAsync(TenantId, ActorUserId, matterId, request.MatterScopeOutThreshold, cancellationToken);
+        return updated ? NoContent() : NotFound();
+    }
+
     [HttpPost("matters/{matterId:guid}/status")]
     [Authorize(Policy = IntelligencePolicies.Search)]
     public async Task<IActionResult> UpdateMatterStatus(Guid matterId, [FromBody] DecisionMatterStatusUpdateRequest request, CancellationToken cancellationToken)

@@ -19,6 +19,9 @@ public interface IIntelligenceWideService
     // Editable Epistemic Authority (POLOXI EA) settings surfaced on /legal/configuration.
     Task<IReadOnlyCollection<EpistemicSettingDto>> GetEpistemicSettingsAsync(Guid tenantId,CancellationToken cancellationToken=default);
     Task SaveEpistemicSettingAsync(SaveEpistemicSettingRequest request,Guid tenantId,Guid actorUserId,CancellationToken cancellationToken=default);
+    // Editable matter evidence-scope threshold settings (Intelligence.SearchWide.MatterScope*) surfaced on /legal/configuration.
+    Task<IReadOnlyCollection<MatterScopeSettingDto>> GetMatterScopeSettingsAsync(Guid tenantId,CancellationToken cancellationToken=default);
+    Task SaveMatterScopeSettingAsync(SaveMatterScopeSettingRequest request,Guid tenantId,Guid actorUserId,CancellationToken cancellationToken=default);
     // Platform UI toggle controlling whether /legal/search shows the End-to-end POLOXI pipeline section.
     Task<bool> GetShowPipelineAsync(CancellationToken cancellationToken=default);
     Task SaveShowPipelineAsync(bool showPipeline,CancellationToken cancellationToken=default);

@@ -121,16 +121,32 @@ public sealed class WhatToResolveNextService(
             : matter!.DomainPackCode;
         var pack = await domainPackResolver.ResolveAsync(tenantId, packCode, cancellationToken);
 
-        // Existing LegalADV normalization (same projection NBA uses). Not a new formula.
-        var maxIv = Math.Max(0.001m, scored.Propositions.Max(p => p.InformationValue));
+        // The unresolved proposition frontier — the set the targets are actually drawn from.
+        var unresolved = scored.Propositions
+            .Where(p => IsUnresolved(p.FactStateCode))
+            .OrderByDescending(p => p.InformationValue)
+            .ToArray();
+
+        // Deterministic required-element gap frontier: REQUIRED domain concepts with no admitted evidence
+        // coverage are first-class resolution targets even when no proposition exists for them yet.
+        var factorGaps = RequiredFactorFrontier.Compute(pack, graph);
+
+        // LegalADV normalization over the UNRESOLVED frontier (not all scored propositions). Normalizing
+        // over resolved-inclusive IV made every unresolved target round toward 0.00 whenever a resolved
+        // proposition held the top information value.
+        var maxIv = Math.Max(0.001m,
+            unresolved.Length > 0 ? unresolved.Max(p => p.InformationValue) : scored.Propositions.Max(p => p.InformationValue));
 
         // Surface EVERY unresolved proposition (highest information value first). No materiality floor is
         // applied so the cockpit lists the full resolution frontier rather than only decision-material items.
-        var targets = scored.Propositions
-            .Where(p => IsUnresolved(p.FactStateCode))
-            .OrderByDescending(p => p.InformationValue)
-            .Select(p => MapTarget(p, propositionById, evidenceById, maxIv, matter, pack))
-            .ToArray();
+        var propositionTargets = unresolved
+            .Select(p => MapTarget(p, propositionById, evidenceById, maxIv, matter, pack));
+
+        // Append the uncovered required legal elements. ADV = 1.00 (maximal) — an unproven required element
+        // is the strongest resolution gap. They rank at the top of the frontier.
+        var factorTargets = factorGaps.Select(g => MapFactorTarget(g, matter, pack));
+
+        var targets = factorTargets.Concat(propositionTargets).ToArray();
 
         // Scored, but nothing unresolved and decision-material remains → NONE REQUIRED (distinct state).
         if (targets.Length == 0)
@@ -187,6 +203,35 @@ public sealed class WhatToResolveNextService(
 
     private static bool IsUnresolved(string? factStateCode)
         => string.IsNullOrWhiteSpace(factStateCode) || !ResolvedFactStates.Contains(factStateCode);
+
+    // A required legal element (domain concept) with no admitted evidence coverage, projected as a
+    // top-priority resolution target. ADV is maximal (1.00) and InformationValue is unknown (null —
+    // never coerced to zero) because no proposition has been scored for it yet.
+    private static ResolutionTargetDto MapFactorTarget(
+        RequiredFactorGap gap,
+        DecisionMatterDto? matter,
+        ResolvedDomainPack pack)
+    {
+        var path = new List<HierarchyPathNodeDto>(BuildHierarchyPath(matter, pack));
+        if (!string.IsNullOrWhiteSpace(gap.DimensionCode))
+            path.Add(new HierarchyPathNodeDto(gap.DimensionCode.Replace('_', ' ')));
+
+        return new ResolutionTargetDto(
+            PropositionId: gap.FactorId.ToString(),
+            PropositionText: $"Required legal element not yet established: {gap.Name}.",
+            CandidateId: null,
+            HierarchyPath: path,
+            InformationValue: null,
+            FlipPotential: null,
+            LegalAdv: 1.0,
+            ResolutionQuestion: $"What evidence establishes {LowerFirst(gap.Name.TrimEnd('.'))}?",
+            MissingInformation: string.IsNullOrWhiteSpace(gap.Description)
+                ? "This required legal element has no admitted evidence on record; it must be established for the claim."
+                : gap.Description,
+            DependencyIds: [],
+            State: ResolutionTargetState.Calculated,
+            Reason: "Required legal element with no admitted evidence coverage on the current frontier.");
+    }
 
     // Advisory HRR lineage: domain → jurisdiction → posture. Display-only, mirrors the NBA projection.
     private static IReadOnlyList<HierarchyPathNodeDto> BuildHierarchyPath(DecisionMatterDto? matter, ResolvedDomainPack pack)

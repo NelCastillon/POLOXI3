@@ -406,6 +406,72 @@ WHEN NOT MATCHED THEN
         },cancellationToken:cancellationToken));
     }
 
+    // ── Matter evidence-scope threshold configuration ───────────────────────────────────────────
+    private const string MatterScopeSettingPrefix="Intelligence.SearchWide.MatterScope";
+
+    private sealed record MatterScopeSettingRow(string SettingKey,string? PlatformValue,string? TenantValue,string DataTypeCode,string? Description);
+
+    public async Task<IReadOnlyCollection<MatterScopeSettingDto>> GetMatterScopeSettingsAsync(Guid tenantId,CancellationToken cancellationToken=default)
+    {
+        const string sql="""
+SELECT plat.SettingKey,
+       plat.SettingValue AS PlatformValue,
+       tnt.SettingValue  AS TenantValue,
+       plat.DataTypeCode,
+       plat.Description
+FROM Core.ConfigurationSetting plat
+LEFT JOIN Core.ConfigurationSetting tnt
+       ON tnt.TenantId=@TenantId AND tnt.ScopeCode=N'Tenant' AND tnt.IsDeleted=0 AND tnt.SettingKey=plat.SettingKey
+WHERE plat.TenantId IS NULL AND plat.ScopeCode=N'Platform' AND plat.IsDeleted=0 AND plat.SettingKey LIKE @Prefix + N'%'
+ORDER BY plat.SettingKey;
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var rows=await connection.QueryAsync<MatterScopeSettingRow>(new CommandDefinition(sql,new{TenantId=tenantId,Prefix=MatterScopeSettingPrefix},cancellationToken:cancellationToken));
+        return rows.Select(r=>new MatterScopeSettingDto(
+            r.SettingKey,
+            r.TenantValue??r.PlatformValue??string.Empty,
+            r.PlatformValue??string.Empty,
+            r.DataTypeCode,
+            r.Description,
+            r.TenantValue is not null)).ToArray();
+    }
+
+    public async Task SaveMatterScopeSettingAsync(SaveMatterScopeSettingRequest request,Guid tenantId,Guid actorUserId,CancellationToken cancellationToken=default)
+    {
+        var key=request.SettingKey;
+        var isTenant=string.Equals(request.Scope,"Tenant",StringComparison.OrdinalIgnoreCase);
+        const string sql="""
+MERGE Core.ConfigurationSetting AS target
+USING (SELECT @SettingKey AS SettingKey) AS source
+   ON ((@IsTenant=1 AND target.TenantId=@TenantId AND target.ScopeCode=N'Tenant')
+    OR (@IsTenant=0 AND target.TenantId IS NULL AND target.ScopeCode=N'Platform'))
+  AND target.SettingKey=source.SettingKey AND target.IsDeleted=0
+WHEN MATCHED THEN
+    UPDATE SET
+        target.ModuleCode=N'Intelligence',
+        target.SettingValue=@SettingValue,
+        target.DataTypeCode=COALESCE((SELECT TOP 1 p.DataTypeCode FROM Core.ConfigurationSetting p WHERE p.TenantId IS NULL AND p.ScopeCode=N'Platform' AND p.SettingKey=source.SettingKey AND p.IsDeleted=0),target.DataTypeCode),
+        target.IsReadOnly=0,
+        target.ModifiedByUserId=@ActorUserId,
+        target.ModifiedDateUtc=SYSUTCDATETIME()
+WHEN NOT MATCHED THEN
+    INSERT(SettingId,TenantId,ScopeCode,ModuleCode,SettingKey,SettingValue,DefaultValue,DataTypeCode,Description,IsEncrypted,IsReadOnly,CreatedByUserId,CreatedDateUtc,IsDeleted)
+    VALUES(NEWID(),CASE WHEN @IsTenant=1 THEN @TenantId ELSE NULL END,CASE WHEN @IsTenant=1 THEN N'Tenant' ELSE N'Platform' END,N'Intelligence',@SettingKey,@SettingValue,
+        COALESCE((SELECT TOP 1 p.DefaultValue FROM Core.ConfigurationSetting p WHERE p.TenantId IS NULL AND p.ScopeCode=N'Platform' AND p.SettingKey=@SettingKey AND p.IsDeleted=0),@SettingValue),
+        COALESCE((SELECT TOP 1 p.DataTypeCode FROM Core.ConfigurationSetting p WHERE p.TenantId IS NULL AND p.ScopeCode=N'Platform' AND p.SettingKey=@SettingKey AND p.IsDeleted=0),N'String'),
+        COALESCE((SELECT TOP 1 p.Description FROM Core.ConfigurationSetting p WHERE p.TenantId IS NULL AND p.ScopeCode=N'Platform' AND p.SettingKey=@SettingKey AND p.IsDeleted=0),N''),0,0,@ActorUserId,SYSUTCDATETIME(),0);
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(sql,new
+        {
+            SettingKey=key,
+            SettingValue=request.SettingValue??string.Empty,
+            IsTenant=isTenant?1:0,
+            TenantId=tenantId,
+            ActorUserId=actorUserId
+        },cancellationToken:cancellationToken));
+    }
+
     public async Task<Legal.Application.Features.Intelligence.Epistemic.EpistemicAuthoritySettings> ResolveEpistemicSettingsAsync(Guid tenantId,CancellationToken cancellationToken=default)
     {
         var settings=await GetEpistemicSettingsAsync(tenantId,cancellationToken);

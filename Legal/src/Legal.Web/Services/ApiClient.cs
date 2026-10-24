@@ -427,6 +427,11 @@ public sealed class ApiClient(HttpClient httpClient)
             using var response=await _httpClient.PutAsJsonAsync($"api/legal_decision/matters/{matterId}/additional-narrative",new Legal.Application.Features.Intelligence.Decision.DecisionMatterAdditionalNarrativeRequest(additionalNarrative),token);
             await EnsureSuccessWithDetailAsync(response,token);
         }
+        public async Task UpdateLegalDecisionMatterScopeThresholdAsync(Guid matterId,decimal? matterScopeOutThreshold,CancellationToken token=default)
+        {
+            using var response=await _httpClient.PutAsJsonAsync($"api/legal_decision/matters/{matterId}/scope-threshold",new Legal.Application.Features.Intelligence.Decision.DecisionMatterScopeThresholdRequest(matterScopeOutThreshold),token);
+            await EnsureSuccessWithDetailAsync(response,token);
+        }
         public async Task UpdateLegalDecisionMatterStatusAsync(Guid matterId,string statusCode,CancellationToken token=default)
         {
             using var response=await _httpClient.PostAsJsonAsync($"api/legal_decision/matters/{matterId}/status",new Legal.Application.Features.Intelligence.Decision.DecisionMatterStatusUpdateRequest(statusCode),token);
@@ -591,6 +596,10 @@ public sealed class ApiClient(HttpClient httpClient)
     // Epistemic Authority (POLOXI EA) settings stored in Core.ConfigurationSetting (tenant override + platform default).
     public async Task<IReadOnlyCollection<EpistemicSettingDto>> GetEpistemicSettingsAsync(CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<EpistemicSettingDto>>("api/intelligence/epistemic-settings",token)??[];
     public async Task SaveEpistemicSettingAsync(string settingKey,SaveEpistemicSettingRequest request,CancellationToken token=default){var response=await _httpClient.PutAsJsonAsync($"api/intelligence/epistemic-settings/{Uri.EscapeDataString(settingKey)}",request,token);await EnsureSuccessWithDetailAsync(response,token);}
+
+    // Matter evidence-scope threshold settings (Intelligence.SearchWide.MatterScope*) stored in Core.ConfigurationSetting (tenant override + platform default).
+    public async Task<IReadOnlyCollection<MatterScopeSettingDto>> GetMatterScopeSettingsAsync(CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<MatterScopeSettingDto>>("api/intelligence/matter-scope-settings",token)??[];
+    public async Task SaveMatterScopeSettingAsync(string settingKey,SaveMatterScopeSettingRequest request,CancellationToken token=default){var response=await _httpClient.PutAsJsonAsync($"api/intelligence/matter-scope-settings/{Uri.EscapeDataString(settingKey)}",request,token);await EnsureSuccessWithDetailAsync(response,token);}
 
     // Search result display toggle for the End-to-end POLOXI pipeline section.
     public async Task<bool> GetShowPipelineAsync(CancellationToken token=default)=>await TryGetShowPipelineAsync("api/intelligence/show-pipeline",token);

@@ -90,6 +90,17 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     // universe at the start of the EVALUATE run so the Decision Outcome cards are never starved by the
     // emergent harvest/enumeration sources. Shared evaluation FACTORS are NOT in this set. Per-run (scoped).
     private IReadOnlyList<DecisionDomainPackOutcomeCandidateDto> _canonicalOutcomeCandidates=[];
+    // Directional candidate x dimension vectors (migration 0451). Signed per-dimension influence
+    // (SUPPORTS/OPPOSES/NEUTRAL/UNKNOWN + Weight + IsEssentialElement) so mirror outcomes compete by
+    // opposite polarity on shared element axes instead of adding the same positive evidence to every
+    // candidate. Advisory configuration; composes ON TOP of the archetype gate. Per-run (scoped).
+    private IReadOnlyList<DecisionDomainPackOutcomeCandidateDimensionDto> _outcomeCandidateDimensions=[];
+    // Essential/corroborating evidence requirements per outcome (migration 0451). Readiness/gap gate kept
+    // separate from scored coverage; a missing requirement is a GAP, never negative evidence. Per-run (scoped).
+    private IReadOnlyList<DecisionDomainPackOutcomeCandidateEvidenceRequirementDto> _outcomeCandidateEvidenceRequirements=[];
+    // Independent decision contracts (migration 0451). Each is a separate landscape whose relative-support
+    // denominator is computed within its own candidate set only. Per-run (scoped).
+    private IReadOnlyList<DecisionDomainPackDecisionContractDto> _decisionContracts=[];
     // ADDITIVE "Use Domain Pack" mode (default OFF): captured once per run from the request toggle. When ON
     // AND a DB-backed pack resolved, the Decision Outcome competition is locked to the pack's DB-backed
     // OutcomeCandidates (no emergent/harvested/seeded outcome names survive) and the pack Dimensions seed the
@@ -196,6 +207,8 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     public Task<IReadOnlyCollection<EpistemicSettingDto>> GetEpistemicSettingsAsync(Guid tenantId,CancellationToken cancellationToken=default)=>wideRepository.GetEpistemicSettingsAsync(tenantId,cancellationToken);
 
     public Task SaveEpistemicSettingAsync(SaveEpistemicSettingRequest request,Guid tenantId,Guid actorUserId,CancellationToken cancellationToken=default)=>wideRepository.SaveEpistemicSettingAsync(request,tenantId,actorUserId,cancellationToken);
+    public Task<IReadOnlyCollection<MatterScopeSettingDto>> GetMatterScopeSettingsAsync(Guid tenantId,CancellationToken cancellationToken=default)=>wideRepository.GetMatterScopeSettingsAsync(tenantId,cancellationToken);
+    public Task SaveMatterScopeSettingAsync(SaveMatterScopeSettingRequest request,Guid tenantId,Guid actorUserId,CancellationToken cancellationToken=default)=>wideRepository.SaveMatterScopeSettingAsync(request,tenantId,actorUserId,cancellationToken);
 
     public Task<bool> GetShowPipelineAsync(CancellationToken cancellationToken=default)=>wideRepository.GetShowPipelineAsync(cancellationToken);
 
@@ -719,6 +732,9 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         _lastHierarchyStepCall=null;
         ResetMatterFunnelState();
         _canonicalOutcomeCandidates=[];
+        _outcomeCandidateDimensions=[];
+        _outcomeCandidateEvidenceRequirements=[];
+        _decisionContracts=[];
         _candidateCompetitionStatus=null;
         _legalNormalization=null;
         _factBindingValidator=null;
@@ -743,6 +759,11 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         if(request.MatterId is{}matterId&&matterId!=Guid.Empty&&string.Equals(request.ContextCode,WideSearchContexts.Legal,StringComparison.OrdinalIgnoreCase))
             await LoadMatterContextAsync(request.TenantId,matterId,request.Query,request.UseDomainPack,cancellationToken);
         var configuration=await wideRepository.GetWideConfigurationAsync(request.TenantId,cancellationToken);
+        // Page-scoped Blended Score dial (/legal/personalinjury_decision2): when the request carries a
+        // per-run MatterScopeOutThreshold override, it replaces the tenant/platform configured value for
+        // THIS run only (clamped to [0,1]). Protected targets and USER decisions are unaffected downstream.
+        if(request.MatterScopeOutThresholdOverride is{}thresholdOverride)
+            configuration=configuration with{MatterScopeOutThreshold=Math.Clamp(thresholdOverride,0m,1m)};
         // Wide search is knowledge-only: it never grounds branches against AMS enterprise records.
         // An empty capability catalog forces every branch onto the INTERPRETIVE reasoning path.
         var capabilities=Array.Empty<PoloxiCapabilityDto>();
@@ -1204,6 +1225,28 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                             externalKnowledge=externalKnowledge.Concat(freshCorpus).ToArray();
                             logger.LogInformation("LEGAL-TRACE stage=corpus-merge matterId={MatterId} propositions={Propositions} projectedSnippets={Projected} merged={Merged}",corpusMatterId,evidenceGraph.Propositions?.Count??0,corpusSnippets.Count,freshCorpus.Length);
                         }
+                    }
+                    // Persist admitted document-corpus propositions as branch-attributed evidence rows so the
+                    // uploaded-document evidence lands in Legal_WideRunEvidence carrying its REAL document
+                    // EvidenceTypeCode. Previously only matter facts (MATTER_FACT/LEGAL_MATTER) were ever
+                    // persisted, so an L3 evidence-type query could never reveal the document evidence that
+                    // actually drove scoring. Same admission gate; branch evidence counts are updated below.
+                    var corpusEvidence=WideCorpusEvidenceProjection.ProjectEvidence(evidenceGraph,survivorsFinal,corpusMatterId);
+                    if(corpusEvidence.Count>0)
+                    {
+                        evidence.AddRange(corpusEvidence);
+                        foreach(var branch in survivorsFinal)
+                        {
+                            var branchCorpusCount=corpusEvidence.Count(item=>item.HierarchyBranchId==branch.WideBranchId);
+                            if(branchCorpusCount>0)
+                            {
+                                var index=allBranches.FindIndex(item=>item.WideBranchId==branch.WideBranchId);
+                                if(index>=0)
+                                    allBranches[index]=allBranches[index] with{EvidenceCount=allBranches[index].EvidenceCount+branchCorpusCount};
+                            }
+                        }
+                        survivorsFinal=allBranches.Where(branch=>!branch.IsEliminated).ToArray();
+                        logger.LogInformation("LEGAL-TRACE stage=corpus-evidence-persist matterId={MatterId} rows={Rows} branches={Branches} types={Types}",corpusMatterId,corpusEvidence.Count,corpusEvidence.Select(item=>item.HierarchyBranchId).Distinct().Count(),corpusEvidence.Select(item=>item.EntityTypeCode).Distinct().Count());
                     }
                 }
                 catch(Exception ex)when(!cancellationToken.IsCancellationRequested){logger.LogWarning(ex,"LEGAL-TRACE stage=corpus-merge matterId={MatterId} failed; continuing with external-only evidence",corpusMatterId);}
@@ -1726,6 +1769,35 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                     _normalizationGateStatus="SKIPPED (no projectable dispositions or fail-soft skip)";
                 }
             }
+            // Canonical outcome preservation (migration 0451): the two Decision Contracts
+            // (PROCEDURAL_DISPOSITION P1-P4 and MATTER_RESOLUTION M1-M6) are INDEPENDENT and each must keep its
+            // full DB-backed candidate set regardless of what the matter's requested disposition is. The
+            // normalization gate above REPLACES competitionBasis with its eligible representatives, and because a
+            // procedural request (e.g. "summary judgment for the movant") normalizes/defers the MATTER_RESOLUTION
+            // candidates, the M-series would silently vanish from the competition. Re-union every eligible
+            // canonical pack outcome so BOTH contracts' candidates survive the gate. This runs for all legal
+            // EVALUATE runs (not only _useDomainPack) because the canonical set is seeded for the matter's pack and
+            // relative support is computed per DecisionContractCode downstream, keeping the denominators separate.
+            // Fail-soft: an empty canonical set leaves competitionBasis unchanged.
+            if(IsLegalDecisionEvaluationRun&&_canonicalOutcomeCandidates is{Count:>0})
+            {
+                var preservedCanonical=_canonicalOutcomeCandidates
+                    .Where(IsCanonicalOutcomeEligible)
+                    .Select(outcome=>outcome.Name)
+                    .Where(name=>!string.IsNullOrWhiteSpace(name))
+                    .ToArray();
+                var missingCanonical=preservedCanonical
+                    .Where(name=>!competitionBasis.Contains(name,StringComparer.OrdinalIgnoreCase))
+                    .ToArray();
+                if(missingCanonical.Length>0)
+                {
+                    competitionBasis=competitionBasis
+                        .Concat(missingCanonical)
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .ToArray();
+                    logger.LogInformation("Wide2 canonical outcome preservation for matter {MatterId}: restored {Count} DB-backed contract outcome(s) dropped by the normalization gate ({Names}). Both decision contracts keep their full candidate set.",_matterContext?.MatterId,missingCanonical.Length,string.Join(", ",missingCanonical));
+                }
+            }
             // Deterministic outcome firewall: on a legal EVALUATE run the competition basis must contain ONLY
             // candidates that name a disposition the tribunal can reach. When the normalization gate is in
             // SHADOW/DISABLED mode, is SKIPPED, or yields a PLAN_INVALID result, the raw harvested
@@ -1786,27 +1858,48 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             // Media/Machine propositions) into the authoritative candidate ranking BEFORE readiness/status,
             // top-candidate derivation, and response assembly. Fully fail-soft and no-op off a legal matter.
             candidates=await ApplyChannelContributionsAsync(request,candidates,cancellationToken);
+            // Canonical contract landscape fallback (migration 0451). When the Candidate x Branch competition
+            // delivered no contract-coded candidate rows (hierarchy narrowed entirely into dispositions with no
+            // surviving scoring axis, so competition bailed with []), the UI would show NOTHING for the two
+            // independent decision contracts. Surface the DB-backed canonical outcomes (P1-P4 and M1-M6) so BOTH
+            // landscapes render, grouped by DecisionContractCode. These rows are HONESTLY unscored (CompositeScore
+            // 0, no branch scores) so the readiness/competition status below still reports the run as
+            // NO_COMPETING_CANDIDATES / REGISTERED_SCORING_BLOCKED - they disclose the candidate set, not a winner.
+            if(IsLegalDecisionEvaluationRun
+                &&!candidates.Any(c=>!string.IsNullOrWhiteSpace(c.DecisionContractCode))
+                &&BuildCanonicalContractLandscapeCandidates() is {Count:>0} canonicalLandscape)
+            {
+                candidates=candidates.Concat(canonicalLandscape).ToArray();
+                logger.LogInformation("Wide2 EVALUATE canonical contract landscape fallback for matter {MatterId}: surfaced {Count} DB-backed outcome(s) across decision contracts because competition produced no contract-coded rows.",_matterContext?.MatterId,canonicalLandscape.Count);
+            }
             // R4 decision readiness: registration success is NOT an evidence-grounded decision. Record whether
             // authoritative scoring produced competing candidates or whether the unchanged evidence/readiness
             // rules blocked a winner, so a normalized-but-unsupported run is never reported as a decision.
             _scoredCandidateIds=candidates.Select(c=>c.DisplayName).Where(n=>!string.IsNullOrWhiteSpace(n)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            // Registration/landscape fallback candidates are persisted with CompositeScore 0 and NO branch
+            // scores when the Candidate x Branch competition was blocked (evidence/readiness gates). Counting
+            // those as "competed" misreports a scoring-blocked run as RAN and makes the Overview render a
+            // scored leader with "0% support" / "0 branches scored". A candidate only counts as COMPETED when
+            // it carries a real scored signal (composite > 0 or at least one branch score).
+            var scoredCandidateCount=candidates.Count(c=>!c.IsConstraintViolation&&(c.CompositeScore>0m||c.BranchScores.Count>0));
             if(IsLegalDecisionEvaluationRun&&_legalNormalization is{} reg&&reg.Plan.IsValid)
-                _decisionReadinessStatus=DeliveredCandidateCount(candidates)>=2
+                _decisionReadinessStatus=scoredCandidateCount>=2
                     ? "CANDIDATES_REGISTERED_AND_COMPETED"
-                    : DeliveredCandidateCount(candidates)==1
+                    : scoredCandidateCount==1
                         ? "PROVISIONAL_LEADER (single grounded candidate; disclosed as risk-bearing, not an authoritative winner)"
                         : "REGISTERED_SCORING_BLOCKED (registration succeeded; evidence/readiness rules prevented an authoritative winner)";
             // R3 competition accountability: record a TYPED status for candidate competition so an EVALUATE
             // run can never silently deliver no competition. On a legal EVALUATE run the status is always
-            // populated: RAN when competing candidates were produced, NO_COMPETING_CANDIDATES when the pool
-            // stayed empty/degenerate, or NOT_REQUIRED when ranking completion was not requested.
+            // populated: RAN when SCORED competing candidates were produced, NO_COMPETING_CANDIDATES when the
+            // pool stayed empty/degenerate or only unscored proposed outcomes survived, or NOT_REQUIRED when
+            // ranking completion was not requested.
             _candidateCompetitionStatus=!IsLegalDecisionEvaluationRun
                 ? _candidateCompetitionStatus
                 : !rankingCompletionRequired
                     ? "NOT_REQUIRED"
-                    : DeliveredCandidateCount(candidates)>=2
-                        ? $"RAN (universe={competitionBasis.Count}, accepted={DeliveredCandidateCount(candidates)})"
-                        : $"NO_COMPETING_CANDIDATES (universe={competitionBasis.Count}, accepted={DeliveredCandidateCount(candidates)})";
+                    : scoredCandidateCount>=2
+                        ? $"RAN (universe={competitionBasis.Count}, accepted={scoredCandidateCount})"
+                        : $"NO_COMPETING_CANDIDATES (universe={competitionBasis.Count}, accepted={scoredCandidateCount})";
             if(IsLegalDecisionEvaluationRun)
                 logger.LogInformation("Wide2 EVALUATE candidate competition status for matter {MatterId}: {Status} (delivered {Delivered} candidate(s), universe {Universe}).",_matterContext!.MatterId,_candidateCompetitionStatus,DeliveredCandidateCount(candidates),competitionBasis.Count);
             // V2.9.2 Output Contract Validation: the delivered ranking must mechanically satisfy the
@@ -2547,6 +2640,17 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     // computed: the whole candidate set with ranks, composite/quality/evidence signals, support tiers,
     // constraint status, branch-level scores, the resolved interpretation, and residual uncertainty. Zero
     // new reasoning happens here; the composer only explains the competitive landscape it is handed.
+    // Total user-prompt character budget for the Candidate Landscape composer. The governed AI safety guard
+    // (Intelligence.Safety.MaximumInputCharacters, migration 0430 = 100000) is enforced over systemPrompt +
+    // userPrompt together; truncating individual fields is NOT enough because a rich matter + 20 evidence +
+    // 16 sources + 16 interpretive items can still overflow the guard and trip INPUT_LENGTH_EXCEEDED, which
+    // silently drops the composer to the degraded deterministic fallback. This leaves generous headroom for
+    // the system prompt and the appended canonical-outcome mapping block so the real narrative always runs.
+    private const int CandidateLandscapeUserPromptBudget=60000;
+    // Hard cap for the uncapped matter + client profile section so a long Description cannot alone exhaust
+    // the budget and starve the candidate / evidence / interpretive sections that follow.
+    private const int CandidateLandscapeMatterContextBudget=18000;
+
     private static string BuildCandidateLandscapeContext(WideSearchRequest request,string executionId,IReadOnlyCollection<WideCandidateDto> candidates,string? winnerDisplayName,string presentationState,decimal? decisionConfidence,WideEntropyResult finalEntropy,IReadOnlyCollection<PoloxiEvidenceDto> relevantEvidence,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge,IReadOnlyCollection<WideInterpretiveResultDto> interpretiveResults,string matterContextSection)
     {
         var builder=new StringBuilder();
@@ -2557,7 +2661,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         // concrete factual spine of the dispute: parties, jurisdiction, incident, injuries, damages,
         // allegations. Every candidate narrative must be grounded in THIS matter, not generic doctrine.
         if(!string.IsNullOrWhiteSpace(matterContextSection))
-            builder.Append(matterContextSection).Append('\n');
+            builder.Append(Truncate(matterContextSection,CandidateLandscapeMatterContextBudget)).Append('\n');
         if(!string.IsNullOrWhiteSpace(winnerDisplayName))
             builder.Append("CURRENT LEADING INTERPRETATION: ").Append(Truncate(winnerDisplayName,400)).Append('\n');
         if(decisionConfidence is not null)
@@ -2586,11 +2690,12 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         // per-candidate narrative is grounded in the ACTUAL documents, passages, media anchors, and prior
         // branch interpretations rather than scores alone. Never invent sources beyond what is listed here; if
         // a listed item CONTRADICTS a numeric framing, prefer the admitted evidence and reconcile the prose.
-        if(relevantEvidence.Count>0)
+        if(relevantEvidence.Count>0&&builder.Length<CandidateLandscapeUserPromptBudget)
         {
             builder.Append("\nADMITTED EVIDENCE (Evidence tab \u2014 actual matter documents/records; cite by Title, note module and relevance; treat as contributing factors):\n");
             foreach(var ev in relevantEvidence.OrderByDescending(e=>e.RelevanceScore).Take(20))
             {
+                if(builder.Length>=CandidateLandscapeUserPromptBudget)break;
                 builder.Append("- ").Append(Truncate(ev.Title,200))
                     .Append(" | module=").Append(ev.ModuleCode)
                     .Append(" | entityType=").Append(ev.EntityTypeCode)
@@ -2600,7 +2705,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 builder.Append('\n');
             }
         }
-        if(externalKnowledge.Count>0)
+        if(externalKnowledge.Count>0&&builder.Length<CandidateLandscapeUserPromptBudget)
         {
             builder.Append("\nDOCUMENT INTELLIGENCE / RETRIEVED SOURCES (Document Intelligence tab \u2014 label each by its verification state exactly; do NOT upgrade a retrieved/unverified source to verified legal support):\n");
             foreach(var snippet in externalKnowledge
@@ -2609,6 +2714,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 .ThenByDescending(s=>s.Score)
                 .Take(16))
             {
+                if(builder.Length>=CandidateLandscapeUserPromptBudget)break;
                 if(string.IsNullOrWhiteSpace(snippet.Title)&&string.IsNullOrWhiteSpace(snippet.Snippet))continue;
                 builder.Append("- ").Append(Truncate(string.IsNullOrWhiteSpace(snippet.Title)?snippet.Query:snippet.Title,200))
                     .Append(" | identityVerified=").Append(snippet.AuthorityIdentityVerified?"YES":"NO")
@@ -2621,11 +2727,12 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 builder.Append('\n');
             }
         }
-        if(interpretiveResults.Count>0)
+        if(interpretiveResults.Count>0&&builder.Length<CandidateLandscapeUserPromptBudget)
         {
             builder.Append("\nINTERPRETIVE ANALYSIS (original branch interpretations \u2014 the reasoning behind each dimension; use to explain WHY, preserving any contradictions):\n");
             foreach(var ir in interpretiveResults.OrderByDescending(r=>r.Confidence).Take(16))
             {
+                if(builder.Length>=CandidateLandscapeUserPromptBudget)break;
                 builder.Append("- ").Append(Truncate(ir.BranchDisplayName,160))
                     .Append(" | confidence=").Append(ir.Confidence.ToString("0.000"))
                     .Append(" | interpretation=").Append(Truncate(ir.Interpretation,500)).Append('\n');
@@ -2648,6 +2755,40 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     // narrative over the SAME proposed outcomes the Overview cards render — the normalized registration-plan
     // candidates (OriginalTitle / MaterialDistinction). This keeps candidate identity verbatim so the UI's
     // per-card narrative match succeeds. Presentation-only; nothing is scored, ranked, or fabricated.
+    // Canonical contract landscape (migration 0451). When the Candidate x Branch competition produced no
+    // contract-coded candidate rows on a legal EVALUATE run (the hierarchy narrowed entirely into dispositions
+    // and no scoring axis survived, so competition bailed), the UI would otherwise show NOTHING for the two
+    // independent decision contracts. Project the DB-backed canonical outcomes (P1-P4 PROCEDURAL_DISPOSITION,
+    // M1-M6 MATTER_RESOLUTION) directly into provisional rows so BOTH landscapes render, grouped by their
+    // DecisionContractCode. These are HONESTLY unscored (CompositeScore 0, no branch scores): they disclose the
+    // candidate set the tribunal is choosing among, not a decided winner. No outcome name is hardcoded; every
+    // row (name, contract code, contract kind, order) comes straight from _canonicalOutcomeCandidates.
+    private IReadOnlyCollection<WideCandidateDto> BuildCanonicalContractLandscapeCandidates()
+    {
+        if(!IsLegalDecisionEvaluationRun||_canonicalOutcomeCandidates is not{Count:>0})return [];
+        var eligible=_canonicalOutcomeCandidates
+            .Where(IsCanonicalOutcomeEligible)
+            .Where(o=>!string.IsNullOrWhiteSpace(o.Name))
+            .OrderBy(o=>o.SortOrder)
+            .ToArray();
+        if(eligible.Length==0)return [];
+        var rank=0;
+        return eligible
+            .Select(o=>new WideCandidateDto(
+                Guid.NewGuid(),
+                ++rank,
+                o.Name.Trim(),
+                string.IsNullOrWhiteSpace(o.Description)?null:o.Description!.Trim(),
+                0m,
+                [])
+            {
+                DecisionContractCode=string.IsNullOrWhiteSpace(o.DecisionContractCode)
+                    ?ResolveContractCodeForCandidate(o.Name.Trim())
+                    :o.DecisionContractCode!.Trim()
+            })
+            .ToArray();
+    }
+
     private IReadOnlyCollection<WideCandidateDto> BuildProposedLandscapeCandidates()
     {
         if(_legalNormalization is null)return [];
@@ -2661,7 +2802,10 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 c.DisplayName.Trim(),
                 string.IsNullOrWhiteSpace(c.Identity.Signature)?null:c.Identity.Signature.Trim(),
                 0m,
-                []))
+                [])
+            {
+                DecisionContractCode=ResolveContractCodeForCandidate(c.DisplayName.Trim())
+            })
             .ToArray();
     }
 
@@ -2704,16 +2848,389 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 userPrompt,
                 CandidateLandscapeSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_CANDIDATE_LANDSCAPE",null,request.CorrelationId,"Intelligent Search Wide"),SynthesisModel(request),cancellationToken);
             var proposal=JsonSerializer.Deserialize<CandidateLandscapeProposal>(result.Content,JsonOptions);
-            return MapCandidateLandscape(proposal,executionId,candidates,presentationState,ResolveCanonicalOutcomeMap());
+            var mapped=MapCandidateLandscape(proposal,executionId,candidates,presentationState,ResolveCanonicalOutcomeMap());
+            // Deterministic completeness guarantee: the LLM composer is advisory. Whether it returned null,
+            // dropped candidates at the identity guard, or produced no fullAnalysis, EVERY authoritative
+            // candidate must still carry a short + long narrative. Build the deterministic landscape from the
+            // persisted scores + interpretive results (which always exist for a scored run) and MERGE it so
+            // the LLM text wins per-field where present and the deterministic text fills every remaining gap.
+            var deterministic=BuildDeterministicLandscape(executionId,candidates,presentationState,interpretiveResults,decisionConfidence,finalEntropy);
+            return MergeCandidateLandscape(mapped,deterministic,candidates);
         }
         catch(Exception ex)when(!cancellationToken.IsCancellationRequested)
         {
             // Presentation only: never surface composer failures to the user-facing candidate cards,
-            // but DO log them. A silent null here produces a blank Overview narrative that is otherwise
-            // impossible to diagnose from the client.
-            logger.LogWarning(ex,"Candidate landscape composition failed for execution {ExecutionId}; Overview will fall back to candidate detail. {Message}",executionId,ex.Message);
-            return null;
+            // but DO log them. Instead of a silent null (blank Overview narrative), return the deterministic
+            // landscape composed from persisted scores + interpretive results so the short and long narrative
+            // ALWAYS populate for every candidate, even when the advisory LLM call fails entirely.
+            logger.LogWarning(ex,"Candidate landscape composition failed for execution {ExecutionId}; using deterministic narrative fallback. {Message}",executionId,ex.Message);
+            try
+            {
+                var presentationState=string.Equals(answerStatus,"USER_CLARIFICATION_REQUIRED",StringComparison.OrdinalIgnoreCase)||string.IsNullOrWhiteSpace(winnerDisplayName)?"INTERPRETIVE":"COMPETED";
+                return BuildDeterministicLandscape(executionId,candidates,presentationState,interpretiveResults,decisionConfidence,finalEntropy);
+            }
+            catch(Exception fallbackEx)
+            {
+                logger.LogWarning(fallbackEx,"Deterministic landscape fallback also failed for execution {ExecutionId}. {Message}",executionId,fallbackEx.Message);
+                return null;
+            }
         }
+    }
+
+    // Composes a complete WideCandidateLandscapeDto deterministically from values ALREADY computed for the
+    // run — every authoritative candidate, its per-branch (Candidate x Branch) scores, and the interpretive
+    // results (the same L1..Ln branch reasoning shown in the Interpretation results panel). It fabricates
+    // nothing: identities, scores, and interpretation text are copied verbatim. Because it iterates the
+    // authoritative candidate set directly, the candidate names ALWAYS match the Overview cards, so the
+    // short (OverviewNarrative) and long (FullAnalysis) narrative are guaranteed to populate for every card.
+    private WideCandidateLandscapeDto BuildDeterministicLandscape(string executionId,IReadOnlyCollection<WideCandidateDto> candidates,string presentationState,IReadOnlyCollection<WideInterpretiveResultDto> interpretiveResults,decimal? decisionConfidence,WideEntropyResult finalEntropy)
+    {
+        // Per-contract relative-support denominators (migration 0451): each independent decision contract
+        // (PROCEDURAL_DISPOSITION vs MATTER_RESOLUTION) competes within its OWN candidate set and its OWN
+        // composite-score denominator, so incompatible dispositions never share one relative-support pool.
+        // Candidates with no contract fall into a single default group (key ""), preserving legacy behavior.
+        static string ContractKeyOf(WideCandidateDto x)=>x.DecisionContractCode?.Trim().ToUpperInvariant()??string.Empty;
+        var contractScoreSum=candidates.GroupBy(ContractKeyOf)
+            .ToDictionary(g=>g.Key,g=>g.Sum(x=>x.CompositeScore));
+        var contractCount=candidates.GroupBy(ContractKeyOf)
+            .ToDictionary(g=>g.Key,g=>g.Count());
+        // Interpretation text keyed by branch display name so each candidate's branch dimensions can be
+        // explained with the actual interpretive reasoning that was retrieved for that branch.
+        var interpByBranch=new Dictionary<string,WideInterpretiveResultDto>(StringComparer.OrdinalIgnoreCase);
+        foreach(var ir in interpretiveResults)
+            if(!string.IsNullOrWhiteSpace(ir.BranchDisplayName)&&!interpByBranch.ContainsKey(ir.BranchDisplayName))
+                interpByBranch[ir.BranchDisplayName]=ir;
+
+        // Matter anchor: the saved decision/legal-scope fields that frame WHAT this matter is (parties,
+        // jurisdiction, claim, incident). Computed once; every candidate narrative opens against the same
+        // factual frame so the outcome is connected to the real matter instead of being a bare score recap.
+        var matterAnchor=BuildMatterAnchorText();
+        var materialFacts=_matterContext?.MaterialFacts()??[];
+        var admittedEvidence=_factorInventoryAdmittedEvidence;
+
+        var narratives=new List<WideCandidateNarrativeDto>();
+        var ordered=candidates.OrderBy(c=>c.IsConstraintViolation).ThenBy(c=>c.RankNumber).ThenByDescending(c=>c.CompositeScore).ToList();
+        for(var i=0;i<ordered.Count;i++)
+        {
+            var c=ordered[i];
+            var contractKey=ContractKeyOf(c);
+            var contractDenominator=contractScoreSum.GetValueOrDefault(contractKey,0m);
+            var contractCompetitors=contractCount.GetValueOrDefault(contractKey,ordered.Count);
+            var isLeader=i==0&&!c.IsConstraintViolation;
+            var runnerUp=ordered.Where(x=>!ReferenceEquals(x,c)&&!x.IsConstraintViolation&&ContractKeyOf(x)==contractKey).OrderByDescending(x=>x.CompositeScore).FirstOrDefault();
+            var supportPct=contractDenominator>0?(int)Math.Round((double)(c.CompositeScore/contractDenominator)*100):0;
+            var ranked=c.BranchScores.OrderByDescending(b=>b.EvidenceScore).ToList();
+            var topBranch=ranked.FirstOrDefault()?.BranchDisplayName;
+            var coveragePct=(int)Math.Round((double)c.EvidenceCoverage*100);
+            var tierWord=string.IsNullOrWhiteSpace(c.SupportTierCode)?"moderate":c.SupportTierCode.ToLowerInvariant();
+
+            // Grounding tokens from the candidate name + its strongest branch dimensions, used to pull the
+            // matter facts and admitted documents that are topically connected to THIS outcome.
+            var tokens=GroundingTokens(c.DisplayName,ranked.Take(6).Select(b=>b.BranchDisplayName));
+            var linkedFacts=MatchMatterFields(materialFacts,tokens,4);
+            var linkedEvidence=MatchAdmittedEvidence(admittedEvidence,tokens,ranked.Select(b=>b.BranchDisplayName),4);
+            var linkedItems=TopInterpretiveItems(interpretiveResults,ranked.Select(b=>b.BranchDisplayName),4);
+
+            // SHORT narrative: name THIS candidate, its relative support, viability tier, the branch that
+            // most strongly carries it (with interpretation), and the matter it is deciding.
+            var shortSb=new StringBuilder();
+            shortSb.Append(Truncate(c.DisplayName,300)).Append(c.IsConstraintViolation?" is a ruled-out competitor":isLeader?" is the current leading outcome":" is a competing outcome")
+                .Append(" with ").Append(supportPct).Append("% relative support (share of the total composite score across all ").Append(contractCompetitors).Append(" competing candidates)");
+            if(!string.IsNullOrWhiteSpace(c.SupportTierCode))
+                shortSb.Append(" (").Append(c.SupportTierCode.ToLowerInvariant()).Append(" support tier)");
+            shortSb.Append('.');
+            if(!string.IsNullOrWhiteSpace(matterAnchor))
+                shortSb.Append(" On this matter \u2014 ").Append(matterAnchor).Append(" \u2014 it is the disposition the evidence currently points to.");
+            if(!string.IsNullOrWhiteSpace(topBranch))
+            {
+                shortSb.Append(" Its position is driven most strongly by \u201C").Append(Truncate(topBranch,160)).Append("\u201D");
+                if(interpByBranch.TryGetValue(topBranch!,out var topIr)&&!string.IsNullOrWhiteSpace(topIr.Interpretation))
+                    shortSb.Append(": ").Append(Truncate(topIr.Interpretation,200));
+                shortSb.Append('.');
+            }
+            if(linkedEvidence.Count>0)
+                shortSb.Append(" It is anchored by ").Append(linkedEvidence.Count).Append(" admitted source(s) including ").Append(Truncate(linkedEvidence[0].Title,120)).Append('.');
+            if(ranked.Count>0)
+                shortSb.Append(" Evidence coverage is ").Append(coveragePct).Append("% across ").Append(ranked.Count).Append(" scored branch(es).");
+
+            // ── LONG narrative sections ──
+            // Executive assessment: frame the outcome against the matter, its standing, and its coverage.
+            var exec=new StringBuilder();
+            exec.Append(Truncate(c.DisplayName,300)).Append(c.IsConstraintViolation?" currently sits outside the viable field (ruled out on a hard constraint)":isLeader?" currently leads the competing field":" currently competes below the leader")
+                .Append(" with ").Append(supportPct).Append("% relative support and a ").Append(tierWord).Append(" support tier. ");
+            if(!string.IsNullOrWhiteSpace(matterAnchor))
+                exec.Append("The matter in question concerns ").Append(matterAnchor).Append(". ");
+            exec.Append("Against that backdrop the outcome was scored across ").Append(c.BranchScores.Count).Append(" decision branch(es) with ").Append(coveragePct).Append("% evidence coverage");
+            if(runnerUp is not null)
+            {
+                var runnerPct=contractDenominator>0?(int)Math.Round((double)(runnerUp.CompositeScore/contractDenominator)*100):0;
+                exec.Append(isLeader?", ahead of the next alternative \u201C":", behind the leading alternative \u201C").Append(Truncate(runnerUp.DisplayName,160)).Append("\u201D at ").Append(runnerPct).Append("% support");
+            }
+            exec.Append('.');
+
+            // Why current position: the dimensions that carry it, with the actual proposition-level findings.
+            var why=new StringBuilder();
+            if(ranked.Count>0)
+            {
+                why.Append("Ordered by decision-branch score, the dimensions supporting this outcome are: ");
+                why.Append(string.Join("; ",ranked.Take(8).Select(b=>$"{Truncate(b.BranchDisplayName,160)} ({b.EvidenceScore:P0})")));
+                why.Append(". ");
+            }
+            if(linkedItems.Count>0)
+            {
+                why.Append("The findings driving it include ");
+                why.Append(string.Join("; ",linkedItems.Select(it=>string.IsNullOrWhiteSpace(it.Detail)?Truncate(it.Name,140):$"{Truncate(it.Name,120)} \u2014 {Truncate(it.Detail,200)}")));
+                why.Append(". ");
+            }
+            why.Append("Higher-scoring branches carry the position; lower-scoring branches mark where it is weakest.");
+
+            // Evidence and authority: tie the position to the admitted documents and interpretive reasoning.
+            var evidence=new StringBuilder();
+            if(linkedEvidence.Count>0)
+            {
+                evidence.Append("Admitted sources connected to this outcome:\n");
+                foreach(var e in linkedEvidence)
+                    evidence.Append("\u2022 ").Append(Truncate(e.Title,160)).Append(" [").Append(string.IsNullOrWhiteSpace(e.ModuleCode)?"source":e.ModuleCode).Append(", relevance ").Append(e.RelevanceScore.ToString("P0")).Append(']')
+                        .Append(string.IsNullOrWhiteSpace(e.Excerpt)?string.Empty:": "+Truncate(e.Excerpt,240)).Append('\n');
+            }
+            foreach(var b in ranked.Take(5))
+                if(interpByBranch.TryGetValue(b.BranchDisplayName,out var ir)&&!string.IsNullOrWhiteSpace(ir.Interpretation))
+                    evidence.Append("\u2022 ").Append(Truncate(b.BranchDisplayName,160)).Append(" (").Append(b.EvidenceScore.ToString("P0")).Append("): ").Append(Truncate(ir.Interpretation,320)).Append('\n');
+            if(evidence.Length==0)
+                evidence.Append("Evidence coverage is ").Append(coveragePct).Append("% over the scored branch set")
+                    .Append(coveragePct>=60?"; sufficient for a provisional, evidence-dependent reading.":"; limited, so this outcome remains evidence-dependent and should be verified against admitted sources.");
+
+            // Comparison with the strongest alternative.
+            string? comparison=null;
+            if(runnerUp is not null&&!c.IsConstraintViolation)
+            {
+                var runnerPct=contractDenominator>0?(int)Math.Round((double)(runnerUp.CompositeScore/contractDenominator)*100):0;
+                var margin=supportPct-runnerPct;
+                comparison=isLeader
+                    ?$"This outcome leads \u201C{Truncate(runnerUp.DisplayName,160)}\u201D by {Math.Abs(margin)} point(s) of relative support ({supportPct}% vs {runnerPct}%). The margin reflects stronger evidence on its leading dimensions; it narrows if the competing disposition's weaker elements are substantiated."
+                    :$"The leading alternative \u201C{Truncate(runnerUp.DisplayName,160)}\u201D holds {runnerPct}% to this outcome's {supportPct}%. Closing that {Math.Abs(margin)}-point gap would require strengthening this outcome's lower-scoring branches.";
+            }
+
+            // Strongest case against: the weakest branches and any linked contradictions.
+            var against=new StringBuilder();
+            var weak=ranked.OrderBy(b=>b.EvidenceScore).Take(3).ToList();
+            if(weak.Count>0)
+            {
+                against.Append("The outcome is most exposed on its lowest-scoring dimensions: ");
+                against.Append(string.Join("; ",weak.Select(b=>$"{Truncate(b.BranchDisplayName,160)} ({b.EvidenceScore:P0})")));
+                against.Append(". A contrary disposition would attack these first.");
+            }
+
+            // Material uncertainty.
+            var residual=new StringBuilder();
+            residual.Append("Residual uncertainty across the field is ").Append(finalEntropy.NormalizedEntropy.ToString("P0"));
+            if(decisionConfidence is not null)residual.Append("; decision confidence is ").Append(decisionConfidence.Value.ToString("P0"));
+            residual.Append('.');
+            if(coveragePct<100)residual.Append(" Coverage is below full, so unscored branches remain a source of drift.");
+
+            // What strengthens / weakens.
+            var strongest=ranked.Take(3).Select(b=>Truncate(b.BranchDisplayName,160)).ToList();
+            var strengthen=new StringBuilder();
+            if(strongest.Count>0)
+                strengthen.Append("Verifying and reinforcing the top dimensions \u2014 ").Append(string.Join(", ",strongest)).Append(" \u2014 would most strengthen this outcome and raise its relative support. ");
+            var unverifiedFact=linkedFacts.FirstOrDefault(f=>f.Provenance==MatterFieldProvenance.Supplied);
+            if(unverifiedFact is not null)
+                strengthen.Append("Corroborating the supplied matter fact \u201C").Append(Truncate(unverifiedFact.Label,120)).Append("\u201D with admitted evidence would convert alleged support into verified support.");
+            string? weakens=weak.Count>0?$"It is weakened wherever its lower-scoring dimensions ({string.Join(", ",weak.Select(b=>Truncate(b.BranchDisplayName,120)))}) stay unsubstantiated or are contradicted by the record.":null;
+
+            // What could change position + next best information.
+            string? couldChange=$"The position would shift if new evidence materially moves {(weak.Count>0?Truncate(weak[0].BranchDisplayName,140):"a currently weak dimension")}, if a contradiction surfaces on a top branch, or if the competing disposition earns verified support on its gating elements.";
+            var nextBest=new StringBuilder();
+            if(unverifiedFact is not null)
+                nextBest.Append("Obtain documentary corroboration for \u201C").Append(Truncate(unverifiedFact.Label,120)).Append("\u201D. ");
+            if(weak.Count>0)
+                nextBest.Append("Target evidence on the weakest dimension \u2014 ").Append(Truncate(weak[0].BranchDisplayName,140)).Append(" \u2014 which currently constrains the score.");
+            if(nextBest.Length==0)
+                nextBest.Append("Confirm the leading dimensions against admitted sources to lock in the current reading.");
+
+            string? currentPosition=$"On the present record this outcome is the {(isLeader?"leading":c.IsConstraintViolation?"ruled-out":"trailing")} disposition at {supportPct}% relative support ({tierWord} tier), {(coveragePct>=60?"provisionally supported":"evidence-dependent")} and subject to change as verification completes.";
+
+            var full=new WideCandidateFullAnalysisNarrativeDto(
+                exec.ToString(),
+                why.Length>0?why.ToString():null,
+                evidence.ToString().Trim(),
+                comparison,
+                against.Length>0?against.ToString():null,
+                residual.ToString(),
+                strengthen.Length>0?strengthen.ToString().Trim():null,
+                weakens,
+                couldChange,
+                nextBest.ToString().Trim(),
+                currentPosition);
+
+            narratives.Add(new WideCandidateNarrativeDto(
+                null,
+                c.DisplayName,
+                c.IsConstraintViolation?"COMPETED_CANDIDATE":isLeader?"AUTHORITATIVE_LEADER":"COMPETED_CANDIDATE",
+                null,
+                shortSb.ToString(),
+                [],
+                null,
+                null,
+                null,
+                null,
+                full));
+        }
+
+        // Candidate-set & denominator disclosure: relative-support percentages shown on every card are each
+        // candidate's composite score as a share of the TOTAL composite score across the COMPLETE competing
+        // set below. Stating the count + basis prevents the "shares don't sum / hidden candidate" confusion
+        // that arises when only the top cards are read in isolation.
+        var competingCount=ordered.Count(c=>!c.IsConstraintViolation);
+        var ruledOutCount=ordered.Count-competingCount;
+        // Distinct decision contracts present (excluding the default/no-contract group) determines whether
+        // relative support is scoped to multiple independent landscapes (migration 0451) or a single pool.
+        var distinctContracts=candidates.Select(ContractKeyOf).Where(k=>k.Length>0).Distinct().Count();
+        var disclosure=new StringBuilder();
+        if(distinctContracts>1)
+        {
+            disclosure.Append("Relative support is each candidate's composite score as a share of the total composite score WITHIN ITS OWN decision contract (")
+                .Append(distinctContracts).Append(" independent landscapes). Shares sum to 100% within each contract separately, never across contracts, so incompatible dispositions are never compared on a shared denominator. The set spans ")
+                .Append(ordered.Count).Append(" candidate(s) (").Append(competingCount).Append(" competing");
+        }
+        else
+        {
+            disclosure.Append("Relative support is each candidate's composite score as a share of the total composite score across the complete set of ")
+                .Append(ordered.Count).Append(" candidate(s) (").Append(competingCount).Append(" competing");
+        }
+        if(ruledOutCount>0)disclosure.Append(" + ").Append(ruledOutCount).Append(" ruled-out");
+        disclosure.Append(distinctContracts>1?").":"); the shares are normalized over the full set and therefore sum to 100% only across all listed candidates, not any subset.");
+
+        return new WideCandidateLandscapeDto(
+            executionId,
+            presentationState,
+            disclosure.ToString(),
+            [],
+            [],
+            narratives);
+    }
+
+    // ── Deterministic grounding helpers (DB/run data only; no fabrication) ──
+
+    // A short factual frame of the matter built from the saved Decision/Legal-scope fields (e.g. parties,
+    // jurisdiction, claim type, incident). Empty when no matter context was loaded.
+    private string BuildMatterAnchorText()
+    {
+        if(_matterContext is null)return string.Empty;
+        var parts=_matterContext.Decision.Concat(_matterContext.LegalScope)
+            .Where(f=>f.HasValue)
+            .Select(f=>$"{f.Label}: {Truncate(f.Value?.Trim(),120)}")
+            .Take(4)
+            .ToList();
+        return string.Join("; ",parts);
+    }
+
+    // Normalized token set from a candidate name plus its strongest branch labels, used to associate the
+    // outcome with topically-related matter facts and admitted documents.
+    private static HashSet<string> GroundingTokens(string candidateName,IEnumerable<string> branchNames)
+    {
+        var corpus=candidateName+" "+string.Join(" ",branchNames);
+        return DomainPackEvidencePresenceMatcher.NormalizeCorpusTokens(corpus).Where(t=>t.Length>3).ToHashSet(StringComparer.Ordinal);
+    }
+
+    private static IReadOnlyList<MatterContextField> MatchMatterFields(IReadOnlyList<MatterContextField> fields,HashSet<string> tokens,int max)
+    {
+        if(fields.Count==0||tokens.Count==0)return [];
+        return fields
+            .Select(f=>(Field:f,Hits:DomainPackEvidencePresenceMatcher.NormalizeCorpusTokens(f.Label+" "+f.Value).Count(tokens.Contains)))
+            .Where(x=>x.Hits>0)
+            .OrderByDescending(x=>x.Hits)
+            .Take(max)
+            .Select(x=>x.Field)
+            .ToList();
+    }
+
+    private static IReadOnlyList<PoloxiEvidenceDto> MatchAdmittedEvidence(IReadOnlyList<PoloxiEvidenceDto> evidence,HashSet<string> tokens,IEnumerable<string> branchNames,int max)
+    {
+        if(evidence.Count==0)return [];
+        var branchSet=branchNames.Where(b=>!string.IsNullOrWhiteSpace(b)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return evidence
+            .Select(e=>(Evidence:e,
+                Hits:DomainPackEvidencePresenceMatcher.NormalizeCorpusTokens(e.Title+" "+(e.Excerpt??string.Empty)).Count(tokens.Contains)
+                    +(e.MatchedBranches?.Count(branchSet.Contains)??0)))
+            .Where(x=>x.Hits>0)
+            .OrderByDescending(x=>x.Hits).ThenByDescending(x=>x.Evidence.RelevanceScore)
+            .Take(max)
+            .Select(x=>x.Evidence)
+            .ToList();
+    }
+
+    private static IReadOnlyList<WideInterpretiveResultItemDto> TopInterpretiveItems(IReadOnlyCollection<WideInterpretiveResultDto> interpretiveResults,IEnumerable<string> branchNames,int max)
+    {
+        var branchSet=branchNames.Where(b=>!string.IsNullOrWhiteSpace(b)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return interpretiveResults
+            .Where(ir=>branchSet.Count==0||branchSet.Contains(ir.BranchDisplayName))
+            .SelectMany(ir=>ir.Items??[])
+            .Where(it=>!string.IsNullOrWhiteSpace(it.Name))
+            .OrderByDescending(it=>it.Score??0)
+            .ThenBy(it=>it.RankNumber)
+            .Take(max)
+            .ToList();
+    }
+
+    // Merges the advisory LLM landscape over the deterministic landscape so no candidate is ever left
+    // without a narrative. For each authoritative candidate, the LLM narrative is used when it exists and
+    // carries usable text; otherwise the deterministic narrative fills in. Per-field fallback is applied to
+    // FullAnalysis so a partial LLM result (short only, or some sections null) is completed deterministically.
+    private static WideCandidateLandscapeDto MergeCandidateLandscape(WideCandidateLandscapeDto? llm,WideCandidateLandscapeDto deterministic,IReadOnlyCollection<WideCandidateDto> candidates)
+    {
+        var llmByName=new Dictionary<string,WideCandidateNarrativeDto>(StringComparer.OrdinalIgnoreCase);
+        foreach(var n in llm?.Candidates??[])
+            if(!string.IsNullOrWhiteSpace(n.CandidateName)&&!llmByName.ContainsKey(n.CandidateName))
+                llmByName[n.CandidateName]=n;
+        var detByName=new Dictionary<string,WideCandidateNarrativeDto>(StringComparer.OrdinalIgnoreCase);
+        foreach(var n in deterministic.Candidates)
+            if(!string.IsNullOrWhiteSpace(n.CandidateName)&&!detByName.ContainsKey(n.CandidateName))
+                detByName[n.CandidateName]=n;
+
+        var merged=new List<WideCandidateNarrativeDto>();
+        foreach(var det in deterministic.Candidates)
+        {
+            if(llmByName.TryGetValue(det.CandidateName,out var authored)&&!string.IsNullOrWhiteSpace(authored.OverviewNarrative))
+            {
+                var fa=MergeFullAnalysis(authored.FullAnalysis,det.FullAnalysis);
+                merged.Add(authored with { FullAnalysis = fa });
+            }
+            else
+            {
+                merged.Add(det);
+            }
+        }
+
+        // Preserve the richer landscape-level synthesis/discriminators from the LLM when it ran.
+        return new WideCandidateLandscapeDto(
+            llm?.AnalysisRunId??deterministic.AnalysisRunId,
+            string.IsNullOrWhiteSpace(llm?.PresentationState)?deterministic.PresentationState:llm!.PresentationState,
+            llm?.ExecutiveSynthesis,
+            llm?.PrincipalDiscriminators??[],
+            llm?.MaterialUnknowns??[],
+            merged);
+    }
+
+    // Per-field completion of a candidate's FullAnalysis: the authored (LLM) section wins when non-blank,
+    // otherwise the deterministic section fills the gap, so a partial LLM result never leaves blank sections.
+    private static WideCandidateFullAnalysisNarrativeDto? MergeFullAnalysis(WideCandidateFullAnalysisNarrativeDto? authored,WideCandidateFullAnalysisNarrativeDto? deterministic)
+    {
+        if(authored is null)return deterministic;
+        if(deterministic is null)return authored;
+        static string? Pick(string? a,string? b)=>string.IsNullOrWhiteSpace(a)?b:a;
+        return new WideCandidateFullAnalysisNarrativeDto(
+            Pick(authored.ExecutiveAssessment,deterministic.ExecutiveAssessment),
+            Pick(authored.WhyCurrentPosition,deterministic.WhyCurrentPosition),
+            Pick(authored.EvidenceAndAuthorityPosition,deterministic.EvidenceAndAuthorityPosition),
+            Pick(authored.ComparisonWithStrongestAlternative,deterministic.ComparisonWithStrongestAlternative),
+            Pick(authored.StrongestCaseAgainst,deterministic.StrongestCaseAgainst),
+            Pick(authored.MaterialUncertainty,deterministic.MaterialUncertainty),
+            Pick(authored.WhatStrengthensCandidate,deterministic.WhatStrengthensCandidate),
+            Pick(authored.WhatWeakensCandidate,deterministic.WhatWeakensCandidate),
+            Pick(authored.WhatCouldChangePosition,deterministic.WhatCouldChangePosition),
+            Pick(authored.NextBestInformation,deterministic.NextBestInformation),
+            Pick(authored.CurrentDecisionPosition,deterministic.CurrentDecisionPosition));
     }
 
     // Deterministic projection of the composer proposal into the presentation DTO. Preserves candidate
@@ -2754,7 +3271,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 CleanOrNull(candidate.StrongestAlternativeName),
                 CleanOrNull(candidate.StrongestAlternativeDiscriminator),
                 full)
-                { MappedOutcomes = ResolveMappedOutcomes(candidate.MappedOutcomeCodes,canonicalOutcomeMap) });
+                { MappedOutcomes = ResolveMappedOutcomes(candidate.MappedOutcomeCodes,canonicalOutcomeMap,$"{known[matched].DisplayName} {candidate.OverviewHeadline} {candidate.OverviewNarrative}") });
         }
         if(narratives.Count==0)return null;
         var landscape=proposal.Landscape;
@@ -2807,10 +3324,14 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             if(string.IsNullOrWhiteSpace(outcome.OutcomeCode)||string.IsNullOrWhiteSpace(outcome.Name))continue;
             builder.Append("- ").Append(outcome.OutcomeCode.Trim()).Append(" | ").Append(Truncate(outcome.Name.Trim(),160));
             if(!string.IsNullOrWhiteSpace(outcome.RoleCode))builder.Append(" | role=").Append(outcome.RoleCode.Trim());
+            // Expose the disposition archetype so the model can see each outcome's prevailing-party polarity
+            // (PLAINTIFF_MERITS / DEFENSE_MERITS / SETTLEMENT / NEUTRAL) and never map a plaintiff-favorable
+            // candidate to a defense-favorable outcome (or vice versa).
+            if(!string.IsNullOrWhiteSpace(outcome.ArchetypeCode))builder.Append(" | archetype=").Append(outcome.ArchetypeCode!.Trim());
             if(!string.IsNullOrWhiteSpace(outcome.Description))builder.Append(" | ").Append(Truncate(outcome.Description!.Trim(),300));
             builder.Append('\n');
         }
-        builder.Append("For EVERY candidate above, set mappedOutcomeCodes to the canonical code(s) whose Name/Description/role match its actual legal character (distinguish merits dismissal vs procedural/jurisdictional bar vs voluntary withdrawal). An empty array is correct and preferred over a forced match. This mapping is advisory/presentation only; it NEVER changes scoring, ranking, selection, or eligibility.");
+        builder.Append("For EVERY candidate above, set mappedOutcomeCodes to the canonical code(s) whose Name/Description/role match its actual legal character (distinguish merits dismissal vs procedural/jurisdictional bar vs voluntary withdrawal). PREVAILING-PARTY CONSISTENCY IS MANDATORY: the mapped outcome's prevailing party MUST match the candidate's. If the candidate resolves in the PLAINTIFF's/claimant's favor (e.g. \"summary judgment granted FOR <plaintiff>\", liability established, plaintiff verdict), you MUST NOT map it to a DEFENSE_MERITS outcome; if it resolves in the DEFENDANT's favor (defense judgment, dismissal, defense verdict), you MUST NOT map it to a PLAINTIFF_MERITS outcome. When polarity is genuinely ambiguous or no archetype matches the candidate's prevailing party, leave mappedOutcomeCodes EMPTY. An empty array is correct and preferred over a polarity-contradicting match. This mapping is advisory/presentation only; it NEVER changes scoring, ranking, selection, or eligibility.");
         return builder.ToString();
     }
 
@@ -2818,9 +3339,14 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     // lookup: keeps only codes that exist in the pack (dedup, order-preserving), drops anything invented
     // or blank, and projects to (code, name) pairs. Empty when nothing valid maps — the outcome card then
     // shows the muted "No canonical Domain Pack outcome" line.
-    private static IReadOnlyCollection<WideCandidateOutcomeMappingDto> ResolveMappedOutcomes(IReadOnlyList<string>? proposedCodes,IReadOnlyDictionary<string,DecisionDomainPackOutcomeCandidateDto> canonicalOutcomeMap)
+    private static IReadOnlyCollection<WideCandidateOutcomeMappingDto> ResolveMappedOutcomes(IReadOnlyList<string>? proposedCodes,IReadOnlyDictionary<string,DecisionDomainPackOutcomeCandidateDto> canonicalOutcomeMap,string? candidateText=null)
     {
         if(proposedCodes is null||proposedCodes.Count==0||canonicalOutcomeMap.Count==0)return [];
+        // Deterministic prevailing-party polarity of the CANDIDATE itself, derived from its title/narrative
+        // (party-role first, outcome keywords as fallback). Used to reject a model-emitted mapping whose
+        // canonical archetype contradicts the candidate's own polarity (e.g. "granted FOR <plaintiff>"
+        // mapped to a DEFENSE_MERITS outcome). Advisory/presentation guard only — never touches scoring.
+        var candidatePolarity=DeriveCandidatePolarity(candidateText);
         var seen=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var resolved=new List<WideCandidateOutcomeMappingDto>();
         foreach(var raw in proposedCodes)
@@ -2829,6 +3355,11 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             var code=raw.Trim();
             if(!canonicalOutcomeMap.TryGetValue(code,out var outcome))continue;
             if(!seen.Add(code))continue;
+            // Polarity contradiction guard: drop ONLY this mapping (keep the candidate) when the candidate
+            // is clearly plaintiff-favorable but the mapped outcome is DEFENSE_MERITS, or vice versa. Never
+            // drop on ambiguity (NEUTRAL/SETTLEMENT outcomes or an undetermined candidate polarity).
+            var outcomePolarity=ArchetypePolarity(outcome.ArchetypeCode);
+            if(candidatePolarity!=0&&outcomePolarity!=0&&candidatePolarity!=outcomePolarity)continue;
             // Carry the authoritative DB-backed lifecycle (RoleCode + RequiresVerification) so the Web card
             // can lead with "Prospective pathway" vs "Historical status \u2014 verification required" without
             // re-deriving the distinction. Advisory/presentation only; never affects scoring or eligibility.
@@ -2837,8 +3368,38 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         return resolved;
     }
 
-    // Deterministic output guard for the Legal Answer Composer. Enforces the presentation-only contract:
-    // (1) required sections must be present; (2) every cited authority MUST match a verified authority
+    // Maps a canonical outcome ArchetypeCode to a prevailing-party polarity: +1 plaintiff-favorable,
+    // -1 defense-favorable, 0 ambiguous/neutral (SETTLEMENT, NEUTRAL, null/unknown). Data-driven off the
+    // DB-backed archetype; no outcome name is hardcoded.
+    private static int ArchetypePolarity(string? archetypeCode)=>archetypeCode?.Trim().ToUpperInvariant() switch
+    {
+        "PLAINTIFF_MERITS"=>1,
+        "DEFENSE_MERITS"=>-1,
+        _=>0,
+    };
+
+    // Derives the candidate's own prevailing-party polarity from its title/narrative. Party-role FIRST
+    // ("... for <plaintiff>" / "defense judgment"), outcome keywords as fallback. Returns +1 plaintiff,
+    // -1 defense, 0 undetermined. Deliberately conservative: returns 0 unless a clear signal is present,
+    // so the mapping guard only fires on an unambiguous contradiction.
+    private static int DeriveCandidatePolarity(string? candidateText)
+    {
+        if(string.IsNullOrWhiteSpace(candidateText))return 0;
+        var text=candidateText.ToLowerInvariant();
+        var plaintiff=0;
+        var defense=0;
+        // Party-role signals (strongest).
+        if(text.Contains("for the plaintiff")||text.Contains("for plaintiff")||text.Contains("in favor of the plaintiff")||text.Contains("in favor of plaintiff")||text.Contains("plaintiff's favor")||text.Contains("plaintiff verdict")||text.Contains("for the claimant")||text.Contains("for claimant"))plaintiff++;
+        if(text.Contains("for the defendant")||text.Contains("for defendant")||text.Contains("in favor of the defendant")||text.Contains("in favor of defendant")||text.Contains("defendant's favor")||text.Contains("defense judgment")||text.Contains("defense verdict")||text.Contains("defendant verdict"))defense++;
+        // Disposition keywords (fallback).
+        if(text.Contains("liability established")||text.Contains("liability is established")||text.Contains("plaintiff prevails")||text.Contains("judgment for the plaintiff"))plaintiff++;
+        if(text.Contains("dismissed")||text.Contains("dismissal")||text.Contains("defendant prevails")||text.Contains("no liability")||text.Contains("summary judgment for the defense"))defense++;
+        if(plaintiff>0&&defense==0)return 1;
+        if(defense>0&&plaintiff==0)return -1;
+        return 0; // mixed or no clear signal → do not fire the guard
+    }
+
+
     // (no invented authorities); (3) the composed conclusion must not contradict the POLOXI winner or a
     // BLOCKED determinacy. Any violation discards the WHOLE composed answer (returns null) so the
     // standard POLOXI answer is shown instead — never a partially-scrubbed hybrid.
@@ -3168,6 +3729,18 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                             _canonicalOutcomeCandidates=pack.OutcomeCandidates
                                 .OrderBy(o=>o.SortOrder)
                                 .ToArray();
+                        // Directional candidate x dimension vectors, essential-evidence requirements, and the
+                        // independent decision contracts (migration 0451). Signed polarity composes ON TOP of the
+                        // archetype gate; the contract set scopes relative-support denominators. Fail-soft: empty
+                        // collections leave the existing archetype/eligibility behavior byte-for-byte unchanged.
+                        if(pack.OutcomeCandidateDimensions.Count>0)
+                            _outcomeCandidateDimensions=pack.OutcomeCandidateDimensions.ToArray();
+                        if(pack.OutcomeCandidateEvidenceRequirements.Count>0)
+                            _outcomeCandidateEvidenceRequirements=pack.OutcomeCandidateEvidenceRequirements.ToArray();
+                        if(pack.DecisionContracts.Count>0)
+                            _decisionContracts=pack.DecisionContracts
+                                .OrderBy(c=>c.SortOrder)
+                                .ToArray();
                         // Use Domain Pack mode: capture the pack Dimension codes as the eligible/preferred L1
                         // scoring-axis vocabulary. Off-path leaves this empty and unused.
                         if(useDomainPack&&pack.Dimensions.Count>0)
@@ -3431,13 +4004,23 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         // Match a disposition verb by its raw lowercase form AND by a naive singular form. Only strip a
         // SINGLE trailing 's' (awards→award), never a double-s (dismiss must stay dismiss, not "dismi"),
         // so double-s dispositions like dismiss/discuss are still recognized.
-        return words.Any(word=>
+        if(words.Any(word=>
         {
             var head=word.Trim(',',':',';','.').ToLowerInvariant();
             if(head.Length==0)return false;
             if(DispositionVerbs.Contains(head))return true;
             return head[^1]=='s'&&head.Length>1&&head[^2]!='s'&&DispositionVerbs.Contains(head[..^1]);
-        });
+        }))
+            return true;
+        // Noun-form disposition recognition. LLM-proposed outcomes are frequently noun phrases
+        // ("summary judgment for the movant", "judgment for the plaintiff", "negotiated settlement",
+        // "voluntary dismissal") whose head words are NOT in the verb set, so the verb gate above misses
+        // them and they collapse to false-zero "Not scored" rows — reported as "competition not executed".
+        // ClassifyDispositionArchetype already maps these phrases to a concrete legal archetype
+        // (PlaintiffMerits | DefenseMerits | Settlement) via DB ArchetypeCode first and keyword classification
+        // as fail-soft. Admit any name that resolves to a non-Neutral disposition archetype so these genuine
+        // competing dispositions enter the Candidate × Branch competition instead of being discarded.
+        return ClassifyDispositionArchetype(trimmed)!=DispositionArchetype.Neutral;
     }
 
     // Factual-predicate gate (migration 0398): a canonical outcome is eligible to enter the candidate
@@ -3491,9 +4074,321 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     private bool IsLegalDecisionEvaluationRun
         =>_matterContext is not null&&!_decisionIntent.CurrentOutcomeIsHardConstraint;
 
+    // ── LPI element-gated disposition scoring ──────────────────────────────────────────────────────
+    // A legal disposition is NOT "how relevant is this outcome to the factors" (a flat weighted average
+    // over every branch, which produces a mushy, non-differentiating ~0.6 for opposing outcomes alike).
+    // It is "what is the probability the tribunal reaches this outcome given whether each required legal
+    // ELEMENT is established to its burden of proof". In LPI a cause of action decomposes into an ordered
+    // element set (Duty → Breach → Causation → Damages); the L1 branches of the dynamic hierarchy ARE
+    // those elements (rootKind legal_element). One failed element is dispositive, so the aggregation must
+    // be a GATE over the element vector, not a mean:
+    //   • Plaintiff/merits outcome  → noisy-AND (soft-min): plaintiff must prove EVERY element, so the
+    //     weakest established element caps the score.
+    //   • Defense/dismissal outcome → noisy-OR of element FAILURES: the defense prevails if ANY element
+    //     fails, so the strongest failure drives it (= 1 − plaintiff-conjunction).
+    //   • Settlement/ADR outcome    → tension function: peaks when elements are genuinely MIXED (near the
+    //     burden threshold) and collapses when the merits are decisive either way.
+    // The three archetypes are mathematically complementary over the SAME element vector, so opposing
+    // dispositions can never score identically. Element probabilities feed only the DISPOSITION score
+    // (the "what would a tribunal decide" axis); evidence attestation feeds confidence/readiness
+    // separately, so a strong defense score can still be UNVERIFIED when the proof is thin.
+    private enum DispositionArchetype{PlaintiffMerits,DefenseMerits,Settlement,Neutral}
+    private DispositionArchetype ClassifyDispositionArchetype(string name)
+    {
+        if(string.IsNullOrWhiteSpace(name))return DispositionArchetype.Neutral;
+        // DB is the source of truth (migration 0450): if this disposition matches a canonical outcome
+        // whose row declares an ArchetypeCode, honor it. Keyword classification below is only a fail-soft
+        // fallback for dispositions with no configured archetype (free-text LLM outcomes, legacy rows).
+        if(_canonicalOutcomeCandidates is{Count:>0})
+        {
+            var match=_canonicalOutcomeCandidates.FirstOrDefault(outcome=>
+                string.Equals(outcome.Name,name,StringComparison.OrdinalIgnoreCase)&&!string.IsNullOrWhiteSpace(outcome.ArchetypeCode));
+            if(match is not null&&TryParseArchetypeCode(match.ArchetypeCode,out var dbArchetype))
+                return dbArchetype;
+        }
+        var n=name.ToLowerInvariant();
+        if(n.Contains("settl")||n.Contains("negotiat")||n.Contains("mediat")||n.Contains("arbitrat")||n.Contains("adr")||n.Contains("compromise")||n.Contains("consent"))
+            return DispositionArchetype.Settlement;
+        if(n.Contains("dismiss")||n.Contains("defense")||n.Contains("defendant")||n.Contains("deny")||n.Contains("denied")||n.Contains("no liability")||n.Contains("in favor of the movant")||n.Contains("for the movant")||n.Contains("defense-favorable")||n.Contains("summary judgment for the movant"))
+            return DispositionArchetype.DefenseMerits;
+        if(n.Contains("plaintiff")||n.Contains("claimant")||n.Contains("liability")||n.Contains("verdict")||n.Contains("award")||n.Contains("recover")||n.Contains("judgment for the plaintiff")||n.Contains("in favor of the plaintiff")||n.Contains("grant"))
+            return DispositionArchetype.PlaintiffMerits;
+        return DispositionArchetype.Neutral;
+    }
+
+    private static bool TryParseArchetypeCode(string? code,out DispositionArchetype archetype)
+    {
+        switch(code?.Trim().ToUpperInvariant())
+        {
+            case "PLAINTIFF_MERITS":archetype=DispositionArchetype.PlaintiffMerits;return true;
+            case "DEFENSE_MERITS":archetype=DispositionArchetype.DefenseMerits;return true;
+            case "SETTLEMENT":archetype=DispositionArchetype.Settlement;return true;
+            case "NEUTRAL":archetype=DispositionArchetype.Neutral;return true;
+            default:archetype=DispositionArchetype.Neutral;return false;
+        }
+    }
+
+    // Maps a candidate display name back to its DB-backed canonical OutcomeCode (migration 0451) by matching
+    // against the resolved outcome-candidate set. Null when the candidate is not a canonical outcome (e.g. a
+    // free-text/emergent disposition) so directional scoring stays fail-soft. Case-insensitive name match.
+    private string? ResolveOutcomeCodeForCandidate(string? name)
+    {
+        if(string.IsNullOrWhiteSpace(name)||_canonicalOutcomeCandidates.Count==0)return null;
+        var match=_canonicalOutcomeCandidates.FirstOrDefault(outcome=>
+            string.Equals(outcome.Name,name,StringComparison.OrdinalIgnoreCase));
+        return match?.OutcomeCode;
+    }
+
+    // Maps a candidate display name back to its DB-backed DecisionContractCode (migration 0451) so the
+    // landscape narrative and relative-support denominators are scoped to the independent decision contract
+    // the candidate competes within. Null when the candidate is not a canonical outcome or the pack declares
+    // no contract (legacy C1-C9); such candidates fall into a single default competition group. Fail-soft.
+    private string? ResolveContractCodeForCandidate(string? name)
+    {
+        if(string.IsNullOrWhiteSpace(name)||_canonicalOutcomeCandidates.Count==0)return null;
+        var match=_canonicalOutcomeCandidates.FirstOrDefault(outcome=>
+            string.Equals(outcome.Name,name,StringComparison.OrdinalIgnoreCase));
+        if(!string.IsNullOrWhiteSpace(match?.DecisionContractCode))return match!.DecisionContractCode;
+        // Fail-soft contract inference for emergent/free-text dispositions that are NOT a verbatim canonical
+        // name (e.g. the LLM says "summary judgment for the movant" rather than the seeded "Granted in part").
+        // Exact-name matching alone leaves these ungrouped so the per-contract Overview cannot separate the
+        // procedural landscape from the matter-resolution landscape. Infer the contract from the disposition
+        // phrase using the SAME contract codes already present on the resolved pack rows (DB is the source of
+        // truth for which codes exist); return null when the pack declares no contracts (legacy C1-C9).
+        var contractCodes=_canonicalOutcomeCandidates
+            .Select(o=>o.DecisionContractCode)
+            .Where(c=>!string.IsNullOrWhiteSpace(c))
+            .Select(c=>c!.Trim())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if(contractCodes.Count==0)return null;
+        var n=name.ToLowerInvariant();
+        // Procedural disposition of a pending motion (what happens to the motion itself).
+        var procedural=n.Contains("summary judgment")||n.Contains("motion")||n.Contains("granted")
+            ||n.Contains("denied")||n.Contains("in part")||n.Contains("for the movant")
+            ||n.Contains("for the moving party")||n.Contains("dismiss");
+        // Resolution of the underlying matter (how the case concludes).
+        var resolution=n.Contains("settl")||n.Contains("negotiat")||n.Contains("mediat")
+            ||n.Contains("arbitrat")||n.Contains("verdict")||n.Contains("trial")
+            ||n.Contains("judgment for the plaintiff")||n.Contains("judgment for the defendant")
+            ||n.Contains("withdraw")||n.Contains("voluntary dismissal")||n.Contains("award");
+        if(procedural&&!resolution&&contractCodes.Contains("PROCEDURAL_DISPOSITION"))return "PROCEDURAL_DISPOSITION";
+        if(resolution&&!procedural&&contractCodes.Contains("MATTER_RESOLUTION"))return "MATTER_RESOLUTION";
+        return null;
+    }
+
+    // Essential-evidence readiness gate (migration 0451): resolves the decision-readiness of a candidate by
+    // comparing the ESSENTIAL evidence requirements configured for its outcome (table
+    // Legal_DecisionDomainPackOutcomeCandidateEvidenceRequirement) against the evidence actually present in
+    // the matter. Presence reuses the same deterministic signals the scope layer uses: a direct document
+    // classification whose EvidenceTypeCode matches (_matterDocumentEvidenceTypeCodes), or the DB-backed
+    // evidence-type name/description matching the matter presence corpus (DomainPackEvidencePresenceMatcher).
+    //
+    // MinVerificationProfileCode enforcement (migration 0451 §4): when a requirement names a minimum
+    // verification profile, mere PRESENCE is NOT enough — the outcome cannot be decision-ready on an
+    // unverified document. Such a requirement is satisfied only when the evidence type ALSO carries at least
+    // one VERIFIED source assertion (_verifiedAssertionCountsByEvidenceType, built at ingest from
+    // LegalSourceAssertionStates.Verified rows anchored to a classified evidence item). A present-but-unverified
+    // requirement is reported as missing with a "(unverified)" qualifier so the gap is actionable. Requirements
+    // with a null MinVerificationProfileCode keep the looser presence-only semantics.
+    //
+    // Returns required/satisfied counts and the human labels of unmet gating requirements. This is advisory:
+    // it NEVER changes the composite score — it only discloses that a high-scoring outcome is not yet
+    // decision-ready. Candidates with no configured essential requirements (legacy C1-C9) are always ready.
+    private (int Required,int Satisfied,IReadOnlyList<string> Missing) ResolveEssentialEvidenceReadiness(string? name)
+    {
+        var outcomeCode=ResolveOutcomeCodeForCandidate(name);
+        if(outcomeCode is null||_outcomeCandidateEvidenceRequirements.Count==0)
+            return (0,0,[]);
+        var essentials=_outcomeCandidateEvidenceRequirements
+            .Where(req=>req.IsEssential&&string.Equals(req.OutcomeCode,outcomeCode,StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        if(essentials.Length==0)
+            return (0,0,[]);
+        var evidenceByCode=_packEvidenceTypes.ToDictionary(e=>e.EvidenceTypeCode,StringComparer.OrdinalIgnoreCase);
+        var presenceTokens=_matterPresenceTokens as IReadOnlySet<string>??_matterPresenceTokens.ToHashSet(StringComparer.Ordinal);
+        var missing=new List<string>();
+        var satisfied=0;
+        foreach(var requirement in essentials)
+        {
+            var present=_matterDocumentEvidenceTypeCodes.Contains(requirement.EvidenceTypeCode)
+                ||(evidenceByCode.TryGetValue(requirement.EvidenceTypeCode,out var evidenceType)
+                    &&DomainPackEvidencePresenceMatcher.IsPresent(evidenceType,presenceTokens,_matterDocumentEvidenceTypeCodes));
+            var requiresVerification=!string.IsNullOrWhiteSpace(requirement.MinVerificationProfileCode);
+            var verified=!requiresVerification
+                ||_verifiedAssertionCountsByEvidenceType.GetValueOrDefault(requirement.EvidenceTypeCode)>0;
+            if(present&&verified)
+            {
+                satisfied++;
+                continue;
+            }
+            var label=evidenceByCode.TryGetValue(requirement.EvidenceTypeCode,out var evidenceLabel)&&!string.IsNullOrWhiteSpace(evidenceLabel.Name)
+                ?evidenceLabel.Name
+                :requirement.EvidenceTypeCode;
+            // Present but unverified: disclose the stronger (verification) gap rather than implying the
+            // document is absent, so the user knows to verify rather than re-upload.
+            missing.Add(present&&!verified?$"{label} (unverified)":label);
+        }
+        return (essentials.Length,satisfied,missing);
+    }
+
+    // Extracts the DimensionCode from a deterministic Domain Pack Level-1 branch code (format "DIM_{code}",
+    // migration 0407 convention). Returns null for non-dimension branches so only L1 element axes feed the
+    // signed directional adjustment. Case-insensitive prefix match.
+    private static string? ExtractDimensionCode(string? branchCode)
+    {
+        if(string.IsNullOrWhiteSpace(branchCode))return null;
+        const string prefix="DIM_";
+        return branchCode.StartsWith(prefix,StringComparison.OrdinalIgnoreCase)&&branchCode.Length>prefix.Length
+            ?branchCode[prefix.Length..]
+            :null;
+    }
+
+    // Signed directional contribution (migration 0451). Maps a dimension's strength onto a specific outcome
+    // using the DB-backed DirectionCode/Weight so mirror outcomes (e.g. M3 Plaintiff vs M4 Defense) move in
+    // OPPOSITE directions on a shared element axis instead of both absorbing the same positive evidence:
+    //   SUPPORTS => + (dimensionStrength-0.5)*2*Weight   (above-threshold strength lifts the outcome)
+    //   OPPOSES  => - (dimensionStrength-0.5)*2*Weight   (above-threshold strength suppresses the outcome)
+    //   NEUTRAL/UNKNOWN or no mapping => 0 (never treated as negative evidence)
+    // dimensionStrength is a 0..1 satisfaction probability. Fail-soft: returns 0 when nothing is configured.
+    private decimal ResolveDirectionalContribution(string? outcomeCode,string? dimensionCode,decimal dimensionStrength)
+    {
+        if(string.IsNullOrWhiteSpace(outcomeCode)||string.IsNullOrWhiteSpace(dimensionCode)||_outcomeCandidateDimensions.Count==0)
+            return 0m;
+        var mapping=_outcomeCandidateDimensions.FirstOrDefault(m=>
+            string.Equals(m.OutcomeCode,outcomeCode,StringComparison.OrdinalIgnoreCase)&&
+            string.Equals(m.DimensionCode,dimensionCode,StringComparison.OrdinalIgnoreCase));
+        if(mapping is null)return 0m;
+        var signedStrength=(dimensionStrength-0.5m)*2m*mapping.Weight;
+        return mapping.DirectionCode?.Trim().ToUpperInvariant() switch
+        {
+            "SUPPORTS"=>signedStrength,
+            "OPPOSES"=>-signedStrength,
+            _=>0m, // NEUTRAL / UNKNOWN: explicitly no polarity; absence is a gap, not negative evidence
+        };
+    }
+
+    // Essential-element readiness (migration 0451). An outcome is decision-ready only when every dimension it
+    // flags IsEssentialElement is satisfied to the threshold AND every essential evidence requirement is
+    // covered. Returns the set of unmet essential items so the narrative can disclose readiness GAPS without
+    // ever treating a missing item as negative evidence. Fail-soft: no configuration => ready with no gaps.
+    private IReadOnlyList<string> ResolveEssentialReadinessGaps(
+        string? outcomeCode,
+        IReadOnlyDictionary<string,decimal> dimensionStrengths,
+        IReadOnlySet<string> coveredEvidenceTypeCodes,
+        decimal satisfactionThreshold=0.5m)
+    {
+        if(string.IsNullOrWhiteSpace(outcomeCode))return [];
+        var gaps=new List<string>();
+        foreach(var mapping in _outcomeCandidateDimensions.Where(m=>
+            m.IsEssentialElement&&string.Equals(m.OutcomeCode,outcomeCode,StringComparison.OrdinalIgnoreCase)))
+        {
+            if(!dimensionStrengths.TryGetValue(mapping.DimensionCode,out var strength)||strength<satisfactionThreshold)
+                gaps.Add($"element:{mapping.DimensionCode}");
+        }
+        foreach(var requirement in _outcomeCandidateEvidenceRequirements.Where(r=>
+            r.IsEssential&&string.Equals(r.OutcomeCode,outcomeCode,StringComparison.OrdinalIgnoreCase)))
+        {
+            if(!coveredEvidenceTypeCodes.Contains(requirement.EvidenceTypeCode))
+                gaps.Add($"evidence:{requirement.EvidenceTypeCode}");
+        }
+        return gaps;
+    }
+
+    // Computes the gated disposition composite from the per-branch effective element-satisfaction scores.
+    // Element axis = the TOP level present in the branch set (the legal elements); deeper sub-issue
+    // branches already rolled up into their element's effective score upstream, so gating on the element
+    // layer avoids product underflow across hundreds of branches while preserving the "weakest element is
+    // dispositive" semantics. Soft gates (0.7·extreme + 0.3·mean) keep a single noisy element from making
+    // the whole outcome brittle while still letting a clearly-failed element dominate.
+    private static (decimal Composite,string Archetype,string Rationale) ComputeGatedDispositionComposite(
+        DispositionArchetype archetype,
+        IReadOnlyList<(WideBranchRecord Branch,decimal Score)> scored,
+        IReadOnlyDictionary<Guid,decimal> rfnBranchWeights)
+    {
+        if(scored.Count==0)return(0m,archetype.ToString(),"no element axes");
+        var topLevel=scored.Min(s=>s.Branch.LevelNumber);
+        var elements=scored.Where(s=>s.Branch.LevelNumber==topLevel).Select(s=>s.Score).ToArray();
+        if(elements.Length==0)elements=scored.Select(s=>s.Score).ToArray();
+        var minP=elements.Min();
+        var maxP=elements.Max();
+        var meanP=elements.Average();
+        decimal composite;
+        string rationale;
+        switch(archetype)
+        {
+            case DispositionArchetype.PlaintiffMerits:
+                composite=.7m*minP+.3m*meanP;
+                rationale=$"conjunctive (all {elements.Length} elements required); weakest element {minP:0.00}";
+                break;
+            case DispositionArchetype.DefenseMerits:
+                var plaintiffConjunction=.7m*minP+.3m*meanP;
+                composite=1m-plaintiffConjunction;
+                rationale=$"disjunctive over element failures; strongest failure {(1m-minP):0.00}";
+                break;
+            case DispositionArchetype.Settlement:
+                var spread=elements.Select(p=>Math.Abs(p-.5m)).Average();
+                composite=Math.Clamp(1m-2m*spread,0m,1m);
+                rationale=$"tension/uncertainty; mean distance from preponderance {spread:0.00}";
+                break;
+            default:
+                var membership=scored.Sum(s=>rfnBranchWeights.TryGetValue(s.Branch.WideBranchId,out var w)&&w>0m?w:0m);
+                composite=membership>0m
+                    ?scored.Sum(s=>(rfnBranchWeights.TryGetValue(s.Branch.WideBranchId,out var w)&&w>0m?w:0m)*s.Score)/membership
+                    :meanP;
+                rationale="neutral membership-weighted average (unclassified archetype)";
+                break;
+        }
+        return(Math.Clamp(composite,0m,1m),archetype.ToString(),rationale);
+    }
+
+    // Shared disposition scoring: applies the legal-archetype element gate AND the DB-backed signed
+    // directional adjustment (migration 0451) to a candidate's per-branch element scores, returning a
+    // differentiated composite in [0,1] plus a human rationale. This is the SAME logic the matrix-omission
+    // recovery path uses; it is extracted here so the PRIMARY matrix path can apply it too. Without this,
+    // the primary path scored every disposition with a flat membership-weighted mean over the shared element
+    // vector, so on a low/zero-evidence legal EVALUATE run legally opposite outcomes (grant vs. deny vs.
+    // defense vs. settlement) collapsed to an identical composite (the observed 0.554 tie). The gate scores
+    // opposing archetypes complementarily (plaintiff conjunctive, defense disjunctive-over-failures,
+    // settlement tension) and the directional vectors move mirror outcomes in OPPOSITE directions on each
+    // shared axis, so distinct legal requirements produce distinct scores. Fail-soft: when the candidate is
+    // not a classifiable disposition the caller keeps its original composite (returns null).
+    private (decimal Composite,string Rationale)? TryComputeDispositionComposite(
+        string name,
+        IReadOnlyList<(WideBranchRecord Branch,decimal Score)> scored,
+        IReadOnlyDictionary<Guid,decimal> rfnBranchWeights)
+    {
+        if(!IsLegalDecisionEvaluationRun||!IsDecisionOutcomeCandidate(name)||scored.Count==0)return null;
+        var archetype=ClassifyDispositionArchetype(name);
+        if(archetype==DispositionArchetype.Neutral)return null;
+        var(gatedComposite,_,gateRationale)=ComputeGatedDispositionComposite(archetype,scored,rfnBranchWeights);
+        var outcomeCode=ResolveOutcomeCodeForCandidate(name);
+        var composite=gatedComposite;
+        var rationale=gateRationale;
+        if(outcomeCode is not null&&_outcomeCandidateDimensions.Count>0)
+        {
+            decimal directionAccum=0m,directionWeight=0m;
+            foreach(var item in scored)
+            {
+                var dimensionCode=ExtractDimensionCode(item.Branch.BranchCode);
+                if(dimensionCode is null)continue;
+                var contribution=ResolveDirectionalContribution(outcomeCode,dimensionCode,item.Score);
+                if(contribution==0m)continue;
+                directionAccum+=contribution;
+                directionWeight+=1m;
+            }
+            if(directionWeight>0m)
+            {
+                var directionMean=directionAccum/directionWeight; // signed, roughly [-1,1]
+                composite=Math.Clamp(gatedComposite+directionMean*0.15m,0m,1m);
+                rationale=$"{gateRationale}; directional \u0394 {directionMean:+0.00;-0.00} over {directionWeight:0} mapped axes";
+            }
+        }
+        return(composite,rationale);
+    }
+
     // R2 candidate/branch separation: on a legal EVALUATE run a hierarchy branch whose head IS a
     // disposition ("Grant summary judgment", "Deny the motion") is a GLOBAL OUTCOME CANDIDATE, not a
-    // shared-dependency scoring criterion. Scoring it as an L1 interpretation branch both double-counts
+    // shared-dependency scoring criterion.
     // it and keeps it out of the candidate pool. Demote such branches to NonScoring so the shared
     // dependency forest keeps only the procedural/legal/factual/burden/evidentiary sub-issues while the
     // dispositions compete as candidates. No-op outside a legal EVALUATE run.
@@ -7119,6 +8014,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             var support=Math.Max(candidate.Dimensions.Count,Math.Min(hosts,interpretiveResults.Count));
             var tier=support>=requiredSupport?"STRONG":candidate.Dimensions.Count+hosts>=requiredSupport?"MODERATE":"LIMITED";
             var composite=Math.Clamp(.85m*weightedQuality+.15m*Math.Min(1m,(decimal)hosts/Math.Max(requiredSupport,1)),0,1);
+            var readiness=ResolveEssentialEvidenceReadiness(candidate.Name);
             return new WideCandidateDto(Guid.NewGuid(),0,candidate.Name,candidate.Detail,composite,candidate.Scores.OrderByDescending(score=>score.Value).Select(score=>new WideCandidateBranchScoreDto(score.Key,score.Value)).ToArray())
             {
                 EvidenceCoverage=coverage,
@@ -7128,7 +8024,12 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 SupportTierCode=tier,
                 InterpretiveSupportCount=candidate.Dimensions.Count,
                 EvidenceHostSupportCount=hosts,
-                TotalSupportCount=candidate.Dimensions.Count+hosts
+                TotalSupportCount=candidate.Dimensions.Count+hosts,
+                DecisionContractCode=ResolveContractCodeForCandidate(candidate.Name),
+                EssentialEvidenceRequiredCount=readiness.Required,
+                EssentialEvidenceSatisfiedCount=readiness.Satisfied,
+                MissingEssentialEvidence=readiness.Missing,
+                IsDecisionReady=readiness.Missing.Count==0
             };
         })
         .OrderByDescending(candidate=>candidate.CompositeScore)
@@ -7360,7 +8261,16 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 var childList=string.Join('\n',childBranches.Select((branch,index)=>$"S{index+1} (sub-criterion of B{parentIndexById[branch.ParentWideBranchId!.Value]}). {branch.DisplayName}: {branch.Interpretation}"));
                 branchList=$"{branchList}\n{childList}";
             }
-            var contractContext=(queryContract is null?"(none)":BuildQueryContractContext(queryContract))+BuildMatterContextSection();
+            // The Candidate x Branch matrix scoring prompt is re-sent on EVERY chunk (and again on each
+            // recovery re-ask). It already carries the full dimension set via branchList and the deterministic
+            // Factor Inventory via assessmentBasis, so the verbose SELECTED DOMAIN PACK configuration block
+            // (28 dimensions + 274 L2 concept nodes, 60k+ chars when "Use Domain Pack" is on) is redundant
+            // here and, repeated per chunk, pushes systemPrompt+userPrompt past the governed input guard
+            // (Intelligence.Safety.MaximumInputCharacters). That tripped INPUT_LENGTH_EXCEEDED on every chunk,
+            // so the whole competition returned zero scored candidates and the Overview fell back to the
+            // misleading "competition did not run / 0%" cards. Bound the prefix and DROP the pack block
+            // (packBudget=0) for scoring, exactly as the answer-synthesis stage already does.
+            var contractContext=BoundContractContext((queryContract is null?"(none)":BuildQueryContractContext(queryContract))+BuildMatterContextSection(),ContractContextPrefixBudgetChars,0);
             // Evidence-grounded assessment basis: the deterministic Factor Inventory (configured factor ids,
             // propositions, actual matter values, availability, verification, contradictions, unresolved
             // obligations) plus admitted evidence excerpts. This is the ONLY material the matrix may assess
@@ -7765,6 +8675,19 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 // confidence rather than silently penalizing the quality score with a zero-pad.
                 var coveredWeight=scoreByBranch.Where(entry=>rfnBranchWeights.ContainsKey(entry.Key)).Sum(entry=>rfnBranchWeights[entry.Key]);
                 var coverage=Math.Clamp(coveredWeight,0,1);
+                // Disposition differentiation (primary matrix path). A legal disposition that the matrix DID
+                // score must still be run through the archetype element gate + DB-backed directional vectors,
+                // exactly like the matrix-omission recovery path below. Otherwise the plain membership-weighted
+                // mean above scores legally opposite outcomes (grant/deny/defense/settlement) against the SAME
+                // element vector and collapses them to one identical composite on a low-evidence EVALUATE run
+                // (the observed 0.554 tie). Fail-soft: non-disposition candidates keep the mean unchanged.
+                var dispositionElementScores=branches
+                    .Where(branch=>item.Effective.ContainsKey(branch.WideBranchId))
+                    .Select(branch=>(Branch:branch,Score:item.Effective[branch.WideBranchId]))
+                    .ToArray();
+                var dispositionComposite=TryComputeDispositionComposite(resolvedName,dispositionElementScores,rfnBranchWeights);
+                if(dispositionComposite is{}dispo)
+                    composite=dispo.Composite;
                 if(configuration.EnableGuardrailPenalty)
                     composite*=ComputeGuardrailPenalty(branches,item.Effective,configuration,queryContract);
                 // V2.6 separation of concerns: the coverage-scaled dimension composite IS the candidate's
@@ -7811,6 +8734,19 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 // hosts/coverage (0 here), so the determinacy gate keeps the run UNVERIFIED - no verified
                 // winner, no evidence-based ranking presented as established.
                 var isDispositionCandidate=IsLegalDecisionEvaluationRun&&IsDecisionOutcomeCandidate(resolvedName);
+                // The scoring model evaluates every candidate against the NAMED_ENTITY kind and flags a legal
+                // disposition as violatesConstraint=true because an enumerated outcome pathway is not a concrete
+                // real-world named entity. That named-entity-kind constraint is the WRONG gate for a legal
+                // EVALUATE run (see the R2 note below): a genuine disposition is an enumerated tribunal outcome,
+                // not a corpus entity that must be attested. Clearing the model's kind-based constraint lets the
+                // disposition enter the Candidate x Branch competition; evidence confidence is still established
+                // separately from hosts/coverage, so the determinacy gate keeps the run UNVERIFIED and no verified
+                // winner is ever claimed. Any non-kind constraint (e.g. explicit safety/exclusion) is preserved.
+                if(isDispositionCandidate&&violates&&!candidate.IsEntityOfRequestedKind)
+                {
+                    violates=false;
+                    violationReason=null;
+                }
                 var supportTier=!hasCorpusSupport&&!hasCrossInterpretiveSupport&&!isDispositionCandidate?null
                     :hasCorpusSupport&&(support>=requiredSupport||exclusiveHosts>=2)?"STRONG"
                     :combinedSupport>=requiredSupport||exclusiveHosts>=1?"MODERATE"
@@ -7910,6 +8846,76 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                     neededForContract--;
                     continue;
                 }
+                // Legal-disposition matrix-omission recovery: a registered competing disposition is an
+                // enumerated outcome the tribunal could reach, not a corpus entity that must be independently
+                // attested. On a zero-evidence legal EVALUATE run it carries no interpretive-item name, no
+                // evidence host, and ComputeCandidateBranchSignal returns 0, so the named-entity Top-N gate
+                // above never fires and the candidate fell to a FALSE ZERO "Not scored" constraint row even
+                // though real scoring axes (branch interpretation priors / structurally-bound interpretive Cs)
+                // exist. This is the SAME deterministic baseline the first loop's Matrix-completion guard uses
+                // (branch InterpretationPrior -> PoloxiConfidence -> 0.5): materialize a per-branch score for
+                // every scoreable axis so the disposition competes at LIMITED tier instead of collapsing to 0.
+                // Evidence confidence stays low and the determinacy gate keeps the run UNVERIFIED, so no verified
+                // winner is ever claimed. Strictly gated to a legal EVALUATE run + a genuine disposition.
+                if(!dominatedFragments.ContainsKey(name)&&IsLegalDecisionEvaluationRun&&IsDecisionOutcomeCandidate(name)&&branches.Length>0)
+                {
+                    var interpretiveCsForDisposition=interpretiveCsByCandidate.TryGetValue(name,out var dispoCs)?dispoCs:null;
+                    var dispositionScores=branches
+                        .Select(branch=>
+                        {
+                            var signal=ComputeCandidateBranchSignal(name,branch,externalKnowledge);
+                            var cs=interpretiveCsForDisposition is not null&&interpretiveCsForDisposition.TryGetValue(branch.WideBranchId,out var branchCs)?branchCs:0m;
+                            var baseline=branch.InterpretationPrior>0?branch.InterpretationPrior:branch.PoloxiConfidence>0?branch.PoloxiConfidence:0.5m;
+                            var effective=signal>0m?signal:cs>0m?cs:baseline;
+                            return(Branch:branch,Score:Math.Clamp(effective,0,1));
+                        })
+                        .ToArray();
+                    var dispositionArchetype=ClassifyDispositionArchetype(name);
+                    // LPI element-gated aggregation: replace the flat branch-weighted average with the
+                    // disposition's legal archetype gate so opposing outcomes (plaintiff merits vs. defense
+                    // vs. settlement) are scored complementarily over the SAME element vector and can never
+                    // collapse to the same mushy number. The per-branch effective scores remain the element
+                    // satisfaction probabilities; only the roll-up function changes.
+                    var(gatedComposite,archetypeLabel,gateRationale)=ComputeGatedDispositionComposite(dispositionArchetype,dispositionScores,rfnBranchWeights);
+                    // Signed directional adjustment (migration 0451). The archetype gate alone is coarse: it
+                    // cannot distinguish two outcomes sharing an archetype, and it reuses the SAME element
+                    // vector for every candidate. The DB-backed candidate x dimension direction vectors fix
+                    // this by moving mirror outcomes in OPPOSITE directions on each shared axis. We resolve
+                    // this candidate's OutcomeCode, map each L1 DIM_ branch back to its DimensionCode, and
+                    // accumulate SUPPORTS(+) / OPPOSES(-) contributions (NEUTRAL/UNKNOWN/unmapped = 0, never
+                    // negative evidence). The weighted-mean adjustment is blended lightly so it differentiates
+                    // same-archetype rivals without overriding the element gate. Fail-soft: 0 when unconfigured.
+                    var dispositionOutcomeCode=ResolveOutcomeCodeForCandidate(name);
+                    var adjustedComposite=gatedComposite;
+                    var directionRationale=gateRationale;
+                    if(dispositionOutcomeCode is not null&&_outcomeCandidateDimensions.Count>0)
+                    {
+                        decimal directionAccum=0m,directionWeight=0m;
+                        foreach(var item in dispositionScores)
+                        {
+                            var dimensionCode=ExtractDimensionCode(item.Branch.BranchCode);
+                            if(dimensionCode is null)continue;
+                            var contribution=ResolveDirectionalContribution(dispositionOutcomeCode,dimensionCode,item.Score);
+                            if(contribution==0m)continue;
+                            directionAccum+=contribution;
+                            directionWeight+=1m;
+                        }
+                        if(directionWeight>0m)
+                        {
+                            var directionMean=directionAccum/directionWeight; // signed, roughly [-1,1]
+                            // Blend 15% of the signed directional mean into the gated composite, then re-clamp.
+                            adjustedComposite=Math.Clamp(gatedComposite+directionMean*0.15m,0m,1m);
+                            directionRationale=$"{gateRationale}; directional Δ {directionMean:+0.00;-0.00} over {directionWeight:0} mapped axes";
+                        }
+                    }
+                    var dispoComposite=Math.Clamp(adjustedComposite,0m,.75m);
+                    var dispositionRows=dispositionScores.Select(item=>new WideCandidateBranchScoreRecord(Guid.NewGuid(),candidateId,item.Branch.WideBranchId,request.TenantId,item.Branch.DisplayName,item.Score)).ToArray();
+                    entries.Add((new(candidateId,executionId,request.TenantId,Truncate(name,300)!,$"Registered competing legal disposition scored by LPI element gate [{archetypeLabel}: {directionRationale}] against the decision-factor axes; the scoring model omitted this candidate from the matrix response. Evidence confidence is established separately.",dispoComposite,0,false,null,dispositionRows),false,dispoComposite));
+                    evidenceConfidences[name]=Math.Clamp((distinctHosts<=1?.40m:Math.Min(1m,.40m+.15m*(distinctHosts-1))),0m,1m);
+                    admissionInfo[name]=("DISPOSITION_AXIS_SCORING",interpretiveCount,distinctHosts,Math.Max(support,combinedSupport));
+                    supportTiers[name]="LIMITED";
+                    continue;
+                }
                 var reason=dominatedFragments.TryGetValue(name,out var dominator)
                     ?$"Name fragment of '{dominator}': no evidence host discusses it independently."
                     :"Not scored: the scoring model did not return a resolvable score for this candidate in the Candidate \u00D7 Branch matrix.";
@@ -7944,7 +8950,36 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 .Select(entry=>entry.Record with{RankNumber=0}).ToArray();
             var persisted=ranked.Concat(ruledOut).ToArray();
             await wideRepository.SaveWideCandidatesAsync(persisted,request.UserId,cancellationToken);
-            return persisted.Select(record=>{var admission=admissionInfo.GetValueOrDefault(record.DisplayName,("EXCLUDED",0,0,0));var disclosure=rollUpDisclosures.GetValueOrDefault(record.DisplayName);var parentScores=record.BranchScores.Where(score=>scoringBranchIds.Contains(score.WideBranchId)).ToArray();return new WideCandidateDto(record.WideCandidateId,record.RankNumber,record.DisplayName,record.IsConstraintViolation?$"Ruled out: {record.ConstraintViolationReason}":record.Detail,record.CompositeScore,parentScores.Select(score=>{var detail=disclosure is not null&&disclosure.TryGetValue(score.BranchDisplayName,out var info)?info:default;return new WideCandidateBranchScoreDto(score.BranchDisplayName,score.EvidenceScore){DirectScore=detail.Children is{Count:>0}?detail.Direct:null,ChildScores=detail.Children??[]};}).ToArray()){EvidenceCoverage=branches.Length==0?0m:Math.Clamp((decimal)parentScores.Length/branches.Length,0,1),IsConstraintViolation=record.IsConstraintViolation,QualityScore=record.CompositeScore,EvidenceConfidence=evidenceConfidences.GetValueOrDefault(record.DisplayName),AdmissionModeCode=admission.Item1,InterpretiveSupportCount=admission.Item2,EvidenceHostSupportCount=admission.Item3,TotalSupportCount=admission.Item4,SupportTierCode=supportTiers.GetValueOrDefault(record.DisplayName,"EXCLUDED"),EstimatedResolutionLabel=record.EstimatedResolutionLabel,EstimatedCostBand=record.EstimatedCostBand};}).ToArray();
+            return persisted.Select(record=>
+            {
+                var admission=admissionInfo.GetValueOrDefault(record.DisplayName,("EXCLUDED",0,0,0));
+                var disclosure=rollUpDisclosures.GetValueOrDefault(record.DisplayName);
+                var parentScores=record.BranchScores.Where(score=>scoringBranchIds.Contains(score.WideBranchId)).ToArray();
+                var readiness=ResolveEssentialEvidenceReadiness(record.DisplayName);
+                return new WideCandidateDto(record.WideCandidateId,record.RankNumber,record.DisplayName,record.IsConstraintViolation?$"Ruled out: {record.ConstraintViolationReason}":record.Detail,record.CompositeScore,parentScores.Select(score=>
+                {
+                    var detail=disclosure is not null&&disclosure.TryGetValue(score.BranchDisplayName,out var info)?info:default;
+                    return new WideCandidateBranchScoreDto(score.BranchDisplayName,score.EvidenceScore){DirectScore=detail.Children is{Count:>0}?detail.Direct:null,ChildScores=detail.Children??[]};
+                }).ToArray())
+                {
+                    EvidenceCoverage=branches.Length==0?0m:Math.Clamp((decimal)parentScores.Length/branches.Length,0,1),
+                    IsConstraintViolation=record.IsConstraintViolation,
+                    QualityScore=record.CompositeScore,
+                    EvidenceConfidence=evidenceConfidences.GetValueOrDefault(record.DisplayName),
+                    AdmissionModeCode=admission.Item1,
+                    InterpretiveSupportCount=admission.Item2,
+                    EvidenceHostSupportCount=admission.Item3,
+                    TotalSupportCount=admission.Item4,
+                    SupportTierCode=supportTiers.GetValueOrDefault(record.DisplayName,"EXCLUDED"),
+                    EstimatedResolutionLabel=record.EstimatedResolutionLabel,
+                    EstimatedCostBand=record.EstimatedCostBand,
+                    DecisionContractCode=ResolveContractCodeForCandidate(record.DisplayName),
+                    EssentialEvidenceRequiredCount=readiness.Required,
+                    EssentialEvidenceSatisfiedCount=readiness.Satisfied,
+                    MissingEssentialEvidence=readiness.Missing,
+                    IsDecisionReady=readiness.Missing.Count==0
+                };
+            }).ToArray();
         }
         catch(Exception)when(!cancellationToken.IsCancellationRequested)
         {

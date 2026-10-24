@@ -144,6 +144,15 @@ public sealed class LegalConfigurationController(IIntelligenceRepository reposit
     [Authorize(Policy=IntelligencePolicies.Configure)]
     public async Task<IActionResult> SaveEpistemicSetting(string settingKey,[FromBody]SaveEpistemicSettingRequest request,CancellationToken cancellationToken){await wideService.SaveEpistemicSettingAsync(request with{SettingKey=settingKey},TenantId,ActorUserId,cancellationToken);return NoContent();}
 
+    // Matter evidence-scope threshold settings (Intelligence.SearchWide.MatterScope*) stored in Core.ConfigurationSetting (tenant override + platform default).
+    [HttpGet("matter-scope-settings")]
+    [Authorize(Policy=IntelligencePolicies.Configure)]
+    public async Task<IActionResult> MatterScopeSettings(CancellationToken cancellationToken)=>Ok(await wideService.GetMatterScopeSettingsAsync(TenantId,cancellationToken));
+
+    [HttpPut("matter-scope-settings/{settingKey}")]
+    [Authorize(Policy=IntelligencePolicies.Configure)]
+    public async Task<IActionResult> SaveMatterScopeSetting(string settingKey,[FromBody]SaveMatterScopeSettingRequest request,CancellationToken cancellationToken){await wideService.SaveMatterScopeSettingAsync(request with{SettingKey=settingKey},TenantId,ActorUserId,cancellationToken);return NoContent();}
+
     // Search result display toggle for the End-to-end POLOXI pipeline section (Core.ConfigurationSetting).
     [HttpGet("show-pipeline")]
     [Authorize(Policy=IntelligencePolicies.Configure)]

@@ -66,7 +66,7 @@ public sealed class CourtListenerLegalRetrieverTests
     {
         var handler=new RoutingHandler(
             courtsJson:"{\"results\":[]}",
-            catalogJson:"{\"results\":[{\"slug\":\"ny\",\"full_name\":\"New York Court of Appeals\",\"short_name\":\"N.Y.\",\"jurisdiction\":\"New York\"}]}",
+            catalogJson:"{\"results\":[{\"id\":\"ny\",\"full_name\":\"New York Court of Appeals\",\"short_name\":\"N.Y.\",\"jurisdiction\":\"New York\"}]}",
             searchJson:"{\"results\":[{\"caseName\":\"Sharma v. Example\",\"court\":\"New York Court of Appeals\",\"absolute_url\":\"/opinion/2/\",\"snippet\":\"We hold that a settlement agreement is enforced according to established New York contract principles and the parties' manifested assent.\",\"opinions\":[]}]}");
         using var client=new HttpClient(handler);
         var retriever=new CourtListenerLegalRetriever(client,NullLogger<CourtListenerLegalRetriever>.Instance);
@@ -237,7 +237,7 @@ public sealed class CourtListenerLegalRetrieverTests
             if(!isCourts)SearchRequest=request.RequestUri;
             CatalogRequested|=isCourts&&request.RequestUri.Query.Contains("page_size",StringComparison.OrdinalIgnoreCase);
             var payload=isCourts
-                ?CatalogRequested?catalogJson??courtsJson??"{\"results\":[]}":courtsJson??"{\"results\":[{\"slug\":\"del\",\"full_name\":\"Delaware Supreme Court\",\"short_name\":\"Del.\",\"jurisdiction\":\"Delaware\"}]}"
+                ?CatalogRequested?catalogJson??courtsJson??"{\"results\":[]}":courtsJson??"{\"results\":[{\"id\":\"del\",\"full_name\":\"Delaware Supreme Court\",\"short_name\":\"Del.\",\"jurisdiction\":\"Delaware\"}]}"
                 :searchJson??"{\"results\":[{\"caseName\":\"Smith v. Jones\",\"court\":\"Delaware Supreme Court\",\"absolute_url\":\"/opinion/1/\",\"snippet\":\"We hold that comparative negligence reduces recovery according to proven causal fault under Delaware law.\",\"opinions\":[]}]}";
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
@@ -261,7 +261,7 @@ public sealed class CourtListenerLegalRetrieverTests
             string payload;
             if(isCourts)
                 payload=uri.Query.Contains("California",StringComparison.OrdinalIgnoreCase)
-                    ?"{\"results\":[{\"slug\":\"cal\",\"full_name\":\"Supreme Court of California\",\"short_name\":\"Cal.\",\"jurisdiction\":\"California\"}]}"
+                    ?"{\"results\":[{\"id\":\"cal\",\"full_name\":\"Supreme Court of California\",\"short_name\":\"Cal.\",\"jurisdiction\":\"California\"}]}"
                     :"{\"results\":[]}";
             else
             {
@@ -290,7 +290,7 @@ public sealed class CourtListenerLegalRetrieverTests
             string payload;
             if(isCourts)
                 payload=uri.Query.Contains("Circuit",StringComparison.OrdinalIgnoreCase)
-                    ?"{\"results\":[{\"slug\":\"ca9\",\"full_name\":\"Court of Appeals for the Ninth Circuit\",\"short_name\":\"9th Cir.\",\"jurisdiction\":\"Federal\"}]}"
+                    ?"{\"results\":[{\"id\":\"ca9\",\"full_name\":\"Court of Appeals for the Ninth Circuit\",\"short_name\":\"9th Cir.\",\"jurisdiction\":\"Federal\"}]}"
                     :"{\"results\":[]}";
             else
             {

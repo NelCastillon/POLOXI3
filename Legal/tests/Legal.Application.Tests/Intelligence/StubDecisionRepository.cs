@@ -46,6 +46,7 @@ internal abstract class StubDecisionRepository : ILegalDecisionRepository
     public Task<bool> UpdateMatterAsync(Guid tenantId, Guid userId, Guid decisionMatterId, DecisionMatterUpdateRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     public Task<bool> UpdateMatterStatusAsync(Guid tenantId, Guid userId, Guid decisionMatterId, string statusCode, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     public Task<bool> UpdateMatterAdditionalNarrativeAsync(Guid tenantId, Guid userId, Guid decisionMatterId, string? additionalNarrative, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<bool> UpdateMatterScopeOutThresholdAsync(Guid tenantId, Guid userId, Guid decisionMatterId, decimal? matterScopeOutThreshold, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     public Task<bool> DeleteMatterAsync(Guid tenantId, Guid userId, Guid decisionMatterId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     public Task<bool> DeleteMatterAsync(Guid tenantId, Guid userId, Guid decisionMatterId, bool includeAllTenants, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     public Task<int> DeleteMattersAsync(Guid tenantId, Guid userId, IReadOnlyCollection<Guid> decisionMatterIds, bool includeAllTenants, CancellationToken cancellationToken = default) => throw new NotSupportedException();

@@ -427,6 +427,19 @@ public sealed partial class LegalDecisionService(
                 matterType.Name,
                 matterType.Description,
             }),
+            // DecisionContracts (migration 0451): each contract is an INDEPENDENT decision landscape answering
+            // its own question (e.g. PROCEDURAL_DISPOSITION vs MATTER_RESOLUTION). OutcomeCandidates carry
+            // DecisionContractCode membership so the model keeps the two question-sets separate and never
+            // compares or maps a candidate across contract boundaries.
+            DecisionContracts = domainPack.DecisionContracts
+                .OrderBy(contract => contract.SortOrder)
+                .Select(contract => new
+                {
+                    contract.ContractCode,
+                    contract.ContractKind,
+                    contract.Name,
+                    contract.DecisionQuestion,
+                }),
             OutcomeCandidates = domainPack.OutcomeCandidates
                 .OrderBy(candidate => candidate.SortOrder)
                 .Select(candidate => new
@@ -437,6 +450,8 @@ public sealed partial class LegalDecisionService(
                     candidate.RoleCode,
                     candidate.RequiresVerification,
                     candidate.MatterTypeCode,
+                    candidate.DecisionContractCode,
+                    candidate.ContractKind,
                 }),
             Concepts = concepts.Select(concept => new
             {
@@ -488,6 +503,11 @@ public sealed partial class LegalDecisionService(
             + "apply for this matter; it is not a hierarchy node.\n"
             + "- Preserve the supplied OutcomeCandidates' identities, names, roles, and verification requirements; do not remove a configured "
             + "candidate because support is incomplete, and do not treat preservation as eligibility, support, probability, or selection.\n"
+            + "- DECISION CONTRACTS: when OutcomeCandidates carry a DecisionContractCode, each distinct contract (see DecisionContracts, e.g. "
+            + "PROCEDURAL_DISPOSITION vs MATTER_RESOLUTION) is an INDEPENDENT decision landscape answering its own DecisionQuestion. Candidates in "
+            + "different contracts are NOT alternatives to one another: never compare, rank, trade off, or map evidence across contract boundaries, "
+            + "and never let one contract's candidate displace another's. Reason about, and relate propositions to, each candidate only WITHIN its own "
+            + "contract; candidates without a DecisionContractCode belong to the default/global landscape.\n"
             + "FULL CONTEXT BOUNDARY: consider ALL authorized context supplied to this execution \u2014 the decision request, objectives, "
             + "jurisdiction and procedural posture; matter description, narrative and incident information; the user-supplied Additional Narrative "
             + "saved on the matter for this execution (SUPPLIED context, not verified evidence); every practice-area profile and "
@@ -705,6 +725,12 @@ public sealed partial class LegalDecisionService(
     {
         var normalized = string.IsNullOrWhiteSpace(additionalNarrative) ? null : additionalNarrative.Trim();
         return repository.UpdateMatterAdditionalNarrativeAsync(tenantId, userId, decisionMatterId, normalized, cancellationToken);
+    }
+
+    public Task<bool> UpdateMatterScopeOutThresholdAsync(Guid tenantId, Guid userId, Guid decisionMatterId, decimal? matterScopeOutThreshold, CancellationToken cancellationToken = default)
+    {
+        var normalized = matterScopeOutThreshold.HasValue ? Math.Clamp(matterScopeOutThreshold.Value, 0m, 1m) : (decimal?)null;
+        return repository.UpdateMatterScopeOutThresholdAsync(tenantId, userId, decisionMatterId, normalized, cancellationToken);
     }
 
     public Task<bool> UpdateMatterStatusAsync(Guid tenantId, Guid userId, Guid decisionMatterId, string statusCode, CancellationToken cancellationToken = default)

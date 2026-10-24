@@ -37,6 +37,9 @@ public interface IIntelligenceWide2Repository
     // tenant-override -> platform default -> code default; save targets tenant or platform scope.
     Task<IReadOnlyCollection<EpistemicSettingDto>> GetEpistemicSettingsAsync(Guid tenantId,CancellationToken cancellationToken=default);
     Task SaveEpistemicSettingAsync(SaveEpistemicSettingRequest request,Guid tenantId,Guid actorUserId,CancellationToken cancellationToken=default);
+    // Matter evidence-scope threshold settings (Intelligence.SearchWide.MatterScope*) with tenant override + platform default.
+    Task<IReadOnlyCollection<MatterScopeSettingDto>> GetMatterScopeSettingsAsync(Guid tenantId,CancellationToken cancellationToken=default);
+    Task SaveMatterScopeSettingAsync(SaveMatterScopeSettingRequest request,Guid tenantId,Guid actorUserId,CancellationToken cancellationToken=default);
     // Materializes a fully-populated EpistemicAuthoritySettings from the DB for the given tenant.
     Task<Legal.Application.Features.Intelligence.Epistemic.EpistemicAuthoritySettings> ResolveEpistemicSettingsAsync(Guid tenantId,CancellationToken cancellationToken=default);
     // Platform UI toggle controlling whether the Wide search result page shows the End-to-end POLOXI pipeline section.

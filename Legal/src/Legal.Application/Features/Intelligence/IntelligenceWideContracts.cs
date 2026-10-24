@@ -58,6 +58,12 @@ public sealed record WideSearchRequest(Guid TenantId,Guid UserId,[Required,Strin
     // (DECISION_DISCOVERY_DOMAIN_PACK_V1) plus the complete active SELECTED_DOMAIN_PACK configuration,
     // resolved fail-soft from the matter's DomainPackCode. Scoring/competition/grounding are unchanged.
     public bool UseDomainPack{get;init;}
+    // Page-scoped Blended Score override: when set, this per-run value replaces the configured
+    // MatterScopeOutThreshold (the blended deterministic+LLM relevance below which an unprotected
+    // Evidence Type is auto-marked OUT_OF_SCOPE). Clamped to [0,1] server-side. Null = use the
+    // tenant/platform configured default. Required/document-present/PRIORITIZE targets and USER
+    // decisions are never affected by this dial.
+    [Range(0,1)]public decimal? MatterScopeOutThresholdOverride{get;init;}
 }
 
 // Database-backed model option for the wide-search Model dropdown (active CHAT deployments).
@@ -105,6 +111,26 @@ public sealed record EpistemicSettingDto(
 // Create/update request for an Epistemic Authority configuration row. When Scope is 'Tenant' the
 // value is stored as a tenant override; 'Platform' updates the shared default.
 public sealed record SaveEpistemicSettingRequest(
+    string SettingKey,
+    string SettingValue,
+    string Scope);
+
+// Matter evidence-scope threshold settings (Intelligence.SearchWide.MatterScope*) stored in
+// Core.ConfigurationSetting. These tune the per-matter Evidence Type scope gate (blended-score
+// cutoff, pending-review band, decisive-passage and mapped-passage floors). EffectiveValue is the
+// runtime value after tenant->platform->code fallback; PlatformValue is the platform default;
+// HasTenantOverride indicates a tenant-scoped row exists for the current tenant.
+public sealed record MatterScopeSettingDto(
+    string SettingKey,
+    string EffectiveValue,
+    string PlatformValue,
+    string DataTypeCode,
+    string? Description,
+    bool HasTenantOverride);
+
+// Create/update request for a matter evidence-scope threshold. When Scope is 'Tenant' the value is
+// stored as a tenant override; 'Platform' updates the shared default.
+public sealed record SaveMatterScopeSettingRequest(
     string SettingKey,
     string SettingValue,
     string Scope);
@@ -998,6 +1024,25 @@ public sealed record WideCandidateDto(Guid WideCandidateId,int RankNumber,string
     // Advisory, model-generated relative cost band for this outcome (e.g. "Lower", "Higher"). Optional
     // in the same way as EstimatedResolutionLabel — advisory only, never a scoring criterion.
     public string? EstimatedCostBand{get;init;}
+    // Decision contract membership (migration 0451). Identifies the independent decision landscape this
+    // candidate competes within (PROCEDURAL_DISPOSITION | MATTER_RESOLUTION | ...). Null = legacy/default
+    // landscape. Relative-support denominators and runner-up margins are scoped per DecisionContractCode so
+    // incompatible dispositions (e.g. plaintiff verdict vs voluntary dismissal) never share one denominator.
+    public string? DecisionContractCode{get;init;}
+    // Essential-evidence readiness gate (migration 0451, table
+    // Legal_DecisionDomainPackOutcomeCandidateEvidenceRequirement). This separates SCORED coverage (how well
+    // the candidate performs across decision-factor axes) from VERIFIED evidence coverage (whether the
+    // gating evidence a tribunal would require to actually reach this outcome is present in the matter).
+    // RequiredCount is the number of essential requirements configured for this candidate's outcome;
+    // SatisfiedCount is how many are presently evidenced; MissingEssentialEvidence lists the human labels of
+    // the unmet gating requirements. IsDecisionReady is true when there are no unmet essential requirements
+    // (and always true for candidates with no configured essential evidence, e.g. legacy C1-C9), so a
+    // high-scoring candidate that is not yet decision-ready is disclosed rather than silently presented as
+    // final. Advisory only: readiness never alters the composite score.
+    public int EssentialEvidenceRequiredCount{get;init;}
+    public int EssentialEvidenceSatisfiedCount{get;init;}
+    public IReadOnlyCollection<string> MissingEssentialEvidence{get;init;}=[];
+    public bool IsDecisionReady{get;init;}=true;
 }
 
 public sealed record WideCandidateBranchScoreDto(string BranchDisplayName,decimal EvidenceScore)

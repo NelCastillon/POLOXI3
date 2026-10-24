@@ -109,6 +109,96 @@ internal static class WideCorpusEvidenceProjection
         return (StatusUnverified, 0m);
     }
 
+    // Default entity-type code when an admitted proposition's supporting evidence item carries no
+    // domain EvidenceTypeCode. Keeps persisted Legal_WideRunEvidence document rows distinguishable
+    // from MATTER_FACT rows even when the corpus item type is unknown.
+    private const string DefaultDocumentEntityTypeCode = "DOCUMENT_EVIDENCE";
+    private const string DocumentModuleCode = "LEGAL_DOCUMENT";
+
+    // Project ADMITTED (VERIFIED_SUPPORT) corpus propositions into branch-attributed evidence rows so
+    // the uploaded-document evidence is PERSISTED into Legal_WideRunEvidence with its real document
+    // EvidenceTypeCode — not only matter facts (MATTER_FACT/LEGAL_MATTER). Mirrors the admission gate and
+    // branch-attribution convention used by Project(...): only propositions that are established + have a
+    // SUPPORTS edge + no contradiction and that overlap a branch are credited. Unmatched or unverified
+    // propositions are never emitted here (they remain auditable via the external-snippet projection).
+    public static List<PoloxiEvidenceDto> ProjectEvidence(
+        LegalMatterEvidenceGraphDto? graph,
+        IReadOnlyCollection<WideBranchRecord> branches,
+        Guid matterId)
+    {
+        var result = new List<PoloxiEvidenceDto>();
+        if (graph is null || graph.Propositions is null || graph.Propositions.Count == 0 || branches.Count == 0)
+            return result;
+
+        // Map each supporting evidence item to its domain EvidenceTypeCode so admitted propositions can
+        // carry the real document evidence type instead of a generic placeholder.
+        var evidenceTypeByItemId = new Dictionary<Guid, string>();
+        if (graph.Evidence is not null)
+        {
+            foreach (var item in graph.Evidence)
+            {
+                if (!string.IsNullOrWhiteSpace(item.EvidenceTypeCode))
+                    evidenceTypeByItemId[item.LegalEvidenceItemId] = item.EvidenceTypeCode.Trim();
+            }
+        }
+
+        var branchTokens = branches
+            .Select(branch => (branch, tokens: Tokenize($"{branch.DisplayName} {branch.Interpretation}")))
+            .ToArray();
+
+        var rank = 0;
+        foreach (var proposition in graph.Propositions)
+        {
+            if (string.IsNullOrWhiteSpace(proposition.PropositionText))
+                continue;
+
+            var support = proposition.Support ?? [];
+            var hasSupportEdge = support.Any(edge =>
+                string.Equals(edge.RelationshipTypeCode, LegalDocumentRelationshipTypes.Supports, StringComparison.OrdinalIgnoreCase));
+            var hasContradiction = support.Any(edge =>
+                string.Equals(edge.RelationshipTypeCode, LegalDocumentRelationshipTypes.Contradicts, StringComparison.OrdinalIgnoreCase));
+
+            var (status, _) = ClassifyAdmission(proposition, hasSupportEdge, hasContradiction);
+            // Admission gate is never lowered: only VERIFIED_SUPPORT propositions are persisted as evidence.
+            if (!string.Equals(status, StatusVerifiedSupport, StringComparison.Ordinal))
+                continue;
+
+            // Resolve the document evidence-type code from the proposition's SUPPORTS edges.
+            var entityTypeCode = DefaultDocumentEntityTypeCode;
+            foreach (var edge in support)
+            {
+                if (!string.Equals(edge.RelationshipTypeCode, LegalDocumentRelationshipTypes.Supports, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (evidenceTypeByItemId.TryGetValue(edge.LegalEvidenceItemId, out var typeCode))
+                {
+                    entityTypeCode = typeCode;
+                    break;
+                }
+            }
+
+            var propositionTokens = Tokenize(proposition.PropositionText);
+            foreach (var (branch, tokens) in branchTokens)
+            {
+                if (OverlapRatio(propositionTokens, tokens) <= 0m)
+                    continue;
+                result.Add(new PoloxiEvidenceDto(
+                    HierarchyBranchId: branch.WideBranchId,
+                    SearchDocumentId: Guid.Empty,
+                    EntityTypeCode: entityTypeCode,
+                    EntityId: proposition.LegalFactPropositionId,
+                    ModuleCode: DocumentModuleCode,
+                    Title: entityTypeCode,
+                    Excerpt: proposition.PropositionText,
+                    NavigationRoute: null,
+                    RelevanceScore: 1m,
+                    RankNumber: ++rank,
+                    MatchedBranches: [branch.DisplayName]));
+            }
+        }
+
+        return result;
+    }
+
     private static WideExternalKnowledgeSnippet BuildSnippet(
         LegalEvidenceGraphPropositionDto proposition,
         Guid? branchId,

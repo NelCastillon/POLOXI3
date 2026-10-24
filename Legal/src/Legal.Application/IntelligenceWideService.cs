@@ -62,6 +62,8 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
     public Task<IReadOnlyCollection<EpistemicSettingDto>> GetEpistemicSettingsAsync(Guid tenantId,CancellationToken cancellationToken=default)=>wideRepository.GetEpistemicSettingsAsync(tenantId,cancellationToken);
 
     public Task SaveEpistemicSettingAsync(SaveEpistemicSettingRequest request,Guid tenantId,Guid actorUserId,CancellationToken cancellationToken=default)=>wideRepository.SaveEpistemicSettingAsync(request,tenantId,actorUserId,cancellationToken);
+    public Task<IReadOnlyCollection<MatterScopeSettingDto>> GetMatterScopeSettingsAsync(Guid tenantId,CancellationToken cancellationToken=default)=>wideRepository.GetMatterScopeSettingsAsync(tenantId,cancellationToken);
+    public Task SaveMatterScopeSettingAsync(SaveMatterScopeSettingRequest request,Guid tenantId,Guid actorUserId,CancellationToken cancellationToken=default)=>wideRepository.SaveMatterScopeSettingAsync(request,tenantId,actorUserId,cancellationToken);
 
     public Task<bool> GetShowPipelineAsync(CancellationToken cancellationToken=default)=>wideRepository.GetShowPipelineAsync(cancellationToken);
 

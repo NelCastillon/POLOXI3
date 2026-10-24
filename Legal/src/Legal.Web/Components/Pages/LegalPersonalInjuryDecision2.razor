@@ -204,7 +204,7 @@
                                         var stage = DfiPipelineStages[si];
                                         var oneBased = si + 1;
                                         var state = oneBased < DfiPipelineActiveIndex ? "done"
-                                            : oneBased == DfiPipelineActiveIndex ? (DfiLiveProvisional ? "active" : "done")
+                                            : oneBased == DfiPipelineActiveIndex ? ((DfiLiveProvisional || DfiFinalizing) ? "active" : "done")
                                             : "pending";
                                         <li class="dfi-pipeline-node dfi-pipeline-node--@state">
                                             @if (si < DfiPipelineStages.Count - 1)
@@ -510,6 +510,27 @@
                           placeholder="Ask a detailed question — include your goals, constraints, and priorities. Example: Which policies are in trouble, considering lapse risk and claim history?"
                           @bind="_query" @bind:event="oninput" @onkeydown="KeyDown"></textarea>
             </div>
+            <div class="poloxi-blended-dial">
+                <div class="poloxi-blended-dial-head">
+                    <i class="bi bi-sliders" aria-hidden="true"></i>
+                    <strong>Blended Score threshold</strong>
+                    <span class="poloxi-blended-dial-value">@_blendedScoreThreshold.ToString("0.00")</span>
+                    <span class="poloxi-blended-dial-eta" title="Rough estimate only — actual time depends on corpus size, model latency, and carrier/source responses.">
+                        <i class="bi bi-clock-history" aria-hidden="true"></i> Est. @EstimatedExecutionTimeLabel
+                    </span>
+                </div>
+                <input type="range" class="poloxi-blended-range" min="0" max="1" step="0.01"
+                       value="@_blendedScoreThreshold.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)"
+                       @oninput="OnBlendedScoreChanged" disabled="@_loading"
+                       aria-label="Blended Score out-of-scope threshold" />
+                <p class="poloxi-blended-dial-hint">
+                    Evidence Types whose blended (deterministic + LLM) relevance falls below this value are auto-marked OUT_OF_SCOPE for this run. Required-coverage, document-present, PRIORITIZE and attorney (USER) decisions are never affected.
+                    <br />
+                    <strong>Lower</strong> (e.g. 0.05): admits more weakly-related Evidence Types — broader coverage, fewer missed factors, but more noise, longer runtime and higher token cost.
+                    <strong>Higher</strong> (e.g. 0.35): prunes aggressively — faster, cheaper, cleaner results, but risks excluding marginally relevant Evidence Types.
+                    Your last value is saved and reused as the default next run.
+                </p>
+            </div>
             <div class="poloxi-composer-footer">
                 <span class="poloxi-composer-hint"><kbd>Enter</kbd> to search &middot; <kbd>Shift</kbd>+<kbd>Enter</kbd> for a new line</span>
                 <label class="poloxi-model-select" title="Choose the language model used for this search. Auto lets the platform route to the best available model.">
@@ -533,7 +554,7 @@
                 </label>
                 <label class="poloxi-toggle"><input type="checkbox" @bind="_usePoloxiEngine" /><span></span><strong>POLOXI Engine</strong></label>
                 <label class="poloxi-toggle" title="Use the matter's configured Domain Pack to guide the hierarchy discovery. Off = standard behavior."><input type="checkbox" @bind="_useDomainPack" /><span></span><strong>Use Domain Pack</strong></label>
-                <button class="um-btn um-btn-primary" @onclick="SearchAsync" disabled="@(_loading||string.IsNullOrWhiteSpace(_query))"><i class="bi bi-stars"></i> Disambiguate &amp; Answer</button>
+                <button class="um-btn um-btn-primary" @onclick="SearchAsync" disabled="@(_loading||string.IsNullOrWhiteSpace(_query))">◈ Launch Intelligence</button>
             </div>
         </section>
         }
@@ -683,11 +704,10 @@
                             <div class="poloxi-legal-block poloxi-legal-bottomline">
                                 <h4>Bottom Line</h4>
                                 <p>@legalAnswer.BottomLine</p>
-                            </div>
-                        </div>
-                    }
-                    @AmbiguityGroupsPanel
-                    @if (answerContext.ResponseMode == WideResponseModes.LimitedEvidence)
+                                     </div>
+                                </div>
+                            }
+                            @if (answerContext.ResponseMode == WideResponseModes.LimitedEvidence)
                     {
                         <div class="poloxi-evidence-warning"><i class="bi bi-exclamation-triangle"></i> Fewer deciding factors are evidence-backed than usual — verify before acting on this ranking.</div>
                     }
@@ -1131,15 +1151,73 @@
                         <div class="poloxi-panel-header"><div><span>@VerificationLabel</span><h2>@AnswerHeading</h2></div><span class="poloxi-status">@GroundingBadge</span></div>
                         @if (FinalRankedCandidates.Count > 0)
                         {
-                            <div class="poloxi-grounded-branches">
-                                <small title="Deterministic final ordering from the Candidate × Branch competition — the authoritative POLOXI conclusion, never the pre-competition LLM composition.">Final POLOXI ranking (Candidate × Branch competition):</small>
-                                <ol class="poloxi-final-ranking">
-                                    @foreach (var candidate in FinalRankedCandidates)
-                                    {
-                                        <li><strong>@candidate.DisplayName</strong> <span>@candidate.CompositeScore.ToString("P0")</span></li>
-                                    }
-                                </ol>
-                            </div>
+                            @if (HasMultipleDecisionContracts)
+                            {
+                                <div class="poloxi-contract-landscape" role="group" aria-label="Final POLOXI ranking grouped by decision contract">
+                                    <div class="poloxi-contract-landscape-head">
+                                        <span class="poloxi-contract-landscape-title"><i class="bi bi-diagram-3"></i> Final ranking by decision contract</span>
+                                        <span class="poloxi-contract-landscape-note" title="Each decision contract is an independent competition set with its own relative-support denominator (migration 0451). Candidates from different contracts are not alternatives to one another.">Separate competition sets &middot; each scored on its own denominator</span>
+                                    </div>
+                                    <div class="poloxi-contract-grid">
+                                        @foreach (var group in FinalRankedCandidatesByContract)
+                                        {
+                                            var groupLeaderScore = group.Candidates.Count > 0 ? group.Candidates.Max(c => c.CompositeScore) : 0m;
+                                            var groupTotal = group.Candidates.Sum(c => c.CompositeScore);
+                                            <section class="poloxi-contract-card">
+                                                <header class="poloxi-contract-card-head">
+                                                    <span class="poloxi-contract-letter" aria-hidden="true">@ContractLetter(group.ContractCode)</span>
+                                                    <div class="poloxi-contract-card-headings">
+                                                        <h4 class="poloxi-contract-card-name">@(group.Contract?.Name ?? "Other outcomes")</h4>
+                                                        @if (!string.IsNullOrWhiteSpace(group.Contract?.DecisionQuestion))
+                                                        {
+                                                            <p class="poloxi-contract-card-q">@group.Contract!.DecisionQuestion</p>
+                                                        }
+                                                    </div>
+                                                    <span class="poloxi-contract-card-count" title="Competing outcomes in this contract">@group.Candidates.Count</span>
+                                                </header>
+                                                <ol class="poloxi-contract-outcomes">
+                                                    @{ var rank = 0; }
+                                                    @foreach (var candidate in group.Candidates)
+                                                    {
+                                                        rank++;
+                                                        var isLeader = candidate.CompositeScore >= groupLeaderScore && groupLeaderScore > 0m;
+                                                        var share = groupTotal > 0m ? candidate.CompositeScore / groupTotal : 0m;
+                                                        <li class="poloxi-contract-outcome @(isLeader ? "poloxi-contract-outcome--leader" : null)">
+                                                            <span class="poloxi-contract-outcome-rank">@rank</span>
+                                                            <div class="poloxi-contract-outcome-body">
+                                                                <div class="poloxi-contract-outcome-row">
+                                                                    <span class="poloxi-contract-outcome-name">@candidate.DisplayName</span>
+                                                                    @if (isLeader)
+                                                                    {
+                                                                        <span class="poloxi-contract-outcome-chip"><i class="bi bi-trophy"></i> Leader</span>
+                                                                    }
+                                                                    <span class="poloxi-contract-outcome-score">@candidate.CompositeScore.ToString("P0")</span>
+                                                                </div>
+                                                                <div class="poloxi-contract-outcome-bar" role="presentation">
+                                                                    <span class="poloxi-contract-outcome-bar-fill" style="width:@(((double)share * 100).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture))%"></span>
+                                                                </div>
+                                                            </div>
+                                                        </li>
+                                                    }
+                                                </ol>
+                                                <footer class="poloxi-contract-card-foot" title="Relative support is the share of this contract's own total composite score — never compared across contracts.">Relative support within this contract</footer>
+                                            </section>
+                                        }
+                                    </div>
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="poloxi-grounded-branches">
+                                    <small title="Deterministic final ordering from the Candidate × Branch competition — the authoritative POLOXI conclusion, never the pre-competition LLM composition.">Final POLOXI ranking (Candidate × Branch competition):</small>
+                                    <ol class="poloxi-final-ranking">
+                                        @foreach (var candidate in FinalRankedCandidates)
+                                        {
+                                            <li><strong>@candidate.DisplayName</strong> <span>@candidate.CompositeScore.ToString("P0")</span></li>
+                                        }
+                                    </ol>
+                                </div>
+                            }
                             <small class="poloxi-interpretive-note" title="The LLM composition below was written before the final candidate competition; it is the interpretive candidate source, not the final ordering.">Interpretive composition (candidate source):</small>
                         }
                         <p>@_response.FinalAnswer</p>
@@ -1261,6 +1339,14 @@
                                     {
                                         <span class="um-badge um-badge-warning" title="This candidate has evidence on only some interpretation dimensions; its ranking is discounted accordingly."><i class="bi bi-exclamation-triangle"></i> LOW COVERAGE @candidate.EvidenceCoverage.ToString("P0")</span>
                                     }
+                                    @if (candidate.EssentialEvidenceRequiredCount > 0 && !candidate.IsDecisionReady)
+                                    {
+                                        <span class="um-badge um-badge-warning" title="@($"Not decision-ready: {candidate.EssentialEvidenceSatisfiedCount} of {candidate.EssentialEvidenceRequiredCount} essential evidence requirements satisfied. Missing: {string.Join(", ", candidate.MissingEssentialEvidence)}. This is advisory and does not change the score.")"><i class="bi bi-clipboard-x"></i> EVIDENCE GAP @candidate.EssentialEvidenceSatisfiedCount/@candidate.EssentialEvidenceRequiredCount</span>
+                                    }
+                                    else if (candidate.EssentialEvidenceRequiredCount > 0 && candidate.IsDecisionReady)
+                                    {
+                                        <span class="um-badge um-badge-success" title="@($"Decision-ready: all {candidate.EssentialEvidenceRequiredCount} essential evidence requirements satisfied.")"><i class="bi bi-clipboard-check"></i> EVIDENCE READY</span>
+                                    }
                                     @foreach (var score in candidate.BranchScores)
                                     {
                                         @if (score.ChildScores.Count > 0)
@@ -1312,7 +1398,7 @@
                     {
                         <div class="poloxi-answer-section poloxi-reveal">
                             <h3><i class="bi bi-broadcast"></i> Live grounding sources <small class="poloxi-section-note">Live web sources · retrieved for time-sensitive grounding</small></h3>
-                            @foreach (var snippet in _response.ExternalKnowledge)
+                            @foreach (var snippet in DistinctGroundingSources(_response.ExternalKnowledge))
                             {
                                 <article class="poloxi-evidence poloxi-evidence-clickable" @ondblclick="() => OpenExternal(snippet.Url)" title="Double-click to open @snippet.Url in a new tab.">
                                     <span class="poloxi-rank"><i class="bi bi-broadcast"></i></span>
@@ -1361,6 +1447,36 @@
 
         }
     </div>
+
+    @if (_showQuotaNotice)
+    {
+        <div class="um-modal-backdrop" @onclick="() => _showQuotaNotice = false">
+            <div class="um-confirm-dialog" @onclick:stopPropagation="true">
+                <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-exclamation-octagon"></i></div>
+                <h3 class="um-confirm-title">Enterprise search capacity reached</h3>
+                <p class="um-confirm-text">
+                    Your plan's monthly allowance for enterprise web/legal research searches has been fully used.
+                    New searches that require live research grounding are paused until the quota resets or is increased.
+                </p>
+                <p class="um-confirm-text">
+                    You can still review saved runs and existing results. To continue running new searches, contact your
+                    administrator to raise the allowance, or wait for the monthly reset.
+                </p>
+                @if (!string.IsNullOrWhiteSpace(_quotaMessage))
+                {
+                    <details class="um-quota-details">
+                        <summary>Technical details</summary>
+                        <code>@_quotaMessage</code>
+                    </details>
+                }
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-primary" @onclick="() => _showQuotaNotice = false">
+                        <i class="bi bi-check-lg"></i> Got it
+                    </button>
+                </div>
+            </div>
+        </div>
+    }
 
     @if (_showMatterDetails && _matter is { } md)
     {
@@ -1883,6 +1999,74 @@
     // Renders a matter field value, falling back to an em dash when null/blank.
     private static string MatterField(string? value) => string.IsNullOrWhiteSpace(value) ? "—" : value;
     internal IReadOnlyCollection<LegalDocumentDto> _documents = [];
+
+    // Separate decision landscapes (migration 0451). The DB-backed decision contracts for the active pack,
+    // ordered by SortOrder. Loaded once in LoadInitialDataAsync so the Overview can group the scored ranking
+    // and KPIs by DecisionContractCode on each contract's OWN relative-support denominator — the same
+    // independent competition sets the deterministic pipeline scores. No outcome/contract names are hardcoded.
+    internal IReadOnlyList<DecisionDomainPackDecisionContractDto> _decisionContracts = [];
+
+    // Scored candidates for the Overview ranking, grouped into their DB-backed contract landscape. Candidates
+    // whose DecisionContractCode has no matching active contract (legacy C1–C9) collapse into one default group
+    // with a null contract so nothing ever disappears. Each group is a separate competition set; relative
+    // support (share) is computed WITHIN the group so incompatible dispositions never share one denominator.
+    internal IReadOnlyList<ContractRankingGroup> FinalRankedCandidatesByContract
+    {
+        get
+        {
+            var candidates = FinalRankedCandidates;
+            if (candidates.Count == 0) return [];
+
+            // Index contracts by code for name/question/order lookup (case-insensitive, DB is source of truth).
+            var byCode = _decisionContracts
+                .GroupBy(c => c.ContractCode, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+            var groups = candidates
+                .GroupBy(c => string.IsNullOrWhiteSpace(c.DecisionContractCode) ? string.Empty : c.DecisionContractCode!.Trim(),
+                         StringComparer.OrdinalIgnoreCase)
+                .Select(g =>
+                {
+                    byCode.TryGetValue(g.Key, out var contract);
+                    var ordered = g.OrderBy(c => c.RankNumber).ToArray();
+                    return new ContractRankingGroup(
+                        ContractCode: string.IsNullOrWhiteSpace(g.Key) ? null : g.Key,
+                        Contract: contract,
+                        Candidates: ordered);
+                })
+                // Known contracts first (in configured SortOrder), then the default/legacy group last.
+                .OrderBy(g => g.Contract is null ? int.MaxValue : g.Contract.SortOrder)
+                .ThenBy(g => g.ContractCode, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+            return groups;
+        }
+    }
+
+    // True when the scored ranking actually spans more than one decision contract — only then does the
+    // per-contract grouping add value (otherwise the flat ranking is shown unchanged).
+    internal bool HasMultipleDecisionContracts => FinalRankedCandidatesByContract.Count > 1;
+
+    // Presentation-only A/B/C… letter for a contract, derived from its position in the loaded contract list
+    // so the DB stays free of display labels (mirrors DecisionLandscapesPanel).
+    internal string ContractLetter(string? contractCode)
+    {
+        if (string.IsNullOrWhiteSpace(contractCode)) return "—";
+        var index = _decisionContracts
+            .Select((c, i) => (c.ContractCode, i))
+            .Where(x => string.Equals(x.ContractCode, contractCode, StringComparison.OrdinalIgnoreCase))
+            .Select(x => x.i)
+            .DefaultIfEmpty(-1)
+            .First();
+        return index >= 0 ? ((char)('A' + index)).ToString() : "—";
+    }
+
+    // One contract's slice of the scored ranking: the contract metadata (null for the legacy/default group)
+    // and its candidates ordered by rank. Relative support is computed per group in the view.
+    internal sealed record ContractRankingGroup(
+        string? ContractCode,
+        DecisionDomainPackDecisionContractDto? Contract,
+        IReadOnlyList<WideCandidateDto> Candidates);
 
     // The matter id to carry into cross-page links (Command Center, Provider Portal).
     // Prefer the resolved matter so navigation works even when the page was opened
@@ -3898,7 +4082,7 @@
         return sb.ToString();
     }
 
-    private RenderFragment AmbiguityGroupsPanel => __builder =>
+    internal RenderFragment AmbiguityGroupsPanel => __builder =>
     {
         @if (_response?.AmbiguityGroups.Count > 1)
         {
@@ -4020,7 +4204,7 @@
     // Always-visible universal Factor Inventory checklist. Independent of the _showPipeline diagnostics
     // toggle so users can always see, per candidate, which required/supporting factors are satisfied
     // (AVAILABLE/SUPPLIED) vs. still missing — and how each factor affects that outcome in the pipeline.
-    private RenderFragment FactorChecklistPanel => __builder =>
+    internal RenderFragment FactorChecklistPanel => __builder =>
     {
         @if (_response?.DecisionInspector?.FactorInventory is { } inventory && inventory.Factors.Count > 0)
         {
@@ -4102,7 +4286,14 @@
                             <article class="poloxi-factorcheck-card">
                                 <header>
                                     <h3>@grp.Key</h3>
-                                    <span class="poloxi-factorcheck-progress" title="Required factors with an established (AVAILABLE) value.">@met / @required.Length required established</span>
+                                    @if (required.Length == 0)
+                                    {
+                                        <span class="poloxi-factorcheck-progress poloxi-factorcheck-progress--unknown" title="No required factor dependencies are registered for this candidate. Dependency coverage is UNKNOWN — it is not established, and the absence of registered requirements must not be read as all requirements satisfied.">No registered requirements \u2014 coverage UNKNOWN</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="poloxi-factorcheck-progress" title="Required factors with an established (AVAILABLE) value.">@met / @required.Length required established</span>
+                                    }
                                 </header>
                                 <ul class="poloxi-factorcheck-list">
                                     @foreach (var rel in grp.OrderByDescending(r => r.IsRequired).ThenBy(r => r.FactorName))
@@ -6218,7 +6409,6 @@
                     </div>
                 </li>
             </ol>
-            @FactorChecklistPanel
             @if (_showPipeline)
             {
                 <section class="poloxi-panel poloxi-pipeline-panel">
@@ -6418,6 +6608,53 @@
     private IReadOnlyCollection<WideSearchContextDto> _contexts = [];
     internal bool _loading, _usePoloxiEngine = true;
     internal bool _useDomainPack = true;
+    // Blended Score scope-gate dial (per-matter MatterScopeOutThreshold). The user tunes this per run;
+    // the last value is persisted PER MATTER and restored as that matter's next-run default. The
+    // /legal/configuration admin setting (Intelligence.SearchWide.MatterScopeOutThreshold) remains the
+    // tenant/platform default used only as a fallback when a matter has no saved value.
+    private const string BlendedScoreSettingKey = "Intelligence.SearchWide.MatterScopeOutThreshold";
+    private decimal _blendedScoreThreshold = 0.20m;
+
+    // Parse the range input (invariant-culture string) and clamp to [0,1] on every drag.
+    private void OnBlendedScoreChanged(ChangeEventArgs e)
+    {
+        if (decimal.TryParse(e.Value?.ToString(), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var value))
+            _blendedScoreThreshold = Math.Clamp(value, 0m, 1m);
+    }
+
+    // Save the current dial value on THIS matter so it is restored as the matter's next-run default.
+    // Does NOT touch the tenant/platform /legal/configuration default. Fail-soft: a persistence error
+    // must never block the search the user just launched.
+    private async Task PersistBlendedScoreThresholdAsync()
+    {
+        var matterId = _matter?.DecisionMatterId ?? MatterId ?? Guid.Empty;
+        if (matterId == Guid.Empty) return;
+        try
+        {
+            await Api.UpdateLegalDecisionMatterScopeThresholdAsync(matterId, _blendedScoreThreshold);
+            if (_matter is not null) _matter = _matter with { MatterScopeOutThreshold = _blendedScoreThreshold };
+        }
+        catch { /* fail-soft: do not block execution if the preference save fails */ }
+    }
+
+    // Rough execution-time estimate: a lower threshold admits more Evidence Types, deepening the
+    // L2/L3 passage-mapping and reasoning work, so runtime grows as the threshold drops and as the
+    // activated corpus grows. Presentation-only guidance; never used for control flow.
+    private string EstimatedExecutionTimeLabel
+    {
+        get
+        {
+            var docs = Math.Max(_documents?.Count ?? 0, 1);
+            // Base ~20s + per-document enrichment/reasoning cost, scaled up as the threshold drops
+            // (admitting more factors). Threshold 1.0 => x1, threshold 0.0 => ~x2.5.
+            var breadth = 1.0 + (double)(1m - _blendedScoreThreshold) * 1.5;
+            var seconds = (20.0 + docs * 12.0) * breadth;
+            if (!_usePoloxiEngine) seconds = 15.0; // raw LLM answer path is a single shot
+            if (seconds < 60) return $"{Math.Round(seconds / 5) * 5:0}s";
+            var minutes = seconds / 60.0;
+            return minutes < 10 ? $"{minutes:0.#} min" : $"{Math.Round(minutes):0} min";
+        }
+    }
     private bool _initializing = true;
     private bool _showPipeline;
     // Factor inventory: default to hiding broad parent (L1/L2) groupings so only atomic L3 factors show.
@@ -6426,6 +6663,30 @@
     private bool _showAnswerView = true;
     internal string? _error;
     internal WideSearchResponse? _response;
+
+    // Enterprise quota notification: surfaced as a professional popup when a metered
+    // capability (e.g. research.search.run) has exhausted its monthly entitlement, so the
+    // user sees a clear, actionable message instead of a raw 429 / exception string.
+    private bool _showQuotaNotice;
+    private string? _quotaMessage;
+
+    // Recognizes a SaaS usage-quota / HTTP 429 failure from the raw exception text and,
+    // when matched, raises the enterprise quota popup instead of the generic error banner.
+    // Returns true if the exception was handled as a quota condition.
+    private bool TryHandleQuota(Exception ex)
+    {
+        var msg = ex.Message ?? string.Empty;
+        var isQuota = msg.Contains("quota", StringComparison.OrdinalIgnoreCase)
+            || msg.Contains("429")
+            || msg.Contains("Too Many Requests", StringComparison.OrdinalIgnoreCase)
+            || msg.Contains("research.search", StringComparison.OrdinalIgnoreCase);
+        if (!isQuota) return false;
+
+        _quotaMessage = msg;
+        _showQuotaNotice = true;
+        _error = null;
+        return true;
+    }
 
     // Candidate Full Analysis popup: the selected outcome to show in the in-page modal (null = closed).
     private OvOutcome? _analysisPopupOutcome;
@@ -6466,6 +6727,9 @@
     private readonly List<Legal.Application.Features.Intelligence.Decision.LegalCorpusActivationDocumentDetail> _documentActivationLog = new();
     private bool _showDocumentActivationLog;
     internal bool DfiLiveProvisional => _loading && _liveProgress is { IsProvisional: true };
+    // True during the finalization tail: the pipeline reported COMPLETED but the page is still loading /
+    // assembling the final result. The last step ("Finalizing") should render as active during this window.
+    internal bool DfiFinalizing => _loading && _liveProgress is { Phase: "COMPLETED" };
     // The strip is shown while a run is streaming (provisional) and remains visible with the final
     // "Decision complete" entry until the next run clears it.
     internal bool DfiShowLiveExecution => _livePhaseLog.Count > 0 && (_loading || _liveProgress is { IsProvisional: false });
@@ -6504,6 +6768,7 @@
         new DfiPipelineStage("Factor Registration", "Registering dependencies"),
         new DfiPipelineStage("Evaluation", "Running competition and analysis"),
         new DfiPipelineStage("Readiness", "Checking decision readiness"),
+        new DfiPipelineStage("Finalizing", "Composing the final decision"),
     };
     // Fraction of the fixed journey completed, derived from the current coarse phase. Kept monotonic
     // so the bar only advances. COMPLETED fills the whole route.
@@ -6523,8 +6788,11 @@
                 (null, _) => 0.06,
                 _ => 0.30,
             };
-            // Real completion always wins outright.
-            if (_liveProgress is { Phase: "COMPLETED" }) return 1d;
+            // Real completion always wins outright, BUT while the result payload is still being assembled
+            // and rendered (_loading still true after the pipeline reported COMPLETED) we hold just short of
+            // 100% so the final "Finalizing" step shows as the active step. 100% / all-done is reserved for
+            // when loading actually finishes.
+            if (_liveProgress is { Phase: "COMPLETED" }) return _loading ? 0.95 : 1d;
             // During document preparation (pre-pipeline corpus activation) the run has not entered the
             // decision pipeline yet, so the time-floor creep must NOT advance the bar past the preparing
             // stage — activation can legitimately take minutes. Hold the bar at the PREPARING fraction and
@@ -6564,7 +6832,8 @@
         get
         {
             var stage = DfiPipelineStages[DfiPipelineActiveIndex - 1];
-            var current = _livePhaseLog.Count > 0 ? _livePhaseLog[0].Label : stage.Subtitle;
+            var current = DfiFinalizing ? stage.Subtitle
+                : _livePhaseLog.Count > 0 ? _livePhaseLog[0].Label : stage.Subtitle;
             return $"Step {DfiPipelineActiveIndex} of {DfiPipelineStages.Count} · {current}";
         }
     }
@@ -6575,9 +6844,11 @@
     {
         get
         {
-            var raw = _livePhaseLog.Count > 0
-                ? (!string.IsNullOrWhiteSpace(_livePhaseLog[0].Message) ? _livePhaseLog[0].Message : _livePhaseLog[0].Label)
-                : DfiPipelineStages[DfiPipelineActiveIndex - 1].Subtitle;
+            var raw = DfiFinalizing
+                ? DfiPipelineStages[DfiPipelineActiveIndex - 1].Subtitle
+                : _livePhaseLog.Count > 0
+                    ? (!string.IsNullOrWhiteSpace(_livePhaseLog[0].Message) ? _livePhaseLog[0].Message : _livePhaseLog[0].Label)
+                    : DfiPipelineStages[DfiPipelineActiveIndex - 1].Subtitle;
             return (raw ?? string.Empty).Replace('\n', ' ').Replace('\r', ' ').Trim();
         }
     }
@@ -6837,6 +7108,11 @@
     internal bool IsEvidenceWeightedConfidence => _response?.DecisionConfidence is not null;
     private string ConfidenceLabel => IsEvidenceWeightedConfidence ? "Decision evidence confidence" : "Interpretation confidence";
     private string ConfidenceCaption => IsEvidenceWeightedConfidence ? "evidence-backed decision confidence" : "not evidence-weighted";
+
+    // Collapses near-duplicate live grounding sources that differ only by the URL anchor fragment
+    // (same title, snippet and base URL) so the list shows each distinct source once.
+    private static IEnumerable<WideExternalKnowledgeSnippet> DistinctGroundingSources(IEnumerable<WideExternalKnowledgeSnippet> snippets)
+        => snippets.DistinctBy(s => (s.Title, s.Snippet, (s.Url ?? string.Empty).Split('#')[0]));
     internal string ConfidenceTooltip => _response is null ? "" : $"{ConfidenceLabel} {_response.FinalConfidence:P0} · winner stability {(_response.WinnerStability?.ToString("P0") ?? "—")} · top-3 {(_response.TopKStability?.ToString("P0") ?? "—")} · uncertainty {_response.InitialNormalizedEntropy:P0} → {_response.FinalNormalizedEntropy:P0} · {_response.TotalActualInformationGain:0.###} bits gained";
     private static string AnswerModeKicker(WideAnswerContext context) => context.ResponseMode switch
     {
@@ -7188,7 +7464,7 @@
     }
 
 
-    private string DfiMatterTitle => _matter?.Title ?? "Decision Intelligence workspace";
+    internal string DfiMatterTitle => _matter?.Title ?? "Decision Intelligence workspace";
     private string DfiMatterSubtitle
     {
         get
@@ -7426,9 +7702,16 @@
         public string ScoreFormulaFor(bool poloxiScored)
         {
             var dims = BranchScores.Count;
+            // No authoritative Candidate × Branch competition executed for this run (registration/landscape
+            // fallback outcome): do not recite a "composite 0% across 0 scored dimensions / support 0%"
+            // formula, which reads as a failed score. Disclose the proposed, not-yet-scored state honestly.
+            if (!poloxiScored || dims == 0)
+            {
+                return $"Proposed outcome · Rank #{Index} · not scored — the Candidate × Branch competition "
+                    + "did not run for this matter (evidence/readiness gates), so no composite score or relative support is available.";
+            }
             var dimText = dims == 1 ? "1 scored dimension" : $"{dims} scored dimensions";
-            var engine = poloxiScored ? "POLOXI" : "LLM";
-            return $"{engine} · Rank #{Index} · composite score {CompositeScore:P0} aggregated across {dimText} "
+            return $"POLOXI · Rank #{Index} · composite score {CompositeScore:P0} aggregated across {dimText} "
                 + $"(Candidate × Branch matrix); support {SupportPct}% = this score ÷ sum of all candidates' scores.";
         }
     }
@@ -7455,6 +7738,13 @@
             .ToList();
         return fuzzy.Count == 1 ? fuzzy[0] : null;
     }
+
+    // ── Deterministic narrative fallback ────────────────────────────────────────────────────────────
+    // NOTE: the deterministic short + long narrative fallback now lives in the backend Candidate Landscape
+    // composer (IntelligenceWide2Service.BuildDeterministicLandscape / MergeCandidateLandscape). The service
+    // guarantees every authoritative candidate carries a short (OverviewNarrative) and long (FullAnalysis)
+    // narrative — composed from persisted scores + interpretive results and merged over the advisory LLM
+    // output — so the UI simply renders what the response provides without a separate client-side fallback.
 
     // Resolves the candidate-landscape overview narrative for a candidate display name from the Wide
     // response (fail-soft: null when the composer did not run or produced nothing for this candidate).
@@ -8044,15 +8334,35 @@
         {
             var competitionStatus = _response?.MatterContext?.CandidateCompetitionStatus;
             var readinessStatus = _response?.MatterContext?.DecisionReadinessStatus;
-            return (competitionStatus?.StartsWith("RAN", StringComparison.OrdinalIgnoreCase) ?? false)
+            var statusSaysCompeted = (competitionStatus?.StartsWith("RAN", StringComparison.OrdinalIgnoreCase) ?? false)
                 || (readinessStatus?.StartsWith("CANDIDATES_REGISTERED_AND_COMPETED", StringComparison.OrdinalIgnoreCase) ?? false);
+            if (!statusSaysCompeted) return false;
+            // Defense-in-depth: a status of "RAN"/"CANDIDATES_REGISTERED_AND_COMPETED" is only trustworthy
+            // when the persisted candidates actually carry a real Candidate x Branch competition result. A
+            // registration-only / scoring-blocked run can persist proposed candidates with CompositeScore 0
+            // and NO branch scores while still being stamped "RAN"; presenting those as a scored competition
+            // (Current Leader, "X% support", "0 branches scored") is misleading. Require at least one
+            // delivered candidate with a real scored signal before treating the competition as valid; otherwise
+            // the Overview falls back to the honest "Proposed Outcome / Not scored" display path.
+            var candidates = _response?.Candidates;
+            if (candidates is null || candidates.Count == 0) return false;
+            return candidates.Any(c => !c.IsConstraintViolation
+                && (c.CompositeScore > 0m || c.BranchScores.Count > 0));
         }
     }
     internal IReadOnlyList<OvStatusChip> OvDecisionStatusChips
     {
         get
         {
+            var proposedAuthorities = _response?.ProposedLegalAuthorities.Count ?? 0;
             var verifiedAuthorities = _response?.ProposedLegalAuthorities.Count(a => a.VerificationStatus == "VERIFIED") ?? 0;
+            var authorityValue = proposedAuthorities > 0 ? $"{verifiedAuthorities}/{proposedAuthorities}" : "0";
+            var authorityTone = verifiedAuthorities > 0 ? "ok" : proposedAuthorities > 0 ? "info" : "warn";
+            var authorityTooltip = proposedAuthorities == 0
+                ? "Verified Authorities — no legal authorities were proposed for this matter, so none could be independently verified. Authorities are proposed from the model's legal reasoning and then confirmed against an external authoritative source (e.g. CourtListener/eCFR)."
+                : verifiedAuthorities == 0
+                    ? $"Verified Authorities — {proposedAuthorities} authority(ies) were proposed from the legal reasoning, but 0 were independently confirmed against an external authoritative source. This usually means external legal retrieval did not run (e.g. search-provider quota exhausted) or no retrieved source passed the strict identity match. The proposed authorities are still shown in the analysis, labeled unverified."
+                    : $"Verified Authorities — {verifiedAuthorities} of {proposedAuthorities} proposed legal authorities were independently confirmed against an authoritative source. Formula: count of proposed legal authorities where verification status = VERIFIED.";
             var openQuestions = _response?.DecisionInspector?.FactorInventory?.MissingFactorCount ?? DfiMissingFactorCount;
             return
             [
@@ -8060,8 +8370,7 @@
                     "Candidates — the number of distinct competing outcomes (candidate answers) generated and scored for this matter. Formula: count of scored outcomes in the current analysis. More candidates means a wider decision space was explored."),
                 new("Verified Evidence", TotalEvidenceCount.ToString(), TotalEvidenceCount > 0 ? "ok" : "warn",
                     "Verified Evidence — count of independently verified evidence items admitted into the decision. Formula: count of evidence items with verification status = VERIFIED. Unverified allegations are excluded and do not count."),
-                new("Verified Authorities", verifiedAuthorities.ToString(), verifiedAuthorities > 0 ? "ok" : "warn",
-                    "Verified Authorities — count of cited legal authorities (statutes, cases, rules) confirmed against an authoritative source. Formula: count of proposed legal authorities where verification status = VERIFIED."),
+                new("Verified Authorities", authorityValue, authorityTone, authorityTooltip),
                 new("Open Questions", openQuestions.ToString(), openQuestions > 0 ? "warn" : "ok",
                     "Open Questions — unresolved, decision-material atomic factors still missing evidence or a determination. Formula: count of atomic (non-grouping) factors in the inventory with no established fact state. Lower is better."),
                 new("Decision Readiness", $"{OvReadinessPct}%", DfiReadinessTone,
@@ -9000,6 +9309,16 @@
         var showPipelineTask = SafeAsync(() => Api.GetSearch2ShowPipelineAsync(), false);
         var contextsTask = SafeAsync(() => Api.GetIntelligenceSearch2ContextsAsync(), (IReadOnlyCollection<WideSearchContextDto>)[]);
 
+        // Separate decision landscapes (migration 0451): load the pack's decision contracts so the Overview
+        // can group the scored ranking by DecisionContractCode. Advisory/presentation only and failure-soft —
+        // a null/empty result just falls back to the flat ranking; it never blocks the decision view.
+        var contractsTask = SafeAsync(async () =>
+        {
+            var pack = await Api.GetLegalDecisionDomainPackAsync("PERSONAL_INJURY");
+            return pack?.DecisionContracts.OrderBy(c => c.SortOrder).ToArray()
+                ?? (IReadOnlyList<DecisionDomainPackDecisionContractDto>)[];
+        }, (IReadOnlyList<DecisionDomainPackDecisionContractDto>)[]);
+
         if (MatterId is { } matterId && matterId != Guid.Empty)
         {
             // Restore the last Overview result for this matter so returning from the
@@ -9057,6 +9376,24 @@
         }
         _showPipeline = await showPipelineTask;
         _contexts = await contextsTask;
+        _decisionContracts = await contractsTask;
+        // Restore the Blended Score dial default. Prefer this matter's saved per-matter value; only
+        // when the matter has none fall back to the tenant/platform /legal/configuration default.
+        if (_matter?.MatterScopeOutThreshold is { } matterThreshold)
+        {
+            _blendedScoreThreshold = Math.Clamp(matterThreshold, 0m, 1m);
+        }
+        else
+        {
+            try
+            {
+                var scopeSettings = await Api.GetMatterScopeSettingsAsync();
+                var blended = scopeSettings.FirstOrDefault(s => string.Equals(s.SettingKey, BlendedScoreSettingKey, StringComparison.OrdinalIgnoreCase));
+                if (blended is not null && decimal.TryParse(blended.EffectiveValue, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var threshold))
+                    _blendedScoreThreshold = Math.Clamp(threshold, 0m, 1m);
+            }
+            catch { /* fail-soft: keep the default dial value */ }
+        }
         if (_contexts.Count > 0)
         {
             // Prefer the Legal context; otherwise fall back to the flagged default/first context.
@@ -9229,9 +9566,11 @@
         // Persist the user's prompt as the matter's Additional Narrative BEFORE any LLM prompt executes, so
         // the server-side Matter Context Snapshot carries it into every authorized-context consumer.
         if (!await SaveAdditionalNarrativeAsync(_searchCancellation.Token)) return;
+        // Persist the current Blended Score dial value (tenant-scoped) so it becomes the next-run default.
+        await PersistBlendedScoreThresholdAsync();
         try
         {
-            _response = await Api.IntelligentSearchWide2DynamicAsync(new(Guid.Empty, Guid.Empty, _query.Trim(), 50, correlationId) { UsePoloxiEngine = _usePoloxiEngine, UseDomainPack = _useDomainPack, ModelCode = _selectedModelCode, ForceRequestedModelAllStages = !string.IsNullOrWhiteSpace(_selectedModelCode), ContextCode = _selectedContextCode, MatterId = MatterId }, _searchCancellation.Token);
+            _response = await Api.IntelligentSearchWide2DynamicAsync(new(Guid.Empty, Guid.Empty, _query.Trim(), 50, correlationId) { UsePoloxiEngine = _usePoloxiEngine, UseDomainPack = _useDomainPack, ModelCode = _selectedModelCode, ForceRequestedModelAllStages = !string.IsNullOrWhiteSpace(_selectedModelCode), ContextCode = _selectedContextCode, MatterId = MatterId, MatterScopeOutThresholdOverride = _blendedScoreThreshold }, _searchCancellation.Token);
         }
         catch (OperationCanceledException)
         {
@@ -9239,7 +9578,7 @@
         }
         catch (Exception ex)
         {
-            _error = ex.Message;
+            if (!TryHandleQuota(ex)) _error = ex.Message;
         }
         finally
         {
@@ -9436,9 +9775,10 @@
         var correlationId = Guid.NewGuid().ToString("N");
         await StartLiveProgressAsync(correlationId);
         if (!await SaveAdditionalNarrativeAsync(_searchCancellation.Token)) return;
+        await PersistBlendedScoreThresholdAsync();
         try
         {
-            _response = await Api.IntelligentSearchWide2DynamicAsync(new(Guid.Empty, Guid.Empty, _query.Trim(), 50, correlationId) { UsePoloxiEngine = _usePoloxiEngine, UseDomainPack = _useDomainPack, ClarificationAnswer = answer.Trim(), ClarificationTarget = target, ClarificationRound = round, PriorIntentEntropy = priorIntentEntropy, OriginalAnswerKind = originalAnswerKind, ParentWideExecutionId = parentExecutionId, ModelCode = _selectedModelCode, ForceRequestedModelAllStages = !string.IsNullOrWhiteSpace(_selectedModelCode), ContextCode = _selectedContextCode, MatterId = MatterId }, _searchCancellation.Token);
+            _response = await Api.IntelligentSearchWide2DynamicAsync(new(Guid.Empty, Guid.Empty, _query.Trim(), 50, correlationId) { UsePoloxiEngine = _usePoloxiEngine, UseDomainPack = _useDomainPack, ClarificationAnswer = answer.Trim(), ClarificationTarget = target, ClarificationRound = round, PriorIntentEntropy = priorIntentEntropy, OriginalAnswerKind = originalAnswerKind, ParentWideExecutionId = parentExecutionId, ModelCode = _selectedModelCode, ForceRequestedModelAllStages = !string.IsNullOrWhiteSpace(_selectedModelCode), ContextCode = _selectedContextCode, MatterId = MatterId, MatterScopeOutThresholdOverride = _blendedScoreThreshold }, _searchCancellation.Token);
             _clarificationAnswer = "";
         }
         catch (OperationCanceledException)
@@ -9447,7 +9787,7 @@
         }
         catch (Exception ex)
         {
-            _error = ex.Message;
+            if (!TryHandleQuota(ex)) _error = ex.Message;
         }
         finally
         {

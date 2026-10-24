@@ -27,6 +27,17 @@ public sealed class CourtListenerLegalRetriever(HttpClient httpClient,ILogger<Co
 {
     private static readonly JsonSerializerOptions JsonOptions=new(JsonSerializerDefaults.Web);
 
+    // The in-use court catalog is small, stable, and identical for every tenant/scope/request. The /courts/
+    // endpoint ignores page_size (hard-capped at 20 per page) and rate-limits (HTTP 429) when the full
+    // catalog is paged repeatedly. This class is resolved per request (transient via HttpClient factory),
+    // so a per-instance cache would re-page the whole catalog on every run and keep tripping the limiter.
+    // The catalog is therefore cached PROCESS-WIDE with a time-based expiry so it is paged at most once per
+    // refresh window across all executions.
+    private static readonly SemaphoreSlim CatalogGate=new(1,1);
+    private static readonly TimeSpan CatalogTtl=TimeSpan.FromHours(12);
+    private static IReadOnlyCollection<CourtListenerCourt>? _courtCatalog;
+    private static DateTimeOffset _courtCatalogExpiresUtc=DateTimeOffset.MinValue;
+
     public async Task<LegalProviderRetrievalResult> SearchAsync(string query,WideLegalGroundingConfiguration configuration,CancellationToken cancellationToken=default)
         =>await SearchCoreAsync(query,configuration,null,cancellationToken);
 
@@ -86,19 +97,15 @@ public sealed class CourtListenerLegalRetriever(HttpClient httpClient,ILogger<Co
             // STAGE 3 (CourtListener query): log the exact clean query sent so we can confirm a named
             // authority (e.g. "Raffles v Wichelhaus") is searched, not the whole user prompt.
             logger.LogInformation("LEGAL-TRACE stage=3-courtlistener-query query=\"{Query}\" url={Url}",query,url);
-            using var request=new HttpRequestMessage(HttpMethod.Get,url);
-            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-            // CourtListener rejects requests without a User-Agent; send a realistic one so anonymous
-            // (token-less) searches still return results instead of an error.
-            request.Headers.TryAddWithoutValidation("User-Agent","Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
-            if(!string.IsNullOrWhiteSpace(configuration.CourtListenerApiToken))
-                request.Headers.TryAddWithoutValidation("Authorization",$"Token {configuration.CourtListenerApiToken.Trim()}");
-
-            using var response=await httpClient.SendAsync(request,timeout.Token);
+            // Anonymous (token-less) CourtListener access is heavily rate-limited: a transient HTTP 429
+            // (or a 503 under load) otherwise zeroes the entire legal-grounding run. Retry a bounded number
+            // of times, honoring the server's Retry-After hint when present, before giving up. A fresh
+            // request is built per attempt because an HttpRequestMessage cannot be re-sent.
+            using var response=await SendWithRateLimitRetryAsync(url,configuration,timeout.Token);
             if(!response.IsSuccessStatusCode)
             {
                 logger.LogWarning("LEGAL-TRACE stage=4-courtlistener-response outcome=HTTP_ERROR status={StatusCode} query=\"{Query}\" url={RequestUrl}",(int)response.StatusCode,query,url);
-                return new([],new("COURTLISTENER",true,"HTTP_ERROR",0,0,$"HTTP {(int)response.StatusCode}",EndpointUrl:url,HttpStatus:(int)response.StatusCode,SourceCourtIds:sourceCourtIds));
+                return new([],new("COURTLISTENER",true,(int)response.StatusCode==429?"RATE_LIMITED":"HTTP_ERROR",0,0,$"HTTP {(int)response.StatusCode}",EndpointUrl:url,HttpStatus:(int)response.StatusCode,SourceCourtIds:sourceCourtIds));
             }
 
             var payload=await response.Content.ReadFromJsonAsync<CourtListenerSearchResponse>(JsonOptions,timeout.Token);
@@ -148,6 +155,55 @@ public sealed class CourtListenerLegalRetriever(HttpClient httpClient,ILogger<Co
         }
     }
 
+    // Maximum number of extra attempts after the first when CourtListener returns a rate-limit (429) or
+    // transient unavailable (503) response. Kept small so a genuinely throttled run still fails fast within
+    // the configured per-query timeout rather than stalling the whole execution.
+    private const int MaxRateLimitRetries=4;
+    // Issues the CourtListener GET and transparently retries on 429/503, honoring a Retry-After hint (seconds
+    // or HTTP-date) when the server supplies one, otherwise using exponential backoff. A new request message
+    // is built per attempt because HttpRequestMessage instances cannot be re-sent.
+    private async Task<HttpResponseMessage> SendWithRateLimitRetryAsync(string url,WideLegalGroundingConfiguration configuration,CancellationToken cancellationToken)
+    {
+        HttpResponseMessage response=null!;
+        for(var attempt=0;;attempt++)
+        {
+            response?.Dispose();
+            using var request=new HttpRequestMessage(HttpMethod.Get,url);
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            // CourtListener rejects requests without a User-Agent; send a realistic one so anonymous
+            // (token-less) searches still return results instead of an error.
+            request.Headers.TryAddWithoutValidation("User-Agent","Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
+            if(!string.IsNullOrWhiteSpace(configuration.CourtListenerApiToken))
+                request.Headers.TryAddWithoutValidation("Authorization",$"Token {configuration.CourtListenerApiToken.Trim()}");
+
+            response=await httpClient.SendAsync(request,cancellationToken);
+            var retryable=response.StatusCode==HttpStatusCode.TooManyRequests||response.StatusCode==HttpStatusCode.ServiceUnavailable;
+            if(!retryable||attempt>=MaxRateLimitRetries)return response;
+
+            var delay=ResolveRetryDelay(response,attempt);
+            logger.LogWarning("LEGAL-TRACE stage=4-courtlistener-retry status={StatusCode} attempt={Attempt} delayMs={DelayMs} url={Url}",(int)response.StatusCode,attempt+1,(int)delay.TotalMilliseconds,url);
+            await Task.Delay(delay,cancellationToken);
+        }
+    }
+
+    // Prefers the server's Retry-After header (delta-seconds or HTTP-date); otherwise falls back to a capped
+    // exponential backoff (0.5s, 1s, 2s ...). The result is always clamped so a hostile header cannot stall
+    // the execution beyond a few seconds.
+    private static TimeSpan ResolveRetryDelay(HttpResponseMessage response,int attempt)
+    {
+        var cap=TimeSpan.FromSeconds(5);
+        var retryAfter=response.Headers.RetryAfter;
+        if(retryAfter?.Delta is{}delta&&delta>TimeSpan.Zero)
+            return delta>cap?cap:delta;
+        if(retryAfter?.Date is{}date)
+        {
+            var until=date-DateTimeOffset.UtcNow;
+            if(until>TimeSpan.Zero)return until>cap?cap:until;
+        }
+        var backoff=TimeSpan.FromMilliseconds(500*Math.Pow(2,attempt));
+        return backoff>cap?cap:backoff;
+    }
+
     private async Task<IReadOnlyCollection<CourtListenerCourt>> ResolveCourtFilterAsync(
         string scopeValue,LegalAuthorityScope scope,WideLegalGroundingConfiguration configuration,CancellationToken cancellationToken)
     {
@@ -159,14 +215,11 @@ public sealed class CourtListenerLegalRetriever(HttpClient httpClient,ILogger<Co
             var baseUrl=NormalizeBaseUrl(configuration.CourtListenerBaseUrl);
             var federalLane=scope.AuthorityRoleCode==LegalAuthorityRoles.FederalApplyingStateLaw
                 ||scope.CourtSystem?.Contains("Federal",StringComparison.OrdinalIgnoreCase)==true;
-            var searchUrl=$"{baseUrl}/api/rest/v4/courts/?search={Uri.EscapeDataString(scopeValue)}";
-            var courts=await FetchCourtsAsync(searchUrl,configuration,timeout.Token);
+            // The /courts/ endpoint rejects field filters (HTTP 400) and aggressively rate-limits (HTTP 429),
+            // so the full in-use catalog is fetched ONCE per retriever instance, cached, and then all scope
+            // translation (direct, sovereign, federal, breadcrumb) is matched locally against that snapshot.
+            var courts=await GetInUseCourtCatalogAsync(baseUrl,configuration,timeout.Token);
             var matches=SelectEligibleCourts(courts,scopeValue,scope,federalLane);
-            if(matches.Count>0)return matches;
-
-            var catalogUrl=$"{baseUrl}/api/rest/v4/courts/?page_size=1000";
-            courts=await FetchCourtsAsync(catalogUrl,configuration,timeout.Token);
-            matches=SelectEligibleCourts(courts,scopeValue,scope,federalLane);
             if(matches.Count>0)return matches;
 
             // Provider-native scope translation: the incoming value may be a court/forum caption that
@@ -176,10 +229,6 @@ public sealed class CourtListenerLegalRetriever(HttpClient httpClient,ILogger<Co
             var sovereign=LegalJurisdictionScope.ExtractSovereign(scopeValue);
             if(!string.IsNullOrWhiteSpace(sovereign)&&!sovereign.Equals(scopeValue,StringComparison.OrdinalIgnoreCase))
             {
-                var sovereignUrl=$"{baseUrl}/api/rest/v4/courts/?search={Uri.EscapeDataString(sovereign)}";
-                var sovereignCourts=await FetchCourtsAsync(sovereignUrl,configuration,timeout.Token);
-                matches=SelectEligibleCourts(sovereignCourts,sovereign,scope,federalLane);
-                if(matches.Count>0)return matches;
                 var sovereignCatalog=SelectEligibleCourts(courts,sovereign,scope,federalLane);
                 if(sovereignCatalog.Count>0)return sovereignCatalog;
             }
@@ -191,10 +240,6 @@ public sealed class CourtListenerLegalRetriever(HttpClient httpClient,ILogger<Co
             var federal=LegalJurisdictionScope.ExtractFederalJurisdiction(scopeValue);
             if(!string.IsNullOrWhiteSpace(federal)&&!federal.Equals(scopeValue,StringComparison.OrdinalIgnoreCase))
             {
-                var federalUrl=$"{baseUrl}/api/rest/v4/courts/?search={Uri.EscapeDataString(federal)}";
-                var federalCourts=await FetchCourtsAsync(federalUrl,configuration,timeout.Token);
-                matches=SelectEligibleCourts(federalCourts,federal,scope,federalLane:true);
-                if(matches.Count>0)return matches;
                 return SelectEligibleCourts(courts,federal,scope,federalLane:true);
             }
 
@@ -224,18 +269,47 @@ public sealed class CourtListenerLegalRetriever(HttpClient httpClient,ILogger<Co
         }
     }
 
-    private async Task<IReadOnlyCollection<CourtListenerCourt>> FetchCourtsAsync(
-        string url,WideLegalGroundingConfiguration configuration,CancellationToken cancellationToken)
+    // Fetches (and caches) the full in-use CourtListener court catalog, following DRF pagination `next`
+    // links. All scope matching is performed locally against this snapshot because the /courts/ endpoint
+    // rejects free-text field filters (HTTP 400) and rate-limits repeated calls (HTTP 429). The result is
+    // cached process-wide with a TTL so the catalog is paged at most once per refresh window.
+    private async Task<IReadOnlyCollection<CourtListenerCourt>> GetInUseCourtCatalogAsync(
+        string baseUrl,WideLegalGroundingConfiguration configuration,CancellationToken cancellationToken)
     {
-        using var request=new HttpRequestMessage(HttpMethod.Get,url);
-        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-        request.Headers.TryAddWithoutValidation("User-Agent","Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36");
-        if(!string.IsNullOrWhiteSpace(configuration.CourtListenerApiToken))
-            request.Headers.TryAddWithoutValidation("Authorization",$"Token {configuration.CourtListenerApiToken.Trim()}");
-        using var response=await httpClient.SendAsync(request,cancellationToken);
-        if(!response.IsSuccessStatusCode)return [];
-        var payload=await response.Content.ReadFromJsonAsync<CourtListenerCourtResponse>(JsonOptions,cancellationToken);
-        return payload?.Results??[];
+        if(_courtCatalog is{Count:>0}cached&&DateTimeOffset.UtcNow<_courtCatalogExpiresUtc)return cached;
+        await CatalogGate.WaitAsync(cancellationToken);
+        try
+        {
+            if(_courtCatalog is{Count:>0}fresh&&DateTimeOffset.UtcNow<_courtCatalogExpiresUtc)return fresh;
+            var aggregate=new List<CourtListenerCourt>();
+            var url=BuildCourtsUrl(baseUrl);
+            // The endpoint hard-caps at 20 rows/page, so the ~600-court in-use catalog needs ~30 pages.
+            // CourtListener rate-limits bursts, so a short pause is inserted BETWEEN pages. This walk runs
+            // at most once per TTL window (process-wide cache), so the one-time cost is amortized away.
+            var completed=true;
+            for(var page=0;page<40&&!string.IsNullOrWhiteSpace(url);page++)
+            {
+                if(page>0)await Task.Delay(TimeSpan.FromMilliseconds(1200),cancellationToken);
+                using var response=await SendWithRateLimitRetryAsync(url,configuration,cancellationToken);
+                if(!response.IsSuccessStatusCode){completed=false;break;}
+                var payload=await response.Content.ReadFromJsonAsync<CourtListenerCourtResponse>(JsonOptions,cancellationToken);
+                if(payload?.Results is{Count:>0}results)aggregate.AddRange(results);
+                url=payload?.Next;
+            }
+            // Publish whatever was gathered so the controlling lane is not fully suppressed, but only START
+            // the full TTL when the walk completed. A truncated walk (rate-limited mid-way) is cached for a
+            // short window so the next execution retries and completes the catalog instead of hammering it.
+            if(aggregate.Count>0)
+            {
+                _courtCatalog=aggregate;
+                _courtCatalogExpiresUtc=DateTimeOffset.UtcNow.Add(completed?CatalogTtl:TimeSpan.FromMinutes(2));
+            }
+            return _courtCatalog??aggregate;
+        }
+        finally
+        {
+            CatalogGate.Release();
+        }
     }
 
     private static IReadOnlyCollection<CourtListenerCourt> SelectEligibleCourts(
@@ -280,6 +354,15 @@ public sealed class CourtListenerLegalRetriever(HttpClient httpClient,ILogger<Co
             ||identity.Contains("Circuit",StringComparison.OrdinalIgnoreCase);
         return federalLane==federal;
     }
+
+    // CourtListener's /courts/ endpoint is a Django-REST filtered list. Field lookups such as
+    // full_name__icontains= or jurisdiction= are NOT accepted and return HTTP 400 (previously cascading
+    // to RETRIEVAL_SCOPE_UNSUPPORTED and suppressing the controlling lane — zero verified authorities).
+    // Only in_use=true and page_size (max 100) are reliably supported, so we fetch the in-use catalog and
+    // match jurisdiction/level LOCALLY via SelectEligibleCourts. The scopeValue is intentionally ignored
+    // in the URL; it is applied by the in-memory matcher.
+    private static string BuildCourtsUrl(string baseUrl)
+        =>$"{baseUrl}/api/rest/v4/courts/?in_use=true&page_size=100";
 
     // Guards against a misconfigured base URL that already includes the API path
     // (e.g. "https://www.courtlistener.com/api/rest/v4"), which would otherwise produce a
@@ -352,10 +435,10 @@ public sealed class CourtListenerLegalRetriever(HttpClient httpClient,ILogger<Co
 
     private sealed record CourtListenerSearchResponse([property:JsonPropertyName("results")]List<CourtListenerSearchResult>? Results);
 
-    private sealed record CourtListenerCourtResponse([property:JsonPropertyName("results")]List<CourtListenerCourt>? Results);
+    private sealed record CourtListenerCourtResponse([property:JsonPropertyName("results")]List<CourtListenerCourt>? Results,[property:JsonPropertyName("next")]string? Next=null);
 
     private sealed record CourtListenerCourt(
-        [property:JsonPropertyName("slug")]string? Slug,
+        [property:JsonPropertyName("id")]string? Slug,
         [property:JsonPropertyName("full_name")]string? FullName,
         [property:JsonPropertyName("short_name")]string? ShortName,
         [property:JsonPropertyName("jurisdiction")]string? Jurisdiction);

@@ -1,0 +1,185 @@
+@* Separate decision landscapes (migration 0451) — LIVE matter results.
+   Renders the DB-backed decision contracts (A: Procedural disposition, B: Matter resolution, …) as
+   independent competition sets, but each candidate is the ACTUAL scored WideCandidateDto from THIS matter's
+   Decision2 run: real rank, composite score, per-contract relative support, support tier and evidence
+   confidence. Contract names/questions still come from the DB-backed pack (no outcome names hardcoded);
+   the scores come from the live pipeline, never a static catalog. *@
+@using Legal.Application.Features.Intelligence
+@using Legal.Application.Features.Intelligence.Decision
+
+<section class="dlp-panel" aria-label="Separate decision landscapes">
+    <header class="dlp-head">
+        <h2 class="dlp-title">Separate decision landscapes</h2>
+        @if (!string.IsNullOrWhiteSpace(ExampleLabel))
+        {
+            <div class="dlp-subhead">
+                <span class="dlp-example">Matter: @ExampleLabel</span>
+                <span class="dlp-badge">@Groups.Count competition set@(Groups.Count == 1 ? "" : "s")</span>
+            </div>
+        }
+    </header>
+
+    @if (Candidates is null || Candidates.Count == 0)
+    {
+        <div class="dlp-empty">No scored candidates are available for this matter yet.</div>
+    }
+    else
+    {
+        @foreach (var group in Groups)
+        {
+            var leader = group.Ranked.FirstOrDefault(c => !c.IsConstraintViolation);
+            <article class="dlp-contract">
+                <div class="dlp-contract-head">
+                    <h3 class="dlp-contract-title">
+                        <span class="dlp-contract-kicker">Decision contract @group.Letter</span>
+                        @group.Name
+                    </h3>
+                    @if (!string.IsNullOrWhiteSpace(group.Question))
+                    {
+                        <p class="dlp-contract-q">@group.Question</p>
+                    }
+                    @if (leader is not null)
+                    {
+                        <div class="dlp-contract-leader">
+                            <span class="dlp-leader-lbl">Leading</span>
+                            <span class="dlp-leader-name">@leader.DisplayName</span>
+                            <span class="dlp-leader-share">@Pct(ShareOf(group, leader)) support</span>
+                        </div>
+                    }
+                </div>
+
+                @if (group.Ranked.Count == 0)
+                {
+                    <div class="dlp-empty dlp-empty--inline">No candidates scored for this contract.</div>
+                }
+                else
+                {
+                    <div class="dlp-grid">
+                        @foreach (var candidate in group.Ranked)
+                        {
+                            var share = ShareOf(group, candidate);
+                            var isLeader = ReferenceEquals(candidate, leader);
+                            <div class="dlp-card @(isLeader ? "dlp-card--leader" : "") @(candidate.IsConstraintViolation ? "dlp-card--ruled-out" : "")"
+                                 title="@candidate.Detail">
+                                <div class="dlp-card-top">
+                                    <span class="dlp-rank">#@candidate.RankNumber</span>
+                                    <span class="dlp-name">@candidate.DisplayName</span>
+                                    @if (candidate.IsConstraintViolation)
+                                    {
+                                        <span class="dlp-tier dlp-tier--out">Ruled out</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="dlp-tier dlp-tier--@candidate.SupportTierCode.ToLowerInvariant()">@TierLabel(candidate.SupportTierCode)</span>
+                                    }
+                                </div>
+                                <div class="dlp-bar" role="img" aria-label="Relative support @Pct(share)">
+                                    <span class="dlp-bar-fill" style="width:@Pct(share)"></span>
+                                </div>
+                                <div class="dlp-card-metrics">
+                                    <span class="dlp-metric" title="Relative support within this contract">@Pct(share) support</span>
+                                    <span class="dlp-metric" title="Composite score">Score @candidate.CompositeScore.ToString("0.00")</span>
+                                    <span class="dlp-metric" title="Evidence confidence">Conf @Pct(candidate.EvidenceConfidence)</span>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+            </article>
+        }
+
+        <footer class="dlp-foot">
+            An outcome may be a terminal disposition, an interim procedural result, or a continuing state —
+            each contract competes within its own candidate set and its own relative-support denominator.
+        </footer>
+    }
+</section>
+
+@code {
+    // The DB-backed decision contracts for the active pack (ordered by SortOrder). Supplies contract
+    // name/question/letter; never scores. Pass the page's loaded _decisionContracts.
+    [Parameter] public IReadOnlyList<DecisionDomainPackDecisionContractDto> Contracts { get; set; } = [];
+
+    // The LIVE scored candidates from this matter's Decision2 run (FinalRankedCandidates). Scores, ranks,
+    // tiers and contract membership all come from here — the authoritative pipeline output.
+    [Parameter] public IReadOnlyList<WideCandidateDto> Candidates { get; set; } = [];
+
+    // Optional label shown as "Matter: {label}" in the header (e.g. the active matter title).
+    [Parameter] public string? ExampleLabel { get; set; }
+
+    // One contract's slice of the live ranking, grouped by DecisionContractCode. Candidates whose contract
+    // has no matching active contract (legacy/default) collapse into one group so nothing disappears.
+    private sealed record LandscapeGroup(
+        string? ContractCode,
+        string Letter,
+        string Name,
+        string? Question,
+        int SortOrder,
+        IReadOnlyList<WideCandidateDto> Ranked,
+        decimal ScoreTotal);
+
+    private IReadOnlyList<LandscapeGroup> Groups
+    {
+        get
+        {
+            if (Candidates is null || Candidates.Count == 0) return [];
+
+            var byCode = Contracts
+                .GroupBy(c => c.ContractCode, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+            return Candidates
+                .GroupBy(c => string.IsNullOrWhiteSpace(c.DecisionContractCode) ? string.Empty : c.DecisionContractCode!.Trim(),
+                         StringComparer.OrdinalIgnoreCase)
+                .Select(g =>
+                {
+                    byCode.TryGetValue(g.Key, out var contract);
+                    var ranked = g.OrderBy(c => c.RankNumber).ToArray();
+                    // Relative support denominator is scoped to this contract and ignores ruled-out candidates.
+                    var total = ranked.Where(c => !c.IsConstraintViolation).Sum(c => c.CompositeScore);
+                    return new LandscapeGroup(
+                        ContractCode: string.IsNullOrWhiteSpace(g.Key) ? null : g.Key,
+                        Letter: ContractLetter(g.Key),
+                        Name: contract?.Name ?? "Decision landscape",
+                        Question: contract?.DecisionQuestion,
+                        SortOrder: contract?.SortOrder ?? int.MaxValue,
+                        Ranked: ranked,
+                        ScoreTotal: total);
+                })
+                .OrderBy(g => g.SortOrder)
+                .ThenBy(g => g.ContractCode, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+    }
+
+    // Relative support within a contract: this candidate's composite score as a share of the contract's
+    // total scored composite. Ruled-out candidates report 0 so they never dilute the denominator.
+    private static decimal ShareOf(LandscapeGroup group, WideCandidateDto candidate)
+    {
+        if (candidate.IsConstraintViolation || group.ScoreTotal <= 0m) return 0m;
+        return candidate.CompositeScore / group.ScoreTotal;
+    }
+
+    private static string Pct(decimal fraction) => $"{Math.Round(fraction * 100m, 0)}%";
+
+    private static string TierLabel(string tierCode) => tierCode?.ToUpperInvariant() switch
+    {
+        "STRONG" => "Strong",
+        "MODERATE" => "Moderate",
+        "LIMITED" => "Limited",
+        _ => tierCode ?? ""
+    };
+
+    // Presentation-only A/B/C… letter derived from contract order, so the DB stays free of display labels.
+    private string ContractLetter(string? contractCode)
+    {
+        if (string.IsNullOrWhiteSpace(contractCode)) return "—";
+        var index = Contracts
+            .Select((c, i) => (c.ContractCode, i))
+            .Where(x => string.Equals(x.ContractCode, contractCode, StringComparison.OrdinalIgnoreCase))
+            .Select(x => x.i)
+            .DefaultIfEmpty(-1)
+            .First();
+        return index >= 0 ? ((char)('A' + index)).ToString() : "—";
+    }
+}

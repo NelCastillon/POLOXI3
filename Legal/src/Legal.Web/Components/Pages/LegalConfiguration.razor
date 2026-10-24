@@ -27,6 +27,7 @@ else
         <article class="intel-kpi-link @(_focusSection=="decision-routes"?"intel-kpi-active":null)" role="button" tabindex="0" title="Go to POLOXI decision model routes" @onclick="@(()=>FocusSectionAsync("decision-routes"))"><span>Decision routes</span><strong>@_decisionRoutes.Count</strong></article>
         <article class="intel-kpi-link @(_focusSection=="legal-grounding"?"intel-kpi-active":null)" role="button" tabindex="0" title="Go to legal grounding settings" @onclick="@(()=>FocusSectionAsync("legal-grounding"))"><span>Legal grounding</span><strong>@_legalSettings.Count</strong></article>
         <article class="intel-kpi-link @(_focusSection=="epistemic"?"intel-kpi-active":null)" role="button" tabindex="0" title="Go to epistemic authority settings" @onclick="@(()=>FocusSectionAsync("epistemic"))"><span>Epistemic authority</span><strong>@_epistemicSettings.Count</strong></article>
+        <article class="intel-kpi-link @(_focusSection=="matter-scope"?"intel-kpi-active":null)" role="button" tabindex="0" title="Go to matter evidence-scope thresholds" @onclick="@(()=>FocusSectionAsync("matter-scope"))"><span>Matter evidence scope</span><strong>@_matterScopeSettings.Count</strong></article>
     </section>
 
     @if(!string.IsNullOrWhiteSpace(_search) && !HasAnySearchResult)
@@ -204,6 +205,26 @@ else
                     <span>@setting.EffectiveValue</span>
                     @if(setting.HasTenantOverride){<AppStatusBadge Status="TENANT" />}
                     <button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>EditEpistemicSetting(setting)">Edit</button>
+                </div>
+            </div>
+        }
+    </section>
+    }
+
+    @if(SectionVisible("matter evidence scope thresholds matterscope","Matter evidence scope thresholds") && _matterScopeSettings.Any(MatchMatterScopeSetting))
+    {
+    <section id="intel-section-matter-scope" class="intel-panel @(_focusSection=="matter-scope"?"intel-panel-focus":null)">
+        <div class="intel-toolbar"><h2>Matter evidence scope thresholds</h2></div>
+        <div class="intel-note">Per-matter Evidence Type scope-gate dials. Values resolve tenant override &rarr; platform default &rarr; code default and take effect the next time a matter is evaluated (they do not delete existing scope rows). Required-coverage, document-present and PRIORITIZE-rule targets are never auto-excluded, and USER decisions are never overwritten. Editing here saves a tenant override for your tenant.</div>
+        @if(_matterScopeSettings.Count==0){<div class="intel-state">No matter evidence-scope settings are configured.</div>}
+        @foreach(var setting in _matterScopeSettings.Where(MatchMatterScopeSetting))
+        {
+            <div class="intel-row">
+                <div><strong>@ShortMatterScopeKey(setting.SettingKey)</strong><small>@setting.SettingKey &middot; @setting.DataTypeCode &middot; platform default @setting.PlatformValue</small><span>@setting.Description</span></div>
+                <div>
+                    <span>@setting.EffectiveValue</span>
+                    @if(setting.HasTenantOverride){<AppStatusBadge Status="TENANT" />}
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>EditMatterScopeSetting(setting)">Edit</button>
                 </div>
             </div>
         }
@@ -493,6 +514,29 @@ else
         </EditForm>
     </div></div>
 }
+
+@if(_editingMatterScopeSetting)
+{
+    <div class="um-modal-backdrop"><div class="um-modal">
+        <div class="um-modal-header"><i class="bi bi-funnel"></i><span>Edit matter evidence-scope threshold</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="()=>_editingMatterScopeSetting=false"><i class="bi bi-x-lg"></i></button></div>
+        <EditForm Model="_matterScopeForm" OnValidSubmit="SaveMatterScopeSettingAsync">
+            <DataAnnotationsValidator />
+            <div class="um-modal-body">
+                <ValidationSummary />
+                <div class="um-form-grid">
+                    <div class="intel-field" style="grid-column:1/-1"><label>Setting</label><InputText @bind-Value="_matterScopeForm.SettingKey" disabled /><small>Platform default: @_matterScopeForm.PlatformValue &middot; @_matterScopeForm.DataTypeCode</small></div>
+                    <div class="intel-field"><label>Value</label><InputText @bind-Value="_matterScopeForm.SettingValue" /><ValidationMessage For="() => _matterScopeForm.SettingValue" class="text-danger" /><small>@(_matterScopeForm.DataTypeCode=="Integer"?"Whole number (e.g. 2).":_matterScopeForm.DataTypeCode=="Decimal"?"Decimal 0..1 (invariant, e.g. 0.20).":"")</small></div>
+                    <div class="intel-field" style="grid-column:1/-1"><label>Scope</label><InputSelect @bind-Value="_matterScopeForm.Scope"><option value="Tenant">Tenant override (this tenant only)</option><option value="Platform">Platform default (all tenants)</option></InputSelect></div>
+                </div>
+            </div>
+            <div class="um-modal-footer">
+                @if(_error is not null){<span class="intel-error">@_error</span>}
+                <button type="button" class="um-btn um-btn-ghost" @onclick="()=>_editingMatterScopeSetting=false">Cancel</button>
+                <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">Save setting</button>
+            </div>
+        </EditForm>
+    </div></div>
+}
 @if(_confirm is not null)
 {
     <div class="um-modal-backdrop"><div class="um-modal um-modal-confirm">
@@ -521,10 +565,12 @@ private readonly List<DecisionModelRouteDto> _decisionRoutes=[];
 private readonly List<IntelligenceCapabilityDto> _capabilities=[];
 private readonly List<LegalGroundingSettingDto> _legalSettings=[];
 private readonly List<EpistemicSettingDto> _epistemicSettings=[];
+private readonly List<MatterScopeSettingDto> _matterScopeSettings=[];
 private bool _showPipeline;
 private bool _loading=true,_editing,_editingPrompt,_editingDecisionPrompt,_editingDecisionRoute,_editingProvider,_editingModel,_saving;
 private bool _editingLegalSetting;
 private bool _editingEpistemicSetting;
+private bool _editingMatterScopeSetting;
 private bool _editingDecisionSetting;
 private string? _error;
 private string? _focusSection;
@@ -537,6 +583,7 @@ private ProviderForm _providerForm=new();
 private ModelForm _modelForm=new();
 private LegalSettingForm _legalForm=new();
 private EpistemicSettingForm _epistemicForm=new();
+private MatterScopeSettingForm _matterScopeForm=new();
 private DecisionSettingForm _decisionForm=new();
 private ConfirmRequest? _confirm;
 private TaskCompletionSource<bool>? _confirmSource;
@@ -566,6 +613,7 @@ private async Task LoadAsync()
         _capabilities.Clear();_capabilities.AddRange((await platform)?.Pillars.SelectMany(x=>x.Capabilities)??[]);
         _legalSettings.Clear();_legalSettings.AddRange(await Api.GetLegalGroundingSettingsAsync());
         _epistemicSettings.Clear();_epistemicSettings.AddRange(await Api.GetEpistemicSettingsAsync());
+        _matterScopeSettings.Clear();_matterScopeSettings.AddRange(await Api.GetMatterScopeSettingsAsync());
         _showPipeline=await Api.GetShowPipelineAsync();
     }
     catch(Exception ex){_error=ex.Message;}
@@ -644,6 +692,7 @@ private bool HasAnySearchResult =>
     || _policies.Any(MatchPolicy) || _prompts.Any(MatchPrompt) || _decisionSettings.Any(MatchDecisionSetting)
     || _decisionPrompts.Any(MatchDecisionPrompt) || _legalSettings.Any(MatchLegalSetting)
     || _epistemicSettings.Any(MatchEpistemicSetting)
+    || _matterScopeSettings.Any(MatchMatterScopeSetting)
     || SectionVisible("search result display pipeline diagnostics showpipeline","Search result display");
 private bool Contains(string? value)=>!string.IsNullOrEmpty(value)&&value.Contains(_search,StringComparison.OrdinalIgnoreCase);
 private bool SectionVisible(string sectionKeywords,string title)=>string.IsNullOrWhiteSpace(_search)||Contains(title)||Contains(sectionKeywords);
@@ -657,6 +706,7 @@ private bool MatchDecisionSetting(DecisionSettingDto s)=>MatchAny(s.SettingKey,s
 private bool MatchDecisionPrompt(DecisionPromptConfigurationDto p)=>MatchAny(p.PromptCode,p.StageCode);
 private bool MatchLegalSetting(LegalGroundingSettingDto s)=>MatchAny(s.SettingKey,s.DataTypeCode,s.Description);
 private bool MatchEpistemicSetting(EpistemicSettingDto s)=>MatchAny(s.SettingKey,s.DataTypeCode,s.Description);
+private bool MatchMatterScopeSetting(MatterScopeSettingDto s)=>MatchAny(s.SettingKey,s.DataTypeCode,s.Description);
 private async Task FocusSectionAsync(string section)
 {
     _focusSection=section;
@@ -754,6 +804,33 @@ private async Task SaveEpistemicSettingAsync()
         var request=new SaveEpistemicSettingRequest(_epistemicForm.SettingKey,_epistemicForm.SettingValue??string.Empty,_epistemicForm.Scope);
         await Api.SaveEpistemicSettingAsync(_epistemicForm.SettingKey,request);
         _editingEpistemicSetting=false;await LoadAsync();
+    }
+    catch(Exception ex){_error=ex.Message;}
+    finally{_saving=false;}
+}
+private static string ShortMatterScopeKey(string key)=>key.StartsWith("Intelligence.SearchWide.",StringComparison.OrdinalIgnoreCase)?key["Intelligence.SearchWide.".Length..]:key;
+private void EditMatterScopeSetting(MatterScopeSettingDto item)
+{
+    _error=null;
+    _matterScopeForm=new()
+    {
+        SettingKey=item.SettingKey,
+        SettingValue=item.EffectiveValue,
+        PlatformValue=item.PlatformValue,
+        DataTypeCode=item.DataTypeCode,
+        Scope="Tenant"
+    };
+    _editingMatterScopeSetting=true;
+}
+private async Task SaveMatterScopeSettingAsync()
+{
+    if(!await ConfirmUpdateAsync($"matter evidence-scope setting '{ShortMatterScopeKey(_matterScopeForm.SettingKey)}'"))return;
+    _saving=true;_error=null;
+    try
+    {
+        var request=new SaveMatterScopeSettingRequest(_matterScopeForm.SettingKey,_matterScopeForm.SettingValue??string.Empty,_matterScopeForm.Scope);
+        await Api.SaveMatterScopeSettingAsync(_matterScopeForm.SettingKey,request);
+        _editingMatterScopeSetting=false;await LoadAsync();
     }
     catch(Exception ex){_error=ex.Message;}
     finally{_saving=false;}
@@ -968,6 +1045,14 @@ private sealed class EpistemicSettingForm
     [Required,StringLength(2000)]public string? SettingValue{get;set;}="";
     public string PlatformValue{get;set;}="";
     [Required,StringLength(50)]public string DataTypeCode{get;set;}="String";
+    [Required]public string Scope{get;set;}="Tenant";
+}
+private sealed class MatterScopeSettingForm
+{
+    [Required,StringLength(200)]public string SettingKey{get;set;}="";
+    [Required,StringLength(2000)]public string? SettingValue{get;set;}="";
+    public string PlatformValue{get;set;}="";
+    [Required,StringLength(50)]public string DataTypeCode{get;set;}="Decimal";
     [Required]public string Scope{get;set;}="Tenant";
 }
 private sealed class DecisionSettingForm

@@ -190,20 +190,64 @@ public partial class LegalPersonalInjuryDecision2
                     }
                 }
 
-                // Unresolved questions: the next resolution targets, shown against this candidate for context.
-                var questions = resolution
-                    .Where(t => !string.IsNullOrWhiteSpace(t.ResolutionQuestion))
+                // THIS candidate's own factor vocabulary — the required dependencies and scored branch
+                // dimensions that actually belong to this outcome. Used to scope the otherwise matter-global
+                // flip / question / resolution facets down to this candidate, so each assessment reflects its
+                // own outcome (e.g. a factor that supports one outcome contradicts the opposite one) instead
+                // of repeating one identical matter-wide list on every card.
+                var candidateFactorNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                if (dep is not null)
+                    foreach (var d in dep.Required)
+                        candidateFactorNames.Add(d.FactorName);
+                foreach (var b in o.BranchScores)
+                    candidateFactorNames.Add(b.BranchDisplayName);
+
+                bool MentionsCandidateFactor(string? text) =>
+                    !string.IsNullOrWhiteSpace(text)
+                    && candidateFactorNames.Any(n => !string.IsNullOrWhiteSpace(n)
+                        && text.Contains(n, StringComparison.OrdinalIgnoreCase));
+
+                // Unresolved questions: resolution targets that concern THIS candidate's factors. Falls back
+                // to the matter-wide frontier only when none of them name this candidate's factors, so the
+                // card is never empty but prefers outcome-specific questions.
+                var scopedQuestions = resolution
+                    .Where(t => !string.IsNullOrWhiteSpace(t.ResolutionQuestion)
+                        && (MentionsCandidateFactor(t.ResolutionQuestion) || MentionsCandidateFactor(t.PropositionText)))
                     .Select(t => t.ResolutionQuestion)
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .Take(4)
                     .ToList();
+                var questions = scopedQuestions.Count > 0
+                    ? scopedQuestions
+                    : resolution
+                        .Where(t => !string.IsNullOrWhiteSpace(t.ResolutionQuestion))
+                        .Select(t => t.ResolutionQuestion)
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .Take(4)
+                        .ToList();
 
-                // Flip conditions: contradicted / unverified factors that could reopen the candidate.
-                var flipItems = flips
-                    .Select(f => $"{f.Name} — {f.StateLabel}")
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .Take(4)
-                    .ToList();
+                // Flip conditions: contradicted / unverified factors that could reopen THIS candidate. Prefer
+                // the candidate's own unresolved/contradicted required dependencies (these already carry the
+                // candidate-specific polarity), then add any matter-wide flip risks that name this candidate's
+                // factors. A factor that is merely unsupported for the opposite outcome is not surfaced here.
+                var flipItems = new List<string>();
+                var seenFlip = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                if (dep is not null)
+                {
+                    foreach (var d in dep.Required.Where(r =>
+                                 !string.Equals(r.State, "SUPPORTED", StringComparison.OrdinalIgnoreCase)
+                                 && !string.Equals(r.Tone, "ok", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        if (seenFlip.Add(d.FactorName))
+                            flipItems.Add($"{d.FactorName} — {d.State}");
+                    }
+                }
+                foreach (var f in flips.Where(f => candidateFactorNames.Contains(f.Name)))
+                {
+                    if (seenFlip.Add(f.Name))
+                        flipItems.Add($"{f.Name} — {f.StateLabel}");
+                }
+                flipItems = flipItems.Take(4).ToList();
 
                 var established = dep?.Established ?? o.KeySupportingFactors;
                 var totalDeps = dep?.Total ?? o.CriticalDependencies;
@@ -225,6 +269,17 @@ public partial class LegalPersonalInjuryDecision2
                 var mapped = o.MappedOutcomes.Count > 0
                     ? o.MappedOutcomes.Select(m => $"{m.Code} · {m.Name}").ToList()
                     : new List<string>();
+
+                // Next resolution targets: prefer this candidate's own targets, fall back to the frontier.
+                var scopedResolution = resolution
+                    .Where(t => MentionsCandidateFactor(t.ResolutionQuestion) || MentionsCandidateFactor(t.PropositionText))
+                    .ToList();
+                var nextTargets = (scopedResolution.Count > 0 ? scopedResolution : resolution.ToList())
+                    .Take(4)
+                    .Select(t => t.InformationValue.HasValue
+                        ? $"{t.ResolutionQuestion} (IV {t.InformationValue.Value:0.00})"
+                        : t.ResolutionQuestion)
+                    .ToList();
 
                 var facets = new List<OvAssessmentFacet>
                 {
@@ -255,10 +310,7 @@ public partial class LegalPersonalInjuryDecision2
                         flipItems),
                     new("next", "bi-flag", "Next resolution targets",
                         questions.Count > 0 ? "Highest-value items to investigate or resolve next." : "No prioritized resolution targets yet.",
-                        resolution.Take(4).Select(t =>
-                            t.InformationValue.HasValue
-                                ? $"{t.ResolutionQuestion} (IV {t.InformationValue.Value:0.00})"
-                                : t.ResolutionQuestion).ToList()),
+                        nextTargets),
                 };
 
                 var scopeLabel = competitionValid

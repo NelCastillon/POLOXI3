@@ -101,8 +101,6 @@ public sealed class NextBestActionService(
             if (scored.Propositions.Count == 0)
                 return new NextBestActionResult(matterId, [], "No scored propositions yet.");
 
-            var maxIv = Math.Max(0.001m, scored.Propositions.Max(p => p.InformationValue));
-
             // 2) HRR / evidence — the unresolved decision path and current evidence state for each proposition.
             var graph = await corpusRepository.GetMatterEvidenceGraphAsync(tenantId, matterId, cancellationToken);
             var evidenceById = (graph.Evidence ?? [])
@@ -119,8 +117,18 @@ public sealed class NextBestActionService(
                 : matter!.DomainPackCode;
             var pack = await domainPackResolver.ResolveAsync(tenantId, packCode, cancellationToken);
 
-            // 4) CHR / APR — assemble ResolutionRequirements from unresolved, decision-material propositions.
-            var requirements = BuildResolutionRequirements(scored, propositionById, evidenceById, maxIv, matter, pack);
+            // LegalADV normalization over the UNRESOLVED frontier (not all scored propositions). Normalizing
+            // over resolved-inclusive IV collapsed every unresolved action's ADV toward 0.00 whenever a
+            // resolved proposition held the top information value.
+            var unresolved = scored.Propositions
+                .Where(p => IsUnresolved(p.FactStateCode))
+                .ToArray();
+            var maxIv = Math.Max(0.001m,
+                unresolved.Length > 0 ? unresolved.Max(p => p.InformationValue) : scored.Propositions.Max(p => p.InformationValue));
+
+            // 4) CHR / APR — assemble ResolutionRequirements from unresolved, decision-material propositions
+            //    PLUS the uncovered REQUIRED legal elements from the domain pack.
+            var requirements = BuildResolutionRequirements(scored, propositionById, evidenceById, maxIv, matter, pack, graph);
             if (requirements.Count == 0)
                 return new NextBestActionResult(matterId, [], "No outstanding unresolved decision-material propositions.");
 
@@ -154,9 +162,36 @@ public sealed class NextBestActionService(
         IReadOnlyDictionary<Guid, string> evidenceById,
         decimal maxIv,
         DecisionMatterDto? matter,
-        ResolvedDomainPack pack)
+        ResolvedDomainPack pack,
+        LegalMatterEvidenceGraphDto graph)
     {
         var requirements = new List<ResolutionRequirement>();
+
+        // Uncovered REQUIRED legal elements first — an unproven required element is the strongest
+        // resolution gap, so its ADV is maximal (1.00) and it leads the frontier.
+        foreach (var gap in RequiredFactorFrontier.Compute(pack, graph))
+        {
+            var path = new List<string>(BuildHierarchyPath(matter, pack, null));
+            if (!string.IsNullOrWhiteSpace(gap.DimensionCode))
+                path.Add(gap.DimensionCode.Replace('_', ' '));
+
+            requirements.Add(new ResolutionRequirement(
+                gap.FactorId,
+                $"Required legal element not yet established: {gap.Name}.",
+                path,
+                $"What establishes the required legal element: {gap.Name}?",
+                string.IsNullOrWhiteSpace(gap.Description)
+                    ? "This required legal element has no admitted evidence on record; it must be established for the claim."
+                    : gap.Description,
+                LegalFactStates.Alleged,
+                LegalEvidenceStates.Proposed,
+                [],
+                [],
+                gap.DecisionRelevance,
+                1.0m,
+                1.0m));
+        }
+
         foreach (var p in scored.Propositions
                      .Where(p => IsUnresolved(p.FactStateCode))
                      .OrderByDescending(p => p.InformationValue))
@@ -201,7 +236,7 @@ public sealed class NextBestActionService(
         => string.IsNullOrWhiteSpace(factStateCode) || !ResolvedFactStates.Contains(factStateCode);
 
     // Advisory HRR lineage: domain → jurisdiction → dimension → proposition. Display-only.
-    private static IReadOnlyList<string> BuildHierarchyPath(DecisionMatterDto? matter, ResolvedDomainPack pack, MatterPropositionInformationValue p)
+    private static IReadOnlyList<string> BuildHierarchyPath(DecisionMatterDto? matter, ResolvedDomainPack pack, MatterPropositionInformationValue? p)
     {
         var path = new List<string>();
         if (!string.IsNullOrWhiteSpace(pack.PracticeAreaCode))
