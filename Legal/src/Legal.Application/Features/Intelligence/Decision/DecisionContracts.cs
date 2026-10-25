@@ -562,6 +562,15 @@ public sealed record DecisionReadinessItemDto(
     bool Satisfied,
     string? Detail);
 
+// Broad six-factor Matter Type lookup row (migration 0458, Legal_MatterType).
+// Code is the stable machine identifier (PERSONAL_INJURY); Name is the display label.
+public sealed record MatterTypeDto(Guid MatterTypeId, string Code, string Name, string? Description, int SortOrder);
+
+// Canonical MatterType -> Subtype catalog row (migration 0460, Legal_MatterSubtype). A broad matter
+// type owns its subtype set directly; domain packs merely LINK to these rows. Code is the stable
+// subtype machine identifier (MOTOR_VEHICLE_ACCIDENT); Name is the display label.
+public sealed record MatterSubtypeDto(Guid MatterSubtypeId, Guid MatterTypeId, string MatterTypeCode, string Code, string Name, string? Description, int SortOrder);
+
 // A matter aggregate that groups decision sessions (dashboard card).
 public sealed record DecisionMatterDto(
     Guid DecisionMatterId,
@@ -607,6 +616,19 @@ public sealed record DecisionMatterDto(
     // MatterScopeOutThreshold for THIS matter's runs; null falls back to the tenant/platform default.
     public decimal? MatterScopeOutThreshold { get; init; }
 
+    // Migration 0461 (canonical): authoritative binding to the canonical subtype catalog
+    // (Legal_MatterSubtype). Null = no deterministic matter-type filtering for this matter.
+    public Guid? MatterSubtypeId { get; init; }
+    // Resolved subtype Code of the bound canonical row (read-model convenience; null when unbound).
+    public string? DomainPackMatterTypeCode { get; init; }
+    // Display Name of the bound canonical row (for UI and LLM prompt context; null when unbound).
+    public string? DomainPackMatterTypeName { get; init; }
+
+    // Migration 0458: broad Matter Type lookup binding (Legal_MatterType). MatterTypeCode holds the
+    // machine code; MatterTypeName is the display label projected from the lookup for UI/LLM use.
+    public Guid? MatterTypeId { get; init; }
+    public string? MatterTypeName { get; init; }
+
     // Derived from the latest decision session for this matter (null when no decision yet).
     public Guid? LatestSessionId { get; init; }
     public string? CurrentOutcome { get; init; }
@@ -630,6 +652,11 @@ public sealed record DecisionMatterCreateRequest(
 
     // ── Structured Type dimension. ──
     [StringLength(120)] public string? Subtype { get; init; }
+
+    // Migration 0461: canonical subtype code. Resolved server-side to
+    // Legal_DecisionMatter.MatterSubtypeId within the canonical Legal_MatterSubtype catalog.
+    // Null or unknown code leaves the FK NULL = no deterministic matter-type filtering (fail-open).
+    [StringLength(120)] public string? DomainPackMatterTypeCode { get; init; }
 
     // ── Structured Jurisdiction dimension. ──
     [StringLength(120)] public string? CourtSystem { get; init; }
@@ -667,6 +694,9 @@ public sealed record DecisionMatterUpdateRequest(
     // ── Structured Type dimension. ──
     [StringLength(120)] public string? Subtype { get; init; }
 
+    // Migration 0455: authoritative Domain Pack matter-type code (see DecisionMatterCreateRequest).
+    [StringLength(120)] public string? DomainPackMatterTypeCode { get; init; }
+
     // ── Structured Jurisdiction dimension. ──
     [StringLength(120)] public string? CourtSystem { get; init; }
     [StringLength(120)] public string? State { get; init; }
@@ -687,7 +717,7 @@ public sealed record DecisionMatterUpdateRequest(
     [StringLength(20000)] public string? AdditionalNarrative { get; init; }
 }
 
-// Focused request that persists ONLY the user's Additional Narrative on a matter. Used by the decision
+// Focused request that persists ONLY the user's Additional Narrative on a matter.
 // cockpits to save the submitted prompt text before the LLM pipeline runs, without replaying every
 // other matter field.
 public sealed record DecisionMatterAdditionalNarrativeRequest(
@@ -713,6 +743,9 @@ public sealed record DecisionDomainPackDto(
     IReadOnlyCollection<DecisionDomainPackVerificationProfileDto> VerificationProfiles,
     IReadOnlyCollection<DecisionDomainPackMatterTypeDto> MatterTypes)
 {
+    // Migration 0458: broad Matter Type code (Legal_MatterType.Code) this pack serves; drives the
+    // Matter type -> Subtype UI cascade. Null = pack not mapped to a broad type.
+    public string? MatterTypeCode { get; init; }
     public IReadOnlyCollection<DecisionDomainConceptDto> Concepts { get; init; } = [];
     public IReadOnlyCollection<DecisionDomainConceptRelationDto> ConceptRelations { get; init; } = [];
 
@@ -773,6 +806,10 @@ public sealed record DecisionDomainPackEvidenceTypeDto(string EvidenceTypeCode, 
     public string? RelevanceKeywords { get; init; }
     // Migration 0445 (nullable/additive): comma list of incident family codes; null/empty = all families.
     public string? IncidentFamilyCodes { get; init; }
+    // Migration 0455 (normalized): matter-type codes resolved from the
+    // Legal_DecisionDomainPackEvidenceTypeMatterType junction. Empty = applies to every matter type.
+    // Supersedes the deprecated comma MatterTypeCodes string as the source of truth.
+    public IReadOnlyCollection<string> MatterTypeCodeTags { get; init; } = Array.Empty<string>();
 
     // Dapper materialization constructor: matches the full column set selected by
     // LegalDecisionRepository.BuildDomainPackAsync (Dapper requires a constructor whose signature
@@ -789,7 +826,7 @@ public sealed record DecisionDomainPackEvidenceTypeDto(string EvidenceTypeCode, 
 
 public sealed record DecisionDomainPackVerificationProfileDto(string ProfileCode, string Name, string? EvidenceTypeCode, string? Description);
 
-public sealed record DecisionDomainPackMatterTypeDto(string MatterTypeCode, string Name, string? Description);
+public sealed record DecisionDomainPackMatterTypeDto(string SubtypeCode, string Name, string? Description);
 
 // Canonical Decision Outcome candidate (migration 0396). RoleCode is PATHWAY (prospective resolution)
 // or ASSERTED_HISTORICAL (a possibly-completed historical status that must be verified first and must

@@ -43,7 +43,7 @@
                 <div class="matter-detail-tags">
                     @if (!string.IsNullOrWhiteSpace(_matter.MatterTypeCode))
                     {
-                        <span class="matter-tag"><i class="bi bi-tag"></i> @_matter.MatterTypeCode</span>
+                        <span class="matter-tag"><i class="bi bi-tag"></i> @(_matter.MatterTypeName ?? _matter.MatterTypeCode)</span>
                     }
                     @if (!string.IsNullOrWhiteSpace(_matter.Jurisdiction))
                     {
@@ -280,8 +280,13 @@
                             </label>
                             <label class="um-field">
                                 <span class="um-field-label">Matter type</span>
-                                <SearchableSelect @bind-Value="_form.MatterTypeCode" Options="_facets.MatterTypeCodes" Placeholder="Select or type a matter type" />
+                                <SearchableSelect @bind-Value="_form.MatterTypeCode" LabeledOptions="_matterTypeOptions" AllowCustom="false" Placeholder="Select a matter type" />
                                 <ValidationMessage For="() => _form.MatterTypeCode" class="text-danger" />
+                            </label>
+                            <label class="um-field">
+                                <span class="um-field-label">Subtype</span>
+                                <SearchableSelect @bind-Value="_form.DomainPackMatterTypeCode" LabeledOptions="SubtypeOptionsForSelectedType" AllowCustom="false" Placeholder="Select a subtype" />
+                                <ValidationMessage For="() => _form.DomainPackMatterTypeCode" class="text-danger" />
                             </label>
                             <label class="um-field">
                                 <span class="um-field-label">Jurisdiction</span>
@@ -292,11 +297,6 @@
                                 <span class="um-field-label">Posture</span>
                                 <SearchableSelect @bind-Value="_form.Posture" Options="_facets.Postures" Placeholder="Select or type a posture" />
                                 <ValidationMessage For="() => _form.Posture" class="text-danger" />
-                            </label>
-                            <label class="um-field">
-                                <span class="um-field-label">Subtype</span>
-                                <SearchableSelect @bind-Value="_form.Subtype" Options="_facets.Subtypes" Placeholder="Select or type a subtype" />
-                                <ValidationMessage For="() => _form.Subtype" class="text-danger" />
                             </label>
                             <label class="um-field">
                                 <span class="um-field-label">Court system</span>
@@ -420,7 +420,22 @@
     private DecisionMatterDto? _matter;
     private IReadOnlyCollection<DecisionSessionSummaryDto> _sessions = [];
     private DecisionMatterFacetsDto _facets = new([], [], []);
+    // 0455: DB-backed Domain Pack matter-type vocabulary for the normalized matter binding.
+    // 0458: DB-backed broad Matter Type catalog + packs for the type -> subtype cascade.
+    // 0460: canonical MatterType -> Subtype catalog (Legal_MatterSubtype) drives the cascade.
+    private IReadOnlyCollection<DecisionDomainPackDto> _packs = [];
+    private IReadOnlyCollection<MatterSubtypeDto> _matterSubtypes = [];
+    private IReadOnlyList<SearchableSelect.Item> _matterTypeOptions = [];
     private MatterEditForm _form = new();
+
+    private IReadOnlyList<SearchableSelect.Item> SubtypeOptionsForSelectedType
+        => _matterSubtypes
+            .Where(s => !string.IsNullOrWhiteSpace(_form.MatterTypeCode)
+                     && string.Equals(s.MatterTypeCode, _form.MatterTypeCode, StringComparison.OrdinalIgnoreCase))
+            .Select(s => new SearchableSelect.Item(s.Code, s.Name))
+            .DistinctBy(i => i.Value, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(i => i.Label, StringComparer.OrdinalIgnoreCase)
+            .ToList();
     private PersonalInjuryProfileEditor? _piEditor;
 
     private async Task SavePiProfileAsync()
@@ -452,6 +467,10 @@
         {
             _matter = await Api.GetLegalDecisionMatterAsync(MatterId);
             _facets = await Api.GetLegalDecisionMatterFacetsAsync();
+            _matterTypeOptions = (await Api.GetLegalDecisionMatterTypesAsync())
+                .Select(t => new SearchableSelect.Item(t.Code, t.Name)).ToList();
+            _matterSubtypes = await Api.GetLegalDecisionMatterSubtypesAsync();
+            _packs = await Api.GetLegalDecisionDomainPacksAsync();
             Breadcrumbs.SetCrumbs(
                 new("Home", "/"),
                 new("Intelligence", "/intelligence"),
@@ -499,6 +518,7 @@
         {
             Title = _matter.Title,
             MatterTypeCode = _matter.MatterTypeCode,
+            DomainPackMatterTypeCode = _matter.DomainPackMatterTypeCode,
             Jurisdiction = _matter.Jurisdiction,
             Posture = _matter.Posture,
             Subtype = _matter.Subtype,
@@ -524,6 +544,16 @@
         StateHasChanged();
         try
         {
+            // 0460: the form binds machine codes; subtype display Name comes from the canonical catalog.
+            // Legacy free text already in _form.Subtype is preserved when no subtype is selected.
+            var subtypeCode = string.IsNullOrWhiteSpace(_form.DomainPackMatterTypeCode) ? null : _form.DomainPackMatterTypeCode.Trim();
+            var subtypeRow = subtypeCode is null ? null : _matterSubtypes.FirstOrDefault(s =>
+                string.Equals(s.MatterTypeCode, _form.MatterTypeCode, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(s.Code, subtypeCode, StringComparison.OrdinalIgnoreCase));
+            var owningPack = subtypeCode is null ? null : _packs.FirstOrDefault(p =>
+                string.Equals(p.MatterTypeCode, _form.MatterTypeCode, StringComparison.OrdinalIgnoreCase)
+                && p.MatterTypes.Any(mt => string.Equals(mt.SubtypeCode, subtypeCode, StringComparison.OrdinalIgnoreCase)));
+            var subtypeName = subtypeRow?.Name;
             var request = new DecisionMatterUpdateRequest(
                 _form.Title.Trim(),
                 string.IsNullOrWhiteSpace(_form.MatterTypeCode) ? null : _form.MatterTypeCode.Trim(),
@@ -531,7 +561,11 @@
                 string.IsNullOrWhiteSpace(_form.Posture) ? null : _form.Posture.Trim(),
                 string.IsNullOrWhiteSpace(_form.Description) ? null : _form.Description.Trim())
             {
-                Subtype = string.IsNullOrWhiteSpace(_form.Subtype) ? null : _form.Subtype.Trim(),
+                PracticeAreaCode = _matter?.PracticeAreaCode,
+                ClaimTypeCode = _matter?.ClaimTypeCode,
+                DomainPackCode = owningPack?.PackCode ?? _matter?.DomainPackCode,
+                DomainPackMatterTypeCode = subtypeCode,
+                Subtype = subtypeName ?? (string.IsNullOrWhiteSpace(_form.Subtype) ? null : _form.Subtype.Trim()),
                 CourtSystem = string.IsNullOrWhiteSpace(_form.CourtSystem) ? null : _form.CourtSystem.Trim(),
                 State = string.IsNullOrWhiteSpace(_form.State) ? null : _form.State.Trim(),
                 CourtLevel = string.IsNullOrWhiteSpace(_form.CourtLevel) ? null : _form.CourtLevel.Trim(),
@@ -608,6 +642,9 @@
     {
         [Required, StringLength(300, MinimumLength = 2)]
         public string Title { get; set; } = string.Empty;
+
+        [StringLength(120)]
+        public string? DomainPackMatterTypeCode { get; set; }
 
         [StringLength(80)]
         public string? MatterTypeCode { get; set; }

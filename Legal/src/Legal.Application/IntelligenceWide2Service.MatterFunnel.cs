@@ -364,10 +364,14 @@ public sealed partial class IntelligenceWide2Service
         if(evidence is not null)
         {
             if(_matterDocumentEvidenceTypeCodes.Contains(evidence.EvidenceTypeCode)){score+=0.35m;reasons.Add("Uploaded document classified as this evidence type");}
-            if(!string.IsNullOrWhiteSpace(evidence.MatterTypeCodes)&&_matterTypeSignals.Length>0)
+            // 0455: normalized junction tags are the source of truth; the comma MatterTypeCodes string is
+            // kept only as a deprecated fallback for packs not yet migrated.
+            var matterTypeTags=evidence.MatterTypeCodeTags.Count>0
+                ?evidence.MatterTypeCodeTags
+                :(IReadOnlyCollection<string>)(evidence.MatterTypeCodes?.Split(',',StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries)??[]);
+            if(matterTypeTags.Count>0&&_matterTypeSignals.Length>0)
             {
-                var codes=evidence.MatterTypeCodes.Split(',',StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries);
-                var matched=_matterTypeSignals.FirstOrDefault(signal=>codes.Any(c=>string.Equals(c,signal,StringComparison.OrdinalIgnoreCase)||signal.Contains(c,StringComparison.OrdinalIgnoreCase)||c.Contains(signal,StringComparison.OrdinalIgnoreCase)));
+                var matched=_matterTypeSignals.FirstOrDefault(signal=>matterTypeTags.Any(c=>string.Equals(c,signal,StringComparison.OrdinalIgnoreCase)||signal.Contains(c,StringComparison.OrdinalIgnoreCase)||c.Contains(signal,StringComparison.OrdinalIgnoreCase)));
                 if(matched is not null){score+=0.15m;reasons.Add($"Matter type match ({matched})");}
             }
             if(!string.IsNullOrWhiteSpace(evidence.RelevanceKeywords))

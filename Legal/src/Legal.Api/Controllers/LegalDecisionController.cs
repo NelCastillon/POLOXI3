@@ -270,6 +270,18 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
     public async Task<IActionResult> MatterFacets(CancellationToken cancellationToken)
         => Ok(await service.GetMatterFacetsAsync(TenantId, cancellationToken));
 
+    // Migration 0458: broad six-factor Matter Type lookup catalog (Legal_MatterType).
+    [HttpGet("mattertypes")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> MatterTypes(CancellationToken cancellationToken)
+        => Ok(await service.GetMatterTypesAsync(TenantId, cancellationToken));
+
+    // Migration 0460: canonical MatterType -> Subtype catalog (Legal_MatterSubtype).
+    [HttpGet("mattersubtypes")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> MatterSubtypes(CancellationToken cancellationToken)
+        => Ok(await service.GetMatterSubtypesAsync(TenantId, cancellationToken));
+
     // Database-backed Domain Pack (practice-area domain semantics) for the decision cockpit.
     [HttpGet("domainpacks")]
     [Authorize(Policy = IntelligencePolicies.Search)]

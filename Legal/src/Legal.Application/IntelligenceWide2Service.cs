@@ -24,12 +24,17 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     private int _progressCompetingOutcomes;
     private int _progressIdentifiedFactors;
     private int _progressAdmittedEvidence;
+    // Evidence types that survived every deterministic gate and were materialized as L2 branches for
+    // L3 generation. Summed across dimensions by BuildDomainPackLevel2Branches.
+    private int _progressEligibleEvidenceTypes;
+    // Evidence types that also survived the matter funnel / Blended Score gate and were dispatched to L3.
+    private int _progressL3EvidenceTypes;
     private async Task PublishProgressAsync(string phase,string readiness,bool isProvisional,string? message,CancellationToken cancellationToken)
     {
         if(string.IsNullOrEmpty(_progressCorrelationId))return;
         try
         {
-            await _progressPublisher.PublishAsync(new Wide2ProgressUpdate(_progressCorrelationId,phase,_progressCompetingOutcomes,_progressIdentifiedFactors,_progressAdmittedEvidence,readiness,isProvisional,message),cancellationToken);
+            await _progressPublisher.PublishAsync(new Wide2ProgressUpdate(_progressCorrelationId,phase,_progressCompetingOutcomes,_progressIdentifiedFactors,_progressAdmittedEvidence,readiness,isProvisional,message,_progressEligibleEvidenceTypes,_progressL3EvidenceTypes),cancellationToken);
         }
         catch(Exception ex)
         {
@@ -131,6 +136,12 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     private IReadOnlyList<DecisionDomainPackIncidentFamilyDto> _packIncidentFamilies=[];
     private IReadOnlyList<DecisionDomainConceptRelationDto> _packConceptRelations=[];
     private IReadOnlySet<string> _matterIncidentFamilies=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    // 0455: the matter's authoritative Domain Pack matter-type binding (null = no deterministic matter-type filter).
+    private string? _matterDomainPackMatterTypeCode;
+    // 0461 broad-type gate: canonical subtype codes belonging to the matter's broad MatterTypeCode
+    // (Legal_MatterType -> Legal_MatterSubtype). Lets the deterministic Evidence Type gate exclude types
+    // tagged exclusively to OTHER matter types' subtypes even when the matter has no subtype binding.
+    private IReadOnlySet<string> _matterTypeSubtypeCodes=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     private string? _matterJurisdiction;
     private readonly Dictionary<string,string> _deterministicExclusions=new(StringComparer.OrdinalIgnoreCase);
     private IReadOnlyList<LegalEvidenceGraphItemDto> _matterPassageIndex=[];
@@ -718,6 +729,8 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         _packIncidentFamilies=[];
         _packConceptRelations=[];
         _matterIncidentFamilies=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        _matterDomainPackMatterTypeCode=null;
+        _matterTypeSubtypeCodes=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         _matterJurisdiction=null;
         _deterministicExclusions.Clear();
         _matterPassageIndex=[];
@@ -751,6 +764,8 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         _progressCompetingOutcomes=0;
         _progressIdentifiedFactors=0;
         _progressAdmittedEvidence=0;
+        _progressEligibleEvidenceTypes=0;
+        _progressL3EvidenceTypes=0;
         await PublishProgressAsync("ANALYZING","Analyzing…",true,"Interpreting the question",cancellationToken);
         // 'POLOXI Engine' filter disabled: pure LLM answer, no hierarchy, grounding, or elimination.
         if(!request.UsePoloxiEngine)return await SearchLlmOnlyAsync(request,timer,cancellationToken);
@@ -3677,7 +3692,26 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 logger.LogWarning("Wide2 MATTER_CONTEXT_INCOHERENT for matter {MatterId}: {Warning} The saved value is sent to the model unchanged; repair the matter record to avoid contaminated relevance explanations.",matterId,warning);
             // The PI profile IncidentTypeCode (e.g. "Side-impact Collision") is the most specific incident signal the
             // matter carries; MatterTypeCode/Subtype alone ("Personal Injury") cannot narrow the evidence catalog.
-            _matterTypeSignals=new[]{matter.MatterTypeCode,matter.Subtype,matter.ClaimTypeCode,profile?.IncidentTypeCode}.Where(value=>!string.IsNullOrWhiteSpace(value)).Select(value=>value!.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            // 0458: broad/subtype display Names ride alongside the machine codes so both exact code matching and
+            // semantic name/family matching work; the deterministic L2 gate below stays code-only.
+            _matterTypeSignals=new[]{matter.MatterTypeCode,matter.MatterTypeName,matter.Subtype,matter.DomainPackMatterTypeName,matter.ClaimTypeCode,profile?.IncidentTypeCode}.Where(value=>!string.IsNullOrWhiteSpace(value)).Select(value=>value!.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            // 0455: the normalized matter-type binding drives the deterministic Evidence Type matter-type gate.
+            _matterDomainPackMatterTypeCode=string.IsNullOrWhiteSpace(matter.DomainPackMatterTypeCode)?null:matter.DomainPackMatterTypeCode.Trim();
+            // 0461 broad-type gate: resolve ALL canonical subtype codes of the matter's broad MatterTypeCode
+            // (matter.MatterTypeCode -> Legal_MatterType -> Legal_MatterSubtype). Table lookup only - no
+            // per-matter subtype binding or UI input needed. Fail-soft: an empty set keeps the gate fail-open.
+            if(!string.IsNullOrWhiteSpace(matter.MatterTypeCode))
+            {
+                try
+                {
+                    var subtypeCatalog=await legalDecisionRepository.GetMatterSubtypesAsync(tenantId,cancellationToken);
+                    _matterTypeSubtypeCodes=subtypeCatalog
+                        .Where(s=>string.Equals(s.MatterTypeCode,matter.MatterTypeCode.Trim(),StringComparison.OrdinalIgnoreCase))
+                        .Select(s=>s.Code.Trim())
+                        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                }
+                catch(Exception)when(!cancellationToken.IsCancellationRequested){/* catalog advisory; gate stays fail-open */}
+            }
             _matterJurisdiction=!string.IsNullOrWhiteSpace(matter.Jurisdiction) ? matter.Jurisdiction.Trim() : !string.IsNullOrWhiteSpace(profile?.IncidentState) ? profile.IncidentState.Trim() : null;
             // Validated Candidate Competition (0339): load the DB-backed proposition fact-binding config once
             // per run so supplied values are validated BEFORE they can establish a proposition. Fail-soft: a
@@ -3774,7 +3808,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                                 // Authoritative Legal_DecisionMatter / PI profile fields are NEVER mutated here. Fail-soft.
                                 try
                                 {
-                                    var proposerInput=new MatterClassificationProposer.Inputs(matter.MatterTypeCode,matter.Subtype,matter.ClaimTypeCode,profile?.IncidentTypeCode,matter.MotionTarget,matter.RequestedDisposition,matter.Posture,familyScope,_packIncidentFamilies,null);
+                                    var proposerInput=new MatterClassificationProposer.Inputs(matter.MatterTypeName??matter.MatterTypeCode,matter.DomainPackMatterTypeName??matter.Subtype,matter.ClaimTypeCode,profile?.IncidentTypeCode,matter.MotionTarget,matter.RequestedDisposition,matter.Posture,familyScope,_packIncidentFamilies,null);
                                     var proposals=MatterClassificationProposer.Propose(proposerInput).ToList();
                                     if(MatterClassificationProposer.DecisionContextNote(proposerInput) is{}note)proposals.Add(note);
                                     if(proposals.Count>0)
@@ -5004,6 +5038,14 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             if(rule is{EffectCode:"EXCLUDE"}){excluded++;RecordScope(code,"EVIDENCE_TYPE",evidence.EvidenceTypeCode,dimensionCode,name,WideScopeStatuses.ExcludedByRule,"RULE",rule.Reason??$"{rule.SignalKindCode}={rule.SignalValue}",false,evidence.IsRequiredCoverage,false);continue;}
             var eligibility=DomainPackScopeEligibility.EvaluateEvidenceType(evidence,_matterIncidentFamilies);
             if(!eligibility.IsEligible){deterministicExcluded++;_deterministicExclusions[evidence.EvidenceTypeCode]=$"{eligibility.ExclusionCode}: {eligibility.Reason}";RecordScope(code,"EVIDENCE_TYPE",evidence.EvidenceTypeCode,dimensionCode,name,WideScopeStatuses.ExcludedDeterministic,"SYSTEM",_deterministicExclusions[evidence.EvidenceTypeCode],false,evidence.IsRequiredCoverage,false);continue;}
+            // 0455/0461: deterministic matter-type gate from the normalized junction. A bound subtype narrows to
+            // that subtype; an unbound matter still excludes types tagged only to OTHER matter types' subtypes
+            // (broad-type catalog lookup). Required-coverage types are never excluded; untagged types stay eligible.
+            if(!evidence.IsRequiredCoverage)
+            {
+                var matterTypeEligibility=DomainPackScopeEligibility.EvaluateEvidenceTypeMatterType(evidence,_matterDomainPackMatterTypeCode,_matterTypeSubtypeCodes);
+                if(!matterTypeEligibility.IsEligible){deterministicExcluded++;_deterministicExclusions[evidence.EvidenceTypeCode]=$"{matterTypeEligibility.ExclusionCode}: {matterTypeEligibility.Reason}";RecordScope(code,"EVIDENCE_TYPE",evidence.EvidenceTypeCode,dimensionCode,name,WideScopeStatuses.ExcludedDeterministic,"SYSTEM",_deterministicExclusions[evidence.EvidenceTypeCode],false,evidence.IsRequiredCoverage,false);continue;}
+            }
             // DocumentPresent is INDEPENDENT of lexical/passage matching: only a DIRECT classification of an
             // uploaded document proves a document of this type exists. Lexical presence stays an ordering signal.
             var isPresent=_matterDocumentEvidenceTypeCodes.Contains(evidence.EvidenceTypeCode);

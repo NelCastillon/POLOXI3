@@ -423,7 +423,7 @@ public sealed partial class LegalDecisionService(
             }),
             MatterTypes = domainPack.MatterTypes.Select(matterType => new
             {
-                matterType.MatterTypeCode,
+                matterType.SubtypeCode,
                 matterType.Name,
                 matterType.Description,
             }),
@@ -752,6 +752,12 @@ public sealed partial class LegalDecisionService(
 
     public Task<DecisionMatterFacetsDto> GetMatterFacetsAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => repository.GetMatterFacetsAsync(tenantId, cancellationToken);
+
+    public Task<IReadOnlyCollection<MatterTypeDto>> GetMatterTypesAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => repository.GetMatterTypesAsync(tenantId, cancellationToken);
+
+    public Task<IReadOnlyCollection<MatterSubtypeDto>> GetMatterSubtypesAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => repository.GetMatterSubtypesAsync(tenantId, cancellationToken);
 
     public Task<DecisionDomainPackDto?> GetDomainPackAsync(Guid tenantId, string packCode, CancellationToken cancellationToken = default)
         => repository.GetDomainPackAsync(tenantId, packCode, cancellationToken);

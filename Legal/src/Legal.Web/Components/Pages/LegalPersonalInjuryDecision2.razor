@@ -192,7 +192,8 @@
                                             <span class="dfi-pipeline-flag dfi-pipeline-flag--offline" title="@(_liveFeedError ?? "Live feed not connected — showing estimated progress.")"><i class="bi bi-wifi-off" aria-hidden="true"></i> Offline</span>
                                         }
                                         <span title="Competing outcomes"><i class="bi bi-list-ul" aria-hidden="true"></i> @DfiLiveCompetingOutcomes</span>
-                                        <span title="Identified factors"><i class="bi bi-diagram-2" aria-hidden="true"></i> @DfiLiveFactorCount</span>
+                                        <span title="Eligible evidence types (deterministic subtype gate)"><i class="bi bi-diagram-2" aria-hidden="true"></i> @DfiLiveL3EvidenceTypeCount</span>
+                                        <span title="Evidence types sent to L3 generation (after Blended Score gate)"><i class="bi bi-funnel" aria-hidden="true"></i> @DfiLiveL3DispatchedEvidenceTypeCount</span>
                                         <span title="Admitted evidence"><i class="bi bi-chat-square-text" aria-hidden="true"></i> @DfiLiveEvidenceCount</span>
                                         <span title="Elapsed"><i class="bi bi-stopwatch" aria-hidden="true"></i> @DfiPipelineElapsed</span>
                                     </div>
@@ -6867,6 +6868,14 @@
 
     internal int DfiLiveCompetingOutcomes => DfiLiveProvisional ? _liveProgress!.CompetingOutcomes : DfiCompetingOutcomes;
     internal int DfiLiveFactorCount => DfiLiveProvisional ? _liveProgress!.IdentifiedFactors : DfiFactorCount;
+    // Evidence types that actually fed L3 generation: live frames carry the deterministic in-scope count
+    // from the Domain Pack L2 build; after completion we count the surviving EVD_ branches in the result.
+    internal int DfiLiveL3EvidenceTypeCount => DfiLiveProvisional ? _liveProgress!.EligibleEvidenceTypes : DfiL3EvidenceTypeCount;
+    internal int DfiL3EvidenceTypeCount => _response?.Branches.Count(b => !b.IsEliminated && b.BranchCode.StartsWith("EVD_", StringComparison.OrdinalIgnoreCase)) ?? 0;
+    // Evidence types dispatched to LLM L3 proposition generation after the Blended Score scope gate and
+    // deferral routing. After completion the last live value is authoritative (the response does not
+    // distinguish held-back parents), so the synthesized COMPLETED snapshot carries it forward.
+    internal int DfiLiveL3DispatchedEvidenceTypeCount => _liveProgress?.L3EvidenceTypes ?? 0;
     internal int DfiLiveEvidenceCount => DfiLiveProvisional ? _liveProgress!.AdmittedEvidence : TotalEvidenceCount;
     internal string DfiLiveReadinessLabel => DfiLiveProvisional ? _liveProgress!.DecisionReadiness : DfiReadinessLabel;
     internal string DfiLiveReadinessTone => DfiLiveProvisional ? "warn" : DfiReadinessTone;
@@ -7076,7 +7085,9 @@
                 lastCounts?.CompetingOutcomes ?? DfiCompetingOutcomes,
                 lastCounts?.IdentifiedFactors ?? DfiFactorCount,
                 lastCounts?.AdmittedEvidence ?? TotalEvidenceCount,
-                DfiReadinessLabel, false, DfiExecutionCompleteLabel);
+                DfiReadinessLabel, false, DfiExecutionCompleteLabel,
+                lastCounts?.EligibleEvidenceTypes ?? DfiL3EvidenceTypeCount,
+                lastCounts?.L3EvidenceTypes ?? 0);
             _liveProgress = completed;
             RecordLivePhase(completed);
             await InvokeAsync(StateHasChanged);

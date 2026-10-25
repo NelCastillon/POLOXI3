@@ -137,8 +137,9 @@ public static class MatterContextSnapshotBuilder
         {
             Supplied("Original Question", originalQuestion),
             Supplied("Matter Title", matter.Title),
-            Supplied("Decision Type", matter.MatterTypeCode),
-            Supplied("Subtype", matter.Subtype),
+            // 0458: display Name from the broad Legal_MatterType lookup; machine code only as fallback.
+            Supplied("Decision Type", matter.MatterTypeName ?? matter.MatterTypeCode),
+            Supplied("Subtype", matter.DomainPackMatterTypeName ?? matter.Subtype),
             Supplied("Requested Disposition", matter.RequestedDisposition),
             Supplied("Current Outcome", matter.CurrentOutcome),
             Supplied("Posture", matter.Posture),

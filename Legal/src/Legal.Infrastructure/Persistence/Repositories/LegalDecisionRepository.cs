@@ -1296,6 +1296,11 @@ public sealed partial class LegalDecisionRepository(ISqlConnectionFactory connec
                 m.Subtype, m.CourtSystem, m.State, m.CourtLevel, m.County, m.GoverningLaw,
                 m.MovingParty, m.RespondingParty, m.MotionTarget, m.RequestedDisposition, m.AdditionalNarrative,
                 m.MatterScopeOutThreshold,
+                m.MatterSubtypeId,
+                sub.Code           AS DomainPackMatterTypeCode,
+                sub.Name           AS DomainPackMatterTypeName,
+                m.MatterTypeId,
+                bmt.Name           AS MatterTypeName,
                 m.CreatedDateUtc, m.ModifiedDateUtc,
                 s.DecisionSessionId AS LatestSessionId,
                 c.DisplayName       AS CurrentOutcome,
@@ -1304,6 +1309,10 @@ public sealed partial class LegalDecisionRepository(ISqlConnectionFactory connec
                 (SELECT COUNT(1) FROM POLOXI.Legal_DecisionFlipPoint fp
                     WHERE fp.IsDeleted = 0 AND fp.DecisionSessionId = s.DecisionSessionId AND fp.WinnerChanges = 1) AS CriticalFlipPointCount
             FROM POLOXI.Legal_DecisionMatter m
+            LEFT JOIN POLOXI.Legal_MatterSubtype sub
+                ON sub.IsDeleted = 0 AND sub.MatterSubtypeId = m.MatterSubtypeId
+            LEFT JOIN POLOXI.Legal_MatterType bmt
+                ON bmt.IsDeleted = 0 AND bmt.MatterTypeId = m.MatterTypeId
             OUTER APPLY (
                 SELECT TOP 1 ss.DecisionSessionId, ss.StatusCode, ss.WinnerCandidateId, ss.CreatedDateUtc
                 FROM POLOXI.Legal_DecisionSession ss
@@ -1331,6 +1340,11 @@ public sealed partial class LegalDecisionRepository(ISqlConnectionFactory connec
                 m.Subtype, m.CourtSystem, m.State, m.CourtLevel, m.County, m.GoverningLaw,
                 m.MovingParty, m.RespondingParty, m.MotionTarget, m.RequestedDisposition, m.AdditionalNarrative,
                 m.MatterScopeOutThreshold,
+                m.MatterSubtypeId,
+                sub.Code           AS DomainPackMatterTypeCode,
+                sub.Name           AS DomainPackMatterTypeName,
+                m.MatterTypeId,
+                bmt.Name           AS MatterTypeName,
                 m.CreatedDateUtc, m.ModifiedDateUtc,
                 s.DecisionSessionId AS LatestSessionId,
                 c.DisplayName       AS CurrentOutcome,
@@ -1339,6 +1353,10 @@ public sealed partial class LegalDecisionRepository(ISqlConnectionFactory connec
                 (SELECT COUNT(1) FROM POLOXI.Legal_DecisionFlipPoint fp
                     WHERE fp.IsDeleted = 0 AND fp.DecisionSessionId = s.DecisionSessionId AND fp.WinnerChanges = 1) AS CriticalFlipPointCount
             FROM POLOXI.Legal_DecisionMatter m
+            LEFT JOIN POLOXI.Legal_MatterSubtype sub
+                ON sub.IsDeleted = 0 AND sub.MatterSubtypeId = m.MatterSubtypeId
+            LEFT JOIN POLOXI.Legal_MatterType bmt
+                ON bmt.IsDeleted = 0 AND bmt.MatterTypeId = m.MatterTypeId
             OUTER APPLY (
                 SELECT TOP 1 ss.DecisionSessionId, ss.StatusCode, ss.WinnerCandidateId, ss.CreatedDateUtc
                 FROM POLOXI.Legal_DecisionSession ss
@@ -1376,17 +1394,22 @@ public sealed partial class LegalDecisionRepository(ISqlConnectionFactory connec
                 "A matter with the same title, type, and jurisdiction already exists.", duplicateId);
 
         var id = Guid.NewGuid();
+        // Migration 0461: resolve the canonical subtype FK from the supplied subtype code (fail-open).
+        var matterSubtypeId = await ResolveMatterSubtypeIdAsync(
+            connection, tenantId, request.MatterTypeCode, request.DomainPackMatterTypeCode, cancellationToken);
+        // Migration 0458: resolve the broad Matter Type lookup FK from the supplied broad code (fail-open).
+        var matterTypeId = await ResolveMatterTypeIdAsync(connection, tenantId, request.MatterTypeCode, cancellationToken);
         try
         {
             await connection.ExecuteAsync(new CommandDefinition(
                 """
                 INSERT INTO POLOXI.Legal_DecisionMatter
-                    (DecisionMatterId, Title, MatterTypeCode, Jurisdiction, Posture, Description, StatusCode, TenantId, CreatedByUserId,
-                     PracticeAreaCode, ClaimTypeCode, DomainPackCode,
+                    (DecisionMatterId, Title, MatterTypeCode, MatterTypeId, Jurisdiction, Posture, Description, StatusCode, TenantId, CreatedByUserId,
+                     PracticeAreaCode, ClaimTypeCode, DomainPackCode, MatterSubtypeId,
                      Subtype, CourtSystem, State, CourtLevel, County, GoverningLaw, MovingParty, RespondingParty, MotionTarget, RequestedDisposition, AdditionalNarrative)
                 VALUES
-                    (@DecisionMatterId, @Title, @MatterTypeCode, @Jurisdiction, @Posture, @Description, N'OPEN', @TenantId, @UserId,
-                     @PracticeAreaCode, @ClaimTypeCode, @DomainPackCode,
+                    (@DecisionMatterId, @Title, @MatterTypeCode, @MatterTypeId, @Jurisdiction, @Posture, @Description, N'OPEN', @TenantId, @UserId,
+                     @PracticeAreaCode, @ClaimTypeCode, @DomainPackCode, @MatterSubtypeId,
                      @Subtype, @CourtSystem, @State, @CourtLevel, @County, @GoverningLaw, @MovingParty, @RespondingParty, @MotionTarget, @RequestedDisposition, @AdditionalNarrative);
                 """,
                 new
@@ -1394,12 +1417,14 @@ public sealed partial class LegalDecisionRepository(ISqlConnectionFactory connec
                     DecisionMatterId = id,
                     request.Title,
                     request.MatterTypeCode,
+                    MatterTypeId = matterTypeId,
                     request.Jurisdiction,
                     request.Posture,
                     request.Description,
                     request.PracticeAreaCode,
                     request.ClaimTypeCode,
                     request.DomainPackCode,
+                    MatterSubtypeId = matterSubtypeId,
                     request.Subtype,
                     request.CourtSystem,
                     request.State,
@@ -1433,8 +1458,104 @@ public sealed partial class LegalDecisionRepository(ISqlConnectionFactory connec
             (matterTypeCode ?? string.Empty).Trim().ToLowerInvariant(),
             (jurisdiction ?? string.Empty).Trim().ToLowerInvariant());
 
+    // Migration 0461: resolves the canonical Legal_MatterSubtype row for the matter's broad
+    // Matter Type and supplied subtype code. Fail-open — null/blank/unknown code returns NULL
+    // so the matter simply receives no deterministic matter-type filtering.
+    private static async Task<Guid?> ResolveMatterSubtypeIdAsync(
+        System.Data.IDbConnection connection, Guid tenantId, string? broadMatterTypeCode, string? subtypeCode, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(subtypeCode))
+            return null;
 
-    // ── Domain Pack (practice-area domain semantics) ─────────────────────────────────────────────
+        return await connection.QuerySingleOrDefaultAsync<Guid?>(new CommandDefinition(
+            """
+            SELECT TOP 1 s.MatterSubtypeId
+            FROM POLOXI.Legal_MatterSubtype s
+            JOIN POLOXI.Legal_MatterType t
+              ON t.MatterTypeId = s.MatterTypeId AND t.IsDeleted = 0
+            WHERE s.IsDeleted = 0 AND s.IsActive = 1
+              AND (s.TenantId = @TenantId OR s.TenantId IS NULL)
+              AND LOWER(LTRIM(RTRIM(s.Code))) = LOWER(LTRIM(RTRIM(@SubtypeCode)))
+              AND (@BroadMatterTypeCode IS NULL OR LOWER(LTRIM(RTRIM(t.Code))) = LOWER(LTRIM(RTRIM(@BroadMatterTypeCode))))
+            ORDER BY CASE WHEN s.TenantId = @TenantId THEN 0 ELSE 1 END, s.SortOrder;
+            """,
+            new
+            {
+                TenantId = tenantId,
+                BroadMatterTypeCode = string.IsNullOrWhiteSpace(broadMatterTypeCode) ? null : broadMatterTypeCode,
+                SubtypeCode = subtypeCode
+            },
+            cancellationToken: cancellationToken));
+    }
+
+    // Migration 0458: resolves the broad Legal_MatterType lookup row from its stable machine code
+    // (e.g. PERSONAL_INJURY). Fail-open — null/blank/unknown code returns NULL (legacy free text kept).
+    private static async Task<Guid?> ResolveMatterTypeIdAsync(
+        System.Data.IDbConnection connection, Guid tenantId, string? matterTypeCode, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(matterTypeCode))
+            return null;
+
+        return await connection.QuerySingleOrDefaultAsync<Guid?>(new CommandDefinition(
+            """
+            SELECT TOP 1 MatterTypeId
+            FROM POLOXI.Legal_MatterType
+            WHERE IsDeleted = 0 AND IsActive = 1
+              AND (TenantId = @TenantId OR TenantId IS NULL)
+              AND LOWER(LTRIM(RTRIM(Code))) = LOWER(LTRIM(RTRIM(@Code)))
+            ORDER BY CASE WHEN TenantId = @TenantId THEN 0 ELSE 1 END, SortOrder;
+            """,
+            new { TenantId = tenantId, Code = matterTypeCode },
+            cancellationToken: cancellationToken));
+    }
+
+    // Migration 0458: broad Matter Type catalog (global rows TenantId NULL; tenant rows override).
+    public async Task<IReadOnlyCollection<MatterTypeDto>> GetMatterTypesAsync(Guid tenantId, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var rows = await connection.QueryAsync<MatterTypeDto>(new CommandDefinition(
+            """
+            WITH Ranked AS
+            (
+                SELECT MatterTypeId, Code, Name, Description, SortOrder,
+                       ROW_NUMBER() OVER (PARTITION BY Code ORDER BY CASE WHEN TenantId = @TenantId THEN 0 ELSE 1 END, SortOrder) AS ScopeRank
+                FROM POLOXI.Legal_MatterType
+                WHERE IsDeleted = 0 AND IsActive = 1
+                  AND (TenantId = @TenantId OR TenantId IS NULL)
+            )
+            SELECT MatterTypeId, Code, Name, Description, SortOrder
+            FROM Ranked WHERE ScopeRank = 1 ORDER BY SortOrder, Name;
+            """,
+            new { TenantId = tenantId },
+            cancellationToken: cancellationToken));
+        return rows.ToArray();
+    }
+
+    // Migration 0460: canonical MatterType -> Subtype catalog (global rows TenantId NULL; tenant rows override).
+    public async Task<IReadOnlyCollection<MatterSubtypeDto>> GetMatterSubtypesAsync(Guid tenantId, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var rows = await connection.QueryAsync<MatterSubtypeDto>(new CommandDefinition(
+            """
+            WITH Ranked AS
+            (
+                SELECT s.MatterSubtypeId, s.MatterTypeId, t.Code AS MatterTypeCode, s.Code, s.Name, s.Description, s.SortOrder,
+                       ROW_NUMBER() OVER (PARTITION BY s.MatterTypeId, s.Code ORDER BY CASE WHEN s.TenantId = @TenantId THEN 0 ELSE 1 END, s.SortOrder) AS ScopeRank
+                FROM POLOXI.Legal_MatterSubtype s
+                JOIN POLOXI.Legal_MatterType t ON t.MatterTypeId = s.MatterTypeId AND t.IsDeleted = 0
+                WHERE s.IsDeleted = 0 AND s.IsActive = 1
+                  AND (s.TenantId = @TenantId OR s.TenantId IS NULL)
+            )
+            SELECT MatterSubtypeId, MatterTypeId, MatterTypeCode, Code, Name, Description, SortOrder
+            FROM Ranked WHERE ScopeRank = 1 ORDER BY MatterTypeCode, SortOrder, Name;
+            """,
+            new { TenantId = tenantId },
+            cancellationToken: cancellationToken));
+        return rows.ToArray();
+    }
+
+
+    // ── Domain Pack (practice-area domain semantics) ───────────────────────────────────────────
     // Loads a database-backed Domain Pack (global default rows use TenantId NULL; tenant rows override)
     // with its dimensions, evidence types, verification profiles, and matter-type taxonomy. Advisory
     // configuration only — POLOXI Core decision reasoning is unchanged.
@@ -1443,7 +1564,7 @@ public sealed partial class LegalDecisionRepository(ISqlConnectionFactory connec
         using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         var pack = await connection.QuerySingleOrDefaultAsync<DomainPackRow>(new CommandDefinition(
             """
-            SELECT TOP 1 DecisionDomainPackId, PackCode, PracticeAreaCode, Name, Description
+            SELECT TOP 1 DecisionDomainPackId, PackCode, PracticeAreaCode, Name, Description, MatterTypeCode
             FROM POLOXI.Legal_DecisionDomainPack
             WHERE IsDeleted = 0 AND IsActive = 1 AND PackCode = @PackCode
               AND (TenantId = @TenantId OR TenantId IS NULL)
@@ -1464,7 +1585,7 @@ public sealed partial class LegalDecisionRepository(ISqlConnectionFactory connec
             """
             WITH RankedPack AS
             (
-                SELECT DecisionDomainPackId, PackCode, PracticeAreaCode, Name, Description,
+                SELECT DecisionDomainPackId, PackCode, PracticeAreaCode, Name, Description, MatterTypeCode,
                        ROW_NUMBER() OVER
                        (
                            PARTITION BY PackCode
@@ -1474,7 +1595,7 @@ public sealed partial class LegalDecisionRepository(ISqlConnectionFactory connec
                 WHERE IsDeleted = 0 AND IsActive = 1
                   AND (TenantId = @TenantId OR TenantId IS NULL)
             )
-            SELECT DecisionDomainPackId, PackCode, PracticeAreaCode, Name, Description
+            SELECT DecisionDomainPackId, PackCode, PracticeAreaCode, Name, Description, MatterTypeCode
             FROM RankedPack WHERE ScopeRank = 1 ORDER BY PracticeAreaCode, PackCode;
             """,
             new { TenantId = tenantId },
@@ -1502,16 +1623,42 @@ public sealed partial class LegalDecisionRepository(ISqlConnectionFactory connec
             WHERE IsDeleted = 0 AND IsActive = 1 AND DecisionDomainPackId = @PackId ORDER BY SortOrder, Name;
             """, new { PackId = pack.DecisionDomainPackId }, cancellationToken: cancellationToken))).ToArray();
 
+        // Migration 0461: normalized Evidence Type <-> canonical Matter Subtype junction (source of
+        // truth; the comma MatterTypeCodes string above is deprecated). Empty tag set = applies to
+        // every matter type.
+        var matterTypeTagRows = (await connection.QueryAsync<(string EvidenceTypeCode, string MatterTypeCode)>(new CommandDefinition(
+            """
+            SELECT e.EvidenceTypeCode, s.Code AS MatterTypeCode
+            FROM POLOXI.Legal_DecisionDomainPackEvidenceTypeMatterType j
+            JOIN POLOXI.Legal_DecisionDomainPackEvidenceType e ON e.DecisionDomainPackEvidenceTypeId = j.DecisionDomainPackEvidenceTypeId
+            JOIN POLOXI.Legal_MatterSubtype s ON s.MatterSubtypeId = j.MatterSubtypeId
+            WHERE j.IsDeleted = 0 AND e.IsDeleted = 0 AND s.IsDeleted = 0
+              AND e.DecisionDomainPackId = @PackId
+            ORDER BY e.EvidenceTypeCode, s.SortOrder, s.Code;
+            """, new { PackId = pack.DecisionDomainPackId }, cancellationToken: cancellationToken)))
+            .GroupBy(r => r.EvidenceTypeCode, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => (IReadOnlyCollection<string>)g.Select(x => x.MatterTypeCode).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), StringComparer.OrdinalIgnoreCase);
+        if (matterTypeTagRows.Count > 0)
+            evidenceTypes = evidenceTypes
+                .Select(e => matterTypeTagRows.TryGetValue(e.EvidenceTypeCode, out var tags) ? e with { MatterTypeCodeTags = tags } : e)
+                .ToArray();
+
         var profiles = (await connection.QueryAsync<DecisionDomainPackVerificationProfileDto>(new CommandDefinition(
             """
             SELECT ProfileCode, Name, EvidenceTypeCode, Description FROM POLOXI.Legal_DecisionDomainPackVerificationProfile
             WHERE IsDeleted = 0 AND IsActive = 1 AND DecisionDomainPackId = @PackId ORDER BY SortOrder, Name;
             """, new { PackId = pack.DecisionDomainPackId }, cancellationToken: cancellationToken))).ToArray();
 
+        // Migration 0461: pack subtype vocabulary is now derived from the canonical catalog via the
+        // pack's broad MatterTypeCode (one pack per broad type).
         var matterTypes = (await connection.QueryAsync<DecisionDomainPackMatterTypeDto>(new CommandDefinition(
             """
-            SELECT MatterTypeCode, Name, Description FROM POLOXI.Legal_DecisionDomainPackMatterType
-            WHERE IsDeleted = 0 AND IsActive = 1 AND DecisionDomainPackId = @PackId ORDER BY SortOrder, Name;
+            SELECT s.Code AS SubtypeCode, s.Name, s.Description
+            FROM POLOXI.Legal_MatterSubtype s
+            JOIN POLOXI.Legal_MatterType t ON t.MatterTypeId = s.MatterTypeId AND t.IsDeleted = 0
+            JOIN POLOXI.Legal_DecisionDomainPack p ON p.MatterTypeCode = t.Code AND p.IsDeleted = 0
+            WHERE s.IsDeleted = 0 AND s.IsActive = 1 AND p.DecisionDomainPackId = @PackId
+            ORDER BY s.SortOrder, s.Name;
             """, new { PackId = pack.DecisionDomainPackId }, cancellationToken: cancellationToken))).ToArray();
 
         var concepts = (await connection.QueryAsync<DecisionDomainConceptDto>(new CommandDefinition(
@@ -1669,6 +1816,7 @@ public sealed partial class LegalDecisionRepository(ISqlConnectionFactory connec
             pack.DecisionDomainPackId, pack.PackCode, pack.PracticeAreaCode, pack.Name, pack.Description,
             dimensions, evidenceTypes, profiles, matterTypes)
         {
+            MatterTypeCode = pack.MatterTypeCode,
             Concepts = concepts,
             ConceptRelations = conceptRelations,
             OutcomeCandidates = outcomeCandidates,
@@ -1938,17 +2086,29 @@ public sealed partial class LegalDecisionRepository(ISqlConnectionFactory connec
     {
         using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         var packId = await ResolveDomainPackIdAsync(connection, tenantId, packCode, cancellationToken);
+        // Migration 0461: pack subtype vocabulary lives in the canonical catalog, keyed by the
+        // pack's broad MatterTypeCode -> Legal_MatterType.
         await connection.ExecuteAsync(new CommandDefinition(
             """
-            MERGE POLOXI.Legal_DecisionDomainPackMatterType AS target
-            USING (SELECT @PackId AS PackId, @MatterTypeCode AS MatterTypeCode) AS source
-            ON target.DecisionDomainPackId = source.PackId AND target.MatterTypeCode = source.MatterTypeCode AND target.IsDeleted = 0
+            DECLARE @BroadMatterTypeId UNIQUEIDENTIFIER =
+            (
+                SELECT TOP 1 t.MatterTypeId
+                FROM POLOXI.Legal_MatterType t
+                JOIN POLOXI.Legal_DecisionDomainPack p ON p.MatterTypeCode = t.Code AND p.IsDeleted = 0
+                WHERE t.IsDeleted = 0 AND p.DecisionDomainPackId = @PackId
+            );
+            IF @BroadMatterTypeId IS NULL
+                THROW 50001, N'The domain pack has no broad Matter Type mapping; cannot save subtype.', 1;
+
+            MERGE POLOXI.Legal_MatterSubtype AS target
+            USING (SELECT @BroadMatterTypeId AS MatterTypeId, @MatterTypeCode AS Code) AS source
+            ON target.MatterTypeId = source.MatterTypeId AND target.Code = source.Code AND target.IsDeleted = 0
             WHEN MATCHED THEN
                 UPDATE SET Name = @Name, Description = @Description, SortOrder = @SortOrder, IsActive = @IsActive,
                            ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @ActorUserId
             WHEN NOT MATCHED THEN
-                INSERT (DecisionDomainPackId, MatterTypeCode, Name, Description, SortOrder, IsActive, TenantId, CreatedByUserId)
-                VALUES (@PackId, @MatterTypeCode, @Name, @Description, @SortOrder, @IsActive, @TenantId, @ActorUserId);
+                INSERT (MatterTypeId, Code, Name, Description, SortOrder, IsActive, TenantId, CreatedByUserId)
+                VALUES (@BroadMatterTypeId, @MatterTypeCode, @Name, @Description, @SortOrder, @IsActive, @TenantId, @ActorUserId);
             """,
             new
             {
@@ -1968,11 +2128,15 @@ public sealed partial class LegalDecisionRepository(ISqlConnectionFactory connec
     {
         using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         var packId = await ResolveDomainPackIdAsync(connection, tenantId, packCode, cancellationToken);
+        // Migration 0461: soft-delete the canonical subtype row for the pack's broad Matter Type.
         var affected = await connection.ExecuteAsync(new CommandDefinition(
             """
-            UPDATE POLOXI.Legal_DecisionDomainPackMatterType
-            SET IsDeleted = 1, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @ActorUserId
-            WHERE DecisionDomainPackId = @PackId AND MatterTypeCode = @MatterTypeCode AND TenantId = @TenantId AND IsDeleted = 0;
+            UPDATE s
+            SET s.IsDeleted = 1, s.ModifiedDateUtc = SYSUTCDATETIME(), s.ModifiedByUserId = @ActorUserId
+            FROM POLOXI.Legal_MatterSubtype s
+            JOIN POLOXI.Legal_MatterType t ON t.MatterTypeId = s.MatterTypeId AND t.IsDeleted = 0
+            JOIN POLOXI.Legal_DecisionDomainPack p ON p.MatterTypeCode = t.Code AND p.IsDeleted = 0
+            WHERE p.DecisionDomainPackId = @PackId AND s.Code = @MatterTypeCode AND s.TenantId = @TenantId AND s.IsDeleted = 0;
             """,
             new { PackId = packId, MatterTypeCode = matterTypeCode.Trim(), ActorUserId = actorUserId, TenantId = tenantId == Guid.Empty ? (Guid?)null : tenantId },
             cancellationToken: cancellationToken));
@@ -2246,7 +2410,7 @@ public sealed partial class LegalDecisionRepository(ISqlConnectionFactory connec
             throw new InvalidOperationException($"Tenant Domain Pack '{packCode}' was not found. Global seed packs cannot be deleted.");
     }
 
-    private sealed record DomainPackRow(Guid DecisionDomainPackId, string PackCode, string PracticeAreaCode, string Name, string? Description);
+    private sealed record DomainPackRow(Guid DecisionDomainPackId, string PackCode, string PracticeAreaCode, string Name, string? Description, string? MatterTypeCode = null);
 
     // ── Personal Injury (Domain Pack: PERSONAL_INJURY) profile + child aggregates + options ────────
     // Selectable values are DB-backed (POLOXI.Legal_DecisionMatterOption FieldCode buckets and the
@@ -2816,17 +2980,28 @@ public sealed partial class LegalDecisionRepository(ISqlConnectionFactory connec
     public async Task<bool> UpdateMatterAsync(Guid tenantId, Guid userId, Guid decisionMatterId, DecisionMatterUpdateRequest request, CancellationToken cancellationToken = default)
     {
         using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        // Migration 0461: resolve the canonical subtype FK from the supplied subtype code (fail-open).
+        var matterSubtypeId = await ResolveMatterSubtypeIdAsync(
+            connection, tenantId, request.MatterTypeCode, request.DomainPackMatterTypeCode, cancellationToken);
+        // Migration 0458: resolve the broad Matter Type lookup FK from the supplied broad code (fail-open).
+        var matterTypeId = await ResolveMatterTypeIdAsync(connection, tenantId, request.MatterTypeCode, cancellationToken);
         var affected = await connection.ExecuteAsync(new CommandDefinition(
             """
             UPDATE POLOXI.Legal_DecisionMatter
             SET Title = @Title,
                 MatterTypeCode = @MatterTypeCode,
+                -- 0458: only overwrite the broad lookup FK when the supplied code resolved; legacy free
+                -- text keeps the existing binding (fail-open).
+                MatterTypeId = CASE WHEN @MatterTypeId IS NOT NULL THEN @MatterTypeId ELSE MatterTypeId END,
                 Jurisdiction = @Jurisdiction,
                 Posture = @Posture,
                 Description = @Description,
                 PracticeAreaCode = @PracticeAreaCode,
                 ClaimTypeCode = @ClaimTypeCode,
                 DomainPackCode = @DomainPackCode,
+                -- 0461: only overwrite the canonical subtype binding when the caller supplied a code
+                -- that resolved; callers that omit the field (older clients) keep the existing binding.
+                MatterSubtypeId = CASE WHEN @MatterTypeCodeSupplied = 1 THEN @MatterSubtypeId ELSE MatterSubtypeId END,
                 Subtype = @Subtype,
                 CourtSystem = @CourtSystem,
                 State = @State,
@@ -2846,12 +3021,15 @@ public sealed partial class LegalDecisionRepository(ISqlConnectionFactory connec
             {
                 request.Title,
                 request.MatterTypeCode,
+                MatterTypeId = matterTypeId,
                 request.Jurisdiction,
                 request.Posture,
                 request.Description,
                 request.PracticeAreaCode,
                 request.ClaimTypeCode,
                 request.DomainPackCode,
+                MatterSubtypeId = matterSubtypeId,
+                MatterTypeCodeSupplied = !string.IsNullOrWhiteSpace(request.DomainPackMatterTypeCode) ? 1 : 0,
                 request.Subtype,
                 request.CourtSystem,
                 request.State,
@@ -3138,6 +3316,11 @@ public sealed partial class LegalDecisionRepository(ISqlConnectionFactory connec
         RequestedDisposition = r.RequestedDisposition,
         AdditionalNarrative = r.AdditionalNarrative,
         MatterScopeOutThreshold = r.MatterScopeOutThreshold,
+        MatterSubtypeId = r.MatterSubtypeId,
+        DomainPackMatterTypeCode = r.DomainPackMatterTypeCode,
+        DomainPackMatterTypeName = r.DomainPackMatterTypeName,
+        MatterTypeId = r.MatterTypeId,
+        MatterTypeName = r.MatterTypeName,
         LatestSessionId = r.LatestSessionId,
         CurrentOutcome = r.CurrentOutcome,
         DecisionStatusCode = r.DecisionStatusCode,
@@ -3953,6 +4136,8 @@ public sealed partial class LegalDecisionRepository(ISqlConnectionFactory connec
         string? Subtype, string? CourtSystem, string? State, string? CourtLevel, string? County, string? GoverningLaw,
         string? MovingParty, string? RespondingParty, string? MotionTarget, string? RequestedDisposition, string? AdditionalNarrative,
         decimal? MatterScopeOutThreshold,
+        Guid? MatterSubtypeId, string? DomainPackMatterTypeCode, string? DomainPackMatterTypeName,
+        Guid? MatterTypeId, string? MatterTypeName,
         DateTime CreatedDateUtc, DateTime? ModifiedDateUtc, Guid? LatestSessionId, string? CurrentOutcome,
         string? DecisionStatusCode, DateTime? LastDecidedUtc, int CriticalFlipPointCount);
 

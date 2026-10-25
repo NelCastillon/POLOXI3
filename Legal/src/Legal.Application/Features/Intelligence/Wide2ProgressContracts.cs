@@ -16,7 +16,14 @@ public sealed record Wide2ProgressUpdate(
     int AdmittedEvidence,
     string DecisionReadiness,
     bool IsProvisional,
-    string? Message = null);
+    string? Message = null,
+    // Count of Domain Pack evidence types that survived every deterministic gate (relevance rules,
+    // incident family, canonical matter-subtype) and were materialized as L2 branches feeding the
+    // L3 generation prompts. 0 until the Domain Pack hierarchy is built.
+    int EligibleEvidenceTypes = 0,
+    // Count of evidence types that also survived the matter funnel / Blended Score scope gate /
+    // deferred-acquisition routing and were actually dispatched to LLM L3 proposition generation.
+    int L3EvidenceTypes = 0);
 
 // Publisher abstraction implemented by the API host over SignalR. Injected into the Wide2 service.
 // Publishing must never throw into the pipeline: a broken/absent transport must not affect results.

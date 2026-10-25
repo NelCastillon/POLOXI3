@@ -154,7 +154,7 @@
                         <div class="matter-card-tags">
                             @if (!string.IsNullOrWhiteSpace(matter.MatterTypeCode))
                             {
-                                <span class="matter-tag"><i class="bi bi-tag"></i> @matter.MatterTypeCode</span>
+                                <span class="matter-tag"><i class="bi bi-tag"></i> @(matter.MatterTypeName ?? matter.MatterTypeCode)</span>
                             }
                         </div>
                         @if (!string.IsNullOrWhiteSpace(matter.Jurisdiction))
@@ -210,8 +210,13 @@
                             </label>
                             <label class="um-field">
                                 <span class="um-field-label">Matter type</span>
-                                <SearchableSelect @bind-Value="_form.MatterTypeCode" Options="_facets.MatterTypeCodes" Placeholder="Select or type a matter type" />
+                                <SearchableSelect @bind-Value="_form.MatterTypeCode" LabeledOptions="_matterTypeOptions" AllowCustom="false" Placeholder="Select a matter type" />
                                 <ValidationMessage For="() => _form.MatterTypeCode" class="text-danger" />
+                            </label>
+                            <label class="um-field">
+                                <span class="um-field-label">Subtype</span>
+                                <SearchableSelect @bind-Value="_form.DomainPackMatterTypeCode" LabeledOptions="SubtypeOptionsForSelectedType" AllowCustom="false" Placeholder="Select a subtype" />
+                                <ValidationMessage For="() => _form.DomainPackMatterTypeCode" class="text-danger" />
                             </label>
                             <label class="um-field">
                                 <span class="um-field-label">Jurisdiction</span>
@@ -222,11 +227,6 @@
                                 <span class="um-field-label">Posture</span>
                                 <SearchableSelect @bind-Value="_form.Posture" Options="_facets.Postures" Placeholder="Select or type a posture" />
                                 <ValidationMessage For="() => _form.Posture" class="text-danger" />
-                            </label>
-                            <label class="um-field">
-                                <span class="um-field-label">Subtype</span>
-                                <SearchableSelect @bind-Value="_form.Subtype" Options="_facets.Subtypes" Placeholder="Select or type a subtype" />
-                                <ValidationMessage For="() => _form.Subtype" class="text-danger" />
                             </label>
                             <label class="um-field">
                                 <span class="um-field-label">Court system</span>
@@ -338,7 +338,24 @@
     private string _activeFilter = "ALL";
     private IReadOnlyCollection<DecisionMatterDto> _matters = [];
     private DecisionMatterFacetsDto _facets = new([], [], []);
+    // 0458: DB-backed broad Matter Type catalog (Legal_MatterType) and active Domain Packs;
+    // the broad type selection drives the pack-subtype cascade below.
+    private IReadOnlyCollection<MatterTypeDto> _matterTypes = [];
+    // 0460: canonical MatterType -> Subtype catalog (Legal_MatterSubtype); works for broad types with or without a pack.
+    private IReadOnlyCollection<MatterSubtypeDto> _matterSubtypes = [];
+    private IReadOnlyCollection<DecisionDomainPackDto> _packs = [];
+    private IReadOnlyList<SearchableSelect.Item> _matterTypeOptions = [];
     private MatterForm _form = new();
+
+    // Subtypes offered for the currently selected broad type: canonical catalog rows (0460).
+    private IReadOnlyList<SearchableSelect.Item> SubtypeOptionsForSelectedType
+        => _matterSubtypes
+            .Where(s => !string.IsNullOrWhiteSpace(_form.MatterTypeCode)
+                     && string.Equals(s.MatterTypeCode, _form.MatterTypeCode, StringComparison.OrdinalIgnoreCase))
+            .Select(s => new SearchableSelect.Item(s.Code, s.Name))
+            .DistinctBy(i => i.Value, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(i => i.Label, StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
     private IReadOnlyList<DecisionMatterDto> Filtered
     {
@@ -388,6 +405,10 @@
                 {
                     _matters = await Api.GetLegalDecisionMattersAsync();
                     _facets = await Api.GetLegalDecisionMatterFacetsAsync();
+                    _matterTypes = await Api.GetLegalDecisionMatterTypesAsync();
+                    _matterTypeOptions = _matterTypes.Select(t => new SearchableSelect.Item(t.Code, t.Name)).ToList();
+                    _matterSubtypes = await Api.GetLegalDecisionMatterSubtypesAsync();
+                    _packs = await Api.GetLegalDecisionDomainPacksAsync();
                     // Drop any selected IDs that no longer exist after the reload.
                     _selectedIds.RemoveWhere(id => !_matters.Any(m => m.DecisionMatterId == id));
                     break;
@@ -517,6 +538,17 @@
         StateHasChanged();
         try
         {
+            // 0460: the form binds machine codes; subtype display Name comes from the canonical
+            // MatterType -> Subtype catalog. A pack binding is attached only when a pack mapped to the
+            // broad type also carries this subtype (packless broad types still get a valid subtype).
+            var subtypeCode = string.IsNullOrWhiteSpace(_form.DomainPackMatterTypeCode) ? null : _form.DomainPackMatterTypeCode.Trim();
+            var subtypeRow = subtypeCode is null ? null : _matterSubtypes.FirstOrDefault(s =>
+                string.Equals(s.MatterTypeCode, _form.MatterTypeCode, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(s.Code, subtypeCode, StringComparison.OrdinalIgnoreCase));
+            var owningPack = subtypeCode is null ? null : _packs.FirstOrDefault(p =>
+                string.Equals(p.MatterTypeCode, _form.MatterTypeCode, StringComparison.OrdinalIgnoreCase)
+                && p.MatterTypes.Any(mt => string.Equals(mt.SubtypeCode, subtypeCode, StringComparison.OrdinalIgnoreCase)));
+            var subtypeName = subtypeRow?.Name;
             var request = new DecisionMatterCreateRequest(
                 _form.Title.Trim(),
                 string.IsNullOrWhiteSpace(_form.MatterTypeCode) ? null : _form.MatterTypeCode.Trim(),
@@ -524,7 +556,9 @@
                 string.IsNullOrWhiteSpace(_form.Posture) ? null : _form.Posture.Trim(),
                 string.IsNullOrWhiteSpace(_form.Description) ? null : _form.Description.Trim())
             {
-                Subtype = string.IsNullOrWhiteSpace(_form.Subtype) ? null : _form.Subtype.Trim(),
+                DomainPackCode = owningPack?.PackCode,
+                DomainPackMatterTypeCode = subtypeCode,
+                Subtype = subtypeName,
                 CourtSystem = string.IsNullOrWhiteSpace(_form.CourtSystem) ? null : _form.CourtSystem.Trim(),
                 State = string.IsNullOrWhiteSpace(_form.State) ? null : _form.State.Trim(),
                 CourtLevel = string.IsNullOrWhiteSpace(_form.CourtLevel) ? null : _form.CourtLevel.Trim(),
@@ -568,7 +602,7 @@
             {
                 // If the generated matter is Personal Injury, seed a complete fictional PI profile
                 // so it opens fully populated like the /legal/personalinjury generator.
-                if (string.Equals(request.MatterTypeCode, "Personal Injury", StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(request.MatterTypeCode, "PERSONAL_INJURY", StringComparison.OrdinalIgnoreCase))
                 {
                     try
                     {
@@ -621,10 +655,6 @@
 
     private DecisionMatterCreateRequest BuildRandomTestMatter()
     {
-        // Prefer DB-backed option lists (facets) when available; fall back to representative pools.
-        string PickFacet(IReadOnlyCollection<string> facet, IReadOnlyList<string> fallback)
-            => facet is { Count: > 0 } ? Pick(facet.ToList()) : Pick(fallback);
-
         // Personal Injury plaintiff is a fictitious individual; the defendant is a fictitious company.
         // A short unique token is appended so every generated matter is a brand-new, distinct case that
         // never collides with an existing/seeded fixture (e.g. the static General Test Matter).
@@ -634,38 +664,41 @@
 
         // The General Test Matter is always a Personal Injury matter governed by California law, so the
         // button always produces a PI matter that opens with a complete, DB-backed PI profile.
-        const string matterType = "Personal Injury";
+        const string matterTypeCode = "PERSONAL_INJURY";
+        const string matterTypeName = "Personal Injury";
         const string state = "California";
         const string governingLaw = "California";
-        // 0446: every saved field must be coherent with the Personal Injury matter type, because the saved
-        // record is sent verbatim to the L2 relevance review. Facet subtypes are restricted to PI-coherent values
-        // (the facet list spans every matter in the tenant, e.g. "Copyright"), and motion target / disposition
-        // come from PI-specific pools (no class-certification or contract postures).
-        var piFacetSubtypes = _facets.Subtypes.Where(s => _piSubtypes.Contains(s, StringComparer.OrdinalIgnoreCase)).ToList();
-        var subtype = PickFacet(piFacetSubtypes, _piSubtypes);
+        // 0460: pick a real PI canonical subtype row so the normalized FK binds and the deterministic
+        // L2 gate is active for the generated matter. Fallback pool keeps the generator working offline.
+        var piSubtypeRows = _matterSubtypes.Where(s => string.Equals(s.MatterTypeCode, matterTypeCode, StringComparison.OrdinalIgnoreCase)
+            && _piSubtypeCodes.Contains(s.Code, StringComparer.OrdinalIgnoreCase)).ToList();
+        var subtypeRow = piSubtypeRows is { Count: > 0 } ? Pick(piSubtypeRows) : null;
+        var subtype = subtypeRow?.Name ?? Pick(_piSubtypes);
         var courtSystem = "United States - California";
         var courtLevel = "Superior Court";
         var county = "Los Angeles County";
         var motionTarget = Pick(_piMotionTargets);
         var disposition = Pick(_piDispositions);
         var jurisdiction = $"United States - {state} - {courtLevel} - {county} - Governing law: {governingLaw}";
-        var posture = $"{matterType} - Movant: {movant} - Target: {motionTarget} - Requested disposition: {disposition}";
-        var title = $"{movant} v. {respondent} - {matterType} ({caseTag})";
+        var posture = $"{matterTypeName} - Movant: {movant} - Target: {motionTarget} - Requested disposition: {disposition}";
+        var title = $"{movant} v. {respondent} - {matterTypeName} ({caseTag})";
 
         var description =
             $"Type: {subtype}. Jurisdiction: {jurisdiction}. " +
-            $"Posture: {matterType}. Moving party: {movant}. Responding party: {respondent}. " +
+            $"Posture: {matterTypeName}. Moving party: {movant}. Responding party: {respondent}. " +
             $"Motion target: {motionTarget}. Requested disposition: {disposition}. " +
             $"New fictitious test matter (case {caseTag}) auto-generated for validating the decision cockpit, dashboard, and ranking panels.";
 
         return new DecisionMatterCreateRequest(
             title.Length > 300 ? title[..300] : title,
-            matterType,
+            matterTypeCode,
             jurisdiction.Length > 120 ? jurisdiction[..120] : jurisdiction,
             posture.Length > 200 ? posture[..200] : posture,
             description)
         {
             PracticeAreaCode = DecisionDomainPackCodes.PersonalInjury,
+            DomainPackCode = _packs.FirstOrDefault(p => string.Equals(p.MatterTypeCode, matterTypeCode, StringComparison.OrdinalIgnoreCase))?.PackCode,
+            DomainPackMatterTypeCode = subtypeRow?.Code,
             Subtype = subtype,
             CourtSystem = courtSystem,
             State = state,
@@ -693,13 +726,6 @@
         "Halcyon Labs", "Orion Dynamics", "Cascade Packaging", "Redwood Instruments", "Basalt Components",
         "Aspen Textiles", "Birchwood Supply", "Vertex Robotics", "Riverside Logistics", "Delta Warehousing",
         "Summit Financial", "Pioneer Health", "Cedar Ridge Holdings", "Ironclad Manufacturing", "Blue Harbor Shipping"
-    };
-
-    private static readonly string[] _matterTypes =
-    {
-        "Summary Judgment", "Motion to Dismiss", "Coverage Dispute", "Contract Dispute", "Breach of Contract",
-        "Insurance Claim", "Bad Faith", "Employment", "Personal Injury", "Product Liability",
-        "Intellectual Property", "Regulatory / Compliance", "Class Action", "Arbitration", "Appeal"
     };
 
     private static readonly string[] _subtypes =
@@ -747,6 +773,12 @@
         "Motor Vehicle", "Premises Liability", "Product Liability", "Tort"
     };
 
+    // 0458: machine codes of PI pack subtype lookup rows preferred by the generator.
+    private static readonly string[] _piSubtypeCodes =
+    {
+        "MOTOR_VEHICLE_ACCIDENT", "PREMISES_LIABILITY", "PRODUCT_LIABILITY", "SLIP_AND_FALL"
+    };
+
     private static readonly string[] _piMotionTargets =
     {
         "the negligence claim", "the comparative-fault defense", "the damages claim",
@@ -765,7 +797,10 @@
         public string Title { get; set; } = string.Empty;
 
         [StringLength(80)]
-        public string? MatterTypeCode { get; set; } = "Personal Injury";
+        public string? MatterTypeCode { get; set; } = "PERSONAL_INJURY";
+
+        [StringLength(120)]
+        public string? DomainPackMatterTypeCode { get; set; }
 
         [StringLength(120)]
         public string? Jurisdiction { get; set; }

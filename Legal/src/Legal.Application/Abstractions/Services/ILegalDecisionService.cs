@@ -48,6 +48,10 @@ public interface ILegalDecisionService
     Task<bool> DeleteMatterAsync(Guid tenantId, Guid userId, Guid decisionMatterId, bool includeAllTenants, CancellationToken cancellationToken = default);
     Task<int> DeleteMattersAsync(Guid tenantId, Guid userId, IReadOnlyCollection<Guid> decisionMatterIds, bool includeAllTenants, CancellationToken cancellationToken = default);
     Task<DecisionMatterFacetsDto> GetMatterFacetsAsync(Guid tenantId, CancellationToken cancellationToken = default);
+    // Migration 0458: broad six-factor Matter Type lookup catalog (Legal_MatterType).
+    Task<IReadOnlyCollection<MatterTypeDto>> GetMatterTypesAsync(Guid tenantId, CancellationToken cancellationToken = default);
+    // Migration 0460: canonical MatterType -> Subtype catalog (Legal_MatterSubtype).
+    Task<IReadOnlyCollection<MatterSubtypeDto>> GetMatterSubtypesAsync(Guid tenantId, CancellationToken cancellationToken = default);
 
     // Domain Pack (practice-area domain semantics) retrieval.
     Task<DecisionDomainPackDto?> GetDomainPackAsync(Guid tenantId, string packCode, CancellationToken cancellationToken = default);

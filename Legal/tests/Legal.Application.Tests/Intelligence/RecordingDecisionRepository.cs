@@ -353,6 +353,12 @@ internal sealed class RecordingDecisionRepository : ILegalDecisionRepository
     public Task<DecisionMatterFacetsDto> GetMatterFacetsAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => throw new NotSupportedException("Matter facets are not used on the research-loop path.");
 
+    public Task<IReadOnlyCollection<MatterTypeDto>> GetMatterTypesAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyCollection<MatterTypeDto>>([]);
+
+    public Task<IReadOnlyCollection<MatterSubtypeDto>> GetMatterSubtypesAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyCollection<MatterSubtypeDto>>([]);
+
     public Task<DecisionDomainPackDto?> GetDomainPackAsync(Guid tenantId, string packCode, CancellationToken cancellationToken = default)
         => Task.FromResult<DecisionDomainPackDto?>(null);
 

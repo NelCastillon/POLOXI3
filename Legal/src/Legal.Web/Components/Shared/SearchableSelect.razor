@@ -38,10 +38,10 @@
                 {
                     var idx = i;
                     var opt = _filtered[idx];
-                    <div class="ss-option @(idx == _activeIndex ? "ss-option--active" : null) @(string.Equals(opt, Value, StringComparison.OrdinalIgnoreCase) ? "ss-option--selected" : null)"
+                    <div class="ss-option @(idx == _activeIndex ? "ss-option--active" : null) @(string.Equals(opt.Value, Value, StringComparison.OrdinalIgnoreCase) ? "ss-option--selected" : null)"
                          @onclick="() => Select(opt)">
-                        <span class="ss-option-text">@opt</span>
-                        @if (string.Equals(opt, Value, StringComparison.OrdinalIgnoreCase))
+                        <span class="ss-option-text">@opt.Label</span>
+                        @if (string.Equals(opt.Value, Value, StringComparison.OrdinalIgnoreCase))
                         {
                             <i class="bi bi-check2 ss-option-check"></i>
                         }
@@ -53,9 +53,14 @@
 </div>
 
 @code {
+    /// A selectable option: Value is the bound (machine) value, Label is what the user sees.
+    public sealed record Item(string Value, string Label);
+
     [Parameter] public string? Value { get; set; }
     [Parameter] public EventCallback<string?> ValueChanged { get; set; }
     [Parameter] public IReadOnlyCollection<string> Options { get; set; } = [];
+    /// Code/label option pairs (e.g. DB lookup Code + display Name). Takes precedence over Options.
+    [Parameter] public IReadOnlyCollection<Item>? LabeledOptions { get; set; }
     [Parameter] public string? Placeholder { get; set; }
     /// When true, users may keep typed values that are not in the option list.
     [Parameter] public bool AllowCustom { get; set; } = true;
@@ -64,12 +69,21 @@
     private string _query = string.Empty;
     private string _display = string.Empty;
     private int _activeIndex = -1;
-    private List<string> _filtered = [];
+    private List<Item> _filtered = [];
+
+    private IReadOnlyCollection<Item> Source
+        => LabeledOptions ?? (Options ?? []).Select(o => new Item(o, o)).ToArray();
+
+    private string DisplayFor(string? value)
+    {
+        if (string.IsNullOrEmpty(value)) return string.Empty;
+        return Source.FirstOrDefault(o => string.Equals(o.Value, value, StringComparison.OrdinalIgnoreCase))?.Label ?? value;
+    }
 
     protected override void OnParametersSet()
     {
         if (!_open)
-            _display = Value ?? string.Empty;
+            _display = DisplayFor(Value);
     }
 
     private void OpenPanel()
@@ -96,7 +110,7 @@
     private void ClosePanel()
     {
         _open = false;
-        _display = Value ?? string.Empty;
+        _display = DisplayFor(Value);
     }
 
     private async Task OnInput(ChangeEventArgs e)
@@ -112,7 +126,7 @@
 
     private void ApplyFilter()
     {
-        var source = Options ?? [];
+        var source = Source;
         if (string.IsNullOrWhiteSpace(_query))
         {
             _filtered = source.ToList();
@@ -120,17 +134,17 @@
         else
         {
             _filtered = source
-                .Where(o => o.Contains(_query, StringComparison.OrdinalIgnoreCase))
-                .OrderByDescending(o => o.StartsWith(_query, StringComparison.OrdinalIgnoreCase))
+                .Where(o => o.Label.Contains(_query, StringComparison.OrdinalIgnoreCase) || o.Value.Contains(_query, StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(o => o.Label.StartsWith(_query, StringComparison.OrdinalIgnoreCase))
                 .ToList();
         }
     }
 
-    private async Task Select(string option)
+    private async Task Select(Item option)
     {
         _open = false;
-        _display = option;
-        await CommitAsync(option);
+        _display = option.Label;
+        await CommitAsync(option.Value);
     }
 
     private async Task CommitAsync(string? value)
@@ -169,7 +183,7 @@
     {
         // Defer close so option mousedown (which preventDefault's) can register the click.
         _open = false;
-        _display = Value ?? string.Empty;
+        _display = DisplayFor(Value);
     }
 
     public void Dispose() { }

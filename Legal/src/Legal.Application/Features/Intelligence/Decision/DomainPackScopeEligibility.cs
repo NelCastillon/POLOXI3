@@ -84,6 +84,50 @@ public static class DomainPackScopeEligibility
             $"Evidence type applies to incident families [{string.Join(", ", tagged)}]; matter resolved to [{string.Join(", ", matterFamilies.OrderBy(f => f, StringComparer.OrdinalIgnoreCase))}].");
     }
 
+    public const string ExclusionMatterType = "MATTER_TYPE_MISMATCH";
+
+    // Matter-type applicability (migration 0455 — normalized Evidence Type <-> Matter Type junction).
+    // Fail-open by design: an evidence type with NO matter-type tags applies to every matter type, and a
+    // matter with NO resolved matter-type binding never excludes anything. A tagged type is excluded only
+    // when the matter's bound matter-type code is known and not among the type's tags. Required-coverage
+    // is enforced by callers before any deterministic exclusion (mirrors incident-family semantics).
+    public static Disposition EvaluateEvidenceTypeMatterType(DecisionDomainPackEvidenceTypeDto evidenceType, string? matterTypeCode)
+    {
+        var tagged = evidenceType.MatterTypeCodeTags;
+        if (tagged.Count == 0 || string.IsNullOrWhiteSpace(matterTypeCode))
+            return Eligible;
+        if (tagged.Any(t => string.Equals(t?.Trim(), matterTypeCode.Trim(), StringComparison.OrdinalIgnoreCase)))
+            return Eligible;
+        return new Disposition(false, ExclusionMatterType,
+            $"Evidence type applies to matter types [{string.Join(", ", tagged)}]; matter is bound to '{matterTypeCode}'.");
+    }
+
+    // 0461 broad-type gate: matter.MatterTypeCode -> Legal_MatterSubtype (all subtypes of that broad
+    // type) -> junction tags. The junction IS the admission list: an evidence type enters the funnel only
+    // if it is tagged to at least one subtype of the matter's broad Matter Type. Untagged evidence types
+    // are NOT universal - they are excluded (required-coverage types are still exempted by callers).
+    // Fail-open only when the subtype catalog itself is unavailable (empty set).
+    public static Disposition EvaluateEvidenceTypeMatterType(
+        DecisionDomainPackEvidenceTypeDto evidenceType, string? matterSubtypeCode, IReadOnlySet<string> matterTypeSubtypeCodes)
+    {
+        if (string.IsNullOrWhiteSpace(matterSubtypeCode) && matterTypeSubtypeCodes.Count == 0)
+            return Eligible;
+        var tagged = evidenceType.MatterTypeCodeTags;
+        if (tagged.Count == 0)
+            return new Disposition(false, ExclusionMatterType,
+                "Evidence type has no matter-subtype tags; only evidence types tagged to a subtype of the matter's Matter Type enter the funnel.");
+        // Bound matter subtype: narrow to that exact subtype's tagged evidence types.
+        if (!string.IsNullOrWhiteSpace(matterSubtypeCode))
+            return tagged.Any(t => string.Equals(t?.Trim(), matterSubtypeCode.Trim(), StringComparison.OrdinalIgnoreCase))
+                ? Eligible
+                : new Disposition(false, ExclusionMatterType,
+                    $"Evidence type applies to matter subtypes [{string.Join(", ", tagged)}]; matter is bound to '{matterSubtypeCode}'.");
+        if (tagged.Any(t => t is not null && matterTypeSubtypeCodes.Contains(t.Trim())))
+            return Eligible;
+        return new Disposition(false, ExclusionMatterType,
+            $"Evidence type applies to matter subtypes [{string.Join(", ", tagged)}]; none belong to the matter's broad Matter Type.");
+    }
+
     // Concept applicability. Required-coverage concepts are mandatory decision gates and are always
     // eligible. A concept carrying a JurisdictionCode is excluded when the matter jurisdiction is known
     // and different. A concept targeted by a SUPERSEDES relation whose source concept is applicable to the
