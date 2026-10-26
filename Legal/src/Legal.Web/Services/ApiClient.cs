@@ -1020,6 +1020,9 @@ public sealed class ApiClient(HttpClient httpClient)
     // cookie rides on the same host as the API when proxied; callers use this as an href/src.
     public string MediaVersionContentUrl(Guid versionId)=>new Uri(_httpClient.BaseAddress!,$"api/legal_media/versions/{versionId}/content").ToString();
 
+    // Absolute URL for the authorized inline document original (PDF preview iframe/object src).
+    public string LegalDocumentVersionContentUrl(Guid documentVersionId)=>new Uri(_httpClient.BaseAddress!,$"api/legal_decision/documents/versions/{documentVersionId}/content").ToString();
+
     public async Task<Legal.Application.Abstractions.Intelligence.MediaProcessingResult?> ProcessMediaAssetAsync(Guid matterId,Guid assetId,Guid versionId,string assetType,CancellationToken token=default)
     {
         using var response=await _httpClient.PostAsJsonAsync($"api/legal_media/matters/{matterId}/assets/{assetId}/versions/{versionId}/process",new{AssetType=assetType},token);

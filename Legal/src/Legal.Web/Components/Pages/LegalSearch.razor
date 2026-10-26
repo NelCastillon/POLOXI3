@@ -50,9 +50,11 @@
                     </select>
                 </label>
                 <label class="poloxi-toggle"><input type="checkbox" @bind="_usePoloxiEngine" /><span></span><strong>POLOXI Engine</strong></label>
-                <button class="um-btn um-btn-primary" @onclick="SearchAsync" disabled="@(_loading||string.IsNullOrWhiteSpace(_query))">◈ Launch Intelligence</button>
+                <button class="um-btn poloxi-launch-btn" @onclick="SearchAsync" disabled="@(_loading||string.IsNullOrWhiteSpace(_query))"><span>Let's Go</span><i class="bi bi-arrow-right-circle-fill poloxi-launch-arrow"></i></button>
             </div>
         </section>
+
+        <ResearchHealthPanel />
 
         @if (_loading)
         {
@@ -698,77 +700,256 @@
                 </section>
             }
 
-                    @if (_response.ExternalReferences.Count > 0)
-                    {
-                        <div class="poloxi-answer-section poloxi-reveal">
-                            <h3><i class="bi bi-globe2"></i> External sources <small class="poloxi-section-note">Real-world references · LLM knowledge (not enterprise-verified)</small></h3>
-                            @foreach (var reference in _response.ExternalReferences)
-                            {
-                                <article class="poloxi-evidence poloxi-evidence-clickable" @ondblclick="() => OpenExternal(reference.Url)" title="Double-click to open @reference.Url in a new tab.">
-                                    <span class="poloxi-rank"><i class="bi bi-globe2"></i></span>
-                                    <div class="poloxi-evidence-main">
-                                        <strong>@reference.Title</strong>
-                                        <small>@reference.Source</small>
-                                        <p>@reference.Summary</p>
-                                        <div><span class="um-badge um-badge-neutral">@BranchNameWithLevel(reference.BranchDisplayName)</span> <a href="@reference.Url" target="_blank" rel="noopener noreferrer" @onclick:stopPropagation="true">@reference.Url <i class="bi bi-box-arrow-up-right"></i></a></div>
-                                    </div>
-                                </article>
-                            }
-                        </div>
-                    }
-                    @if (_response.ExternalKnowledge.Count > 0)
-                    {
-                        <div class="poloxi-answer-section poloxi-reveal">
-                            <h3><i class="bi bi-broadcast"></i> Live grounding sources <small class="poloxi-section-note">Live web sources · retrieved for time-sensitive grounding</small></h3>
-                            @foreach (var snippet in _response.ExternalKnowledge.DistinctBy(s => (s.Title, s.Snippet, (s.Url ?? string.Empty).Split('#')[0])))
-                            {
-                                <article class="poloxi-evidence poloxi-evidence-clickable" @ondblclick="() => OpenExternal(snippet.Url)" title="Double-click to open @snippet.Url in a new tab.">
-                                    <span class="poloxi-rank"><i class="bi bi-broadcast"></i></span>
-                                    <div class="poloxi-evidence-main">
-                                        <strong>@snippet.Title</strong>
-                                        <small>Retrieved @snippet.RetrievedDateUtc.ToString("yyyy-MM-dd HH:mm") UTC</small>
-                                        <p>@snippet.Snippet</p>
-                                        <div><span class="um-badge um-badge-success"><i class="bi bi-globe2"></i> LIVE</span> <a href="@snippet.Url" target="_blank" rel="noopener noreferrer" @onclick:stopPropagation="true">@snippet.Url <i class="bi bi-box-arrow-up-right"></i></a></div>
-                                    </div>
-                                </article>
-                            }
-                        </div>
-                    }
-
-                    @if (_response.ProposedLegalAuthorities.Count > 0)
-                    {
-                        <div class="poloxi-answer-section poloxi-reveal poloxi-proposed-authorities">
-                            <h3><i class="bi bi-lightbulb"></i> AI-suggested authorities <small class="poloxi-section-note">Not evidence &middot; unverified AI leads used only to guide retrieval</small></h3>
-                            <p class="poloxi-proposed-caution"><i class="bi bi-exclamation-triangle"></i> These authorities were proposed by the AI model as likely-relevant leads. They are <strong>not evidence</strong> and are not enterprise-verified. A <span class="um-badge um-badge-success">Confirmed by source</span> badge means a retrieved external source matched the citation; <span class="um-badge um-badge-warning">Unconfirmed lead</span> means retrieval did not confirm it.</p>
-                            @foreach (var authority in _response.ProposedLegalAuthorities)
-                            {
-                                <article class="poloxi-evidence poloxi-proposed-authority">
-                                    <span class="poloxi-rank"><i class="bi bi-lightbulb"></i></span>
-                                    <div class="poloxi-evidence-main">
-                                        <strong>@authority.Name</strong>
-                                        <small>@authority.Kind</small>
-                                        @if (!string.IsNullOrWhiteSpace(authority.Relevance))
-                                        {
-                                            <p>@authority.Relevance</p>
-                                        }
-                                        <div>
-                                            @if (authority.VerificationStatus == "VERIFIED")
-                                            {
-                                                <span class="um-badge um-badge-success"><i class="bi bi-check-circle"></i> Confirmed by source</span>
-                                            }
-                                            else
-                                            {
-                                                <span class="um-badge um-badge-warning"><i class="bi bi-question-circle"></i> Unconfirmed lead</span>
-                                            }
-                                        </div>
-                                    </div>
-                                </article>
-                            }
-                        </div>
-                    }
+                    <ResearchSourcesPanel Response="_response" />
 
         }
     </div>
+
+    @if (_ambiguityPopupGroup is { } ag)
+    {
+        var popBreakdown = AmbiguityGroupScoreBreakdown(ag);
+        var popEvidenceCount = ag.Evidence.Count + ag.ExternalKnowledge.Count;
+        <div class="um-modal-backdrop" @onclick="CloseAmbiguityGroup">
+            <div class="um-modal um-modal--lg abg-popup" @onclick:stopPropagation="true">
+                <div class="um-modal-header">
+                    <i class="bi bi-diagram-2"></i>
+                    <span>@ag.DisplayName &mdash; Branches &amp; Details</span>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseAmbiguityGroup"><i class="bi bi-x-lg"></i></button>
+                </div>
+                <div class="um-modal-body">
+                    <div class="abg-popup-top">
+                        <span class="abg-popup-code">@ag.GroupCode</span>
+                        <span class="abg-popup-conf">@ag.Confidence.ToString("P0") confidence</span>
+                        @if (!string.IsNullOrWhiteSpace(ag.SafetyRiskCode) && ag.SafetyRiskCode != "NONE")
+                        {
+                            <span class="abg-popup-safety"><i class="bi bi-shield-exclamation"></i>@(ag.SafetyRiskCode == "MEDIUM" ? "POSSIBLE SAFETY RISK" : ag.SafetyRiskCode)</span>
+                        }
+                    </div>
+
+                    <div class="abg-popup-track"><div class="abg-popup-fill" style="width:@((int)Math.Round((double)ag.Confidence * 100))%"></div></div>
+
+                    <small class="poloxi-muted" title="POLOXI confidence formula for this group.">
+                        POLOXI confidence = 0.45 &times; @popBreakdown.InterpretationPrior.ToString("P0") + 0.55 &times; @popBreakdown.EvidenceSupport.ToString("P0") = @popBreakdown.PoloxiConfidence.ToString("P0")
+                    </small>
+
+                    @if (!string.IsNullOrWhiteSpace(ag.Summary))
+                    {
+                        <p class="abg-popup-detail">@ag.Summary</p>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(ag.Interpretation))
+                    {
+                        <div class="abg-popup-section">
+                            <h5 class="abg-popup-section-title">Interpretation</h5>
+                            <p class="abg-popup-detail">@ag.Interpretation</p>
+                        </div>
+                    }
+
+                    <div class="abg-popup-metrics">
+                        <div class="abg-popup-metric"><span class="abg-popup-metric-lbl">Branches</span><span class="abg-popup-metric-val">@ag.Branches.Count</span></div>
+                        <div class="abg-popup-metric"><span class="abg-popup-metric-lbl">Candidates</span><span class="abg-popup-metric-val">@ag.Candidates.Count</span></div>
+                        <div class="abg-popup-metric"><span class="abg-popup-metric-lbl">Evidence</span><span class="abg-popup-metric-val">@popEvidenceCount</span></div>
+                        <div class="abg-popup-metric"><span class="abg-popup-metric-lbl">Result sets</span><span class="abg-popup-metric-val">@ag.InterpretiveResults.Count</span></div>
+                    </div>
+
+                    @if (ag.Branches.Count > 0)
+                    {
+                        <div class="abg-popup-section">
+                            <h5 class="abg-popup-section-title"><i class="bi bi-diagram-3"></i> Branches (@ag.Branches.Count)</h5>
+                            <ul class="abg-popup-branches">
+                                @foreach (var branch in ag.Branches.OrderBy(b => b.SortOrder))
+                                {
+                                    var bpct = (int)Math.Round((double)branch.Confidence * 100);
+                                    <li class="abg-popup-branch @(branch.IsEliminated ? "abg-popup-branch--elim" : "")">
+                                        <div class="abg-popup-branch-head">
+                                            <span class="abg-popup-branch-code">L@(branch.LevelNumber) &middot; @branch.BranchCode</span>
+                                            <strong class="abg-popup-branch-name">@branch.DisplayName</strong>
+                                            <span class="abg-popup-branch-conf">@bpct%</span>
+                                        </div>
+                                        @if (!string.IsNullOrWhiteSpace(branch.Interpretation))
+                                        {
+                                            <p class="abg-popup-branch-interp">@branch.Interpretation</p>
+                                        }
+                                        <div class="abg-popup-branch-meta">
+                                            @if (!string.IsNullOrWhiteSpace(branch.GroundingStatusCode))
+                                            {
+                                                <span class="abg-popup-chip"><i class="bi bi-database-check"></i>@branch.GroundingStatusCode.Replace('_', ' ')</span>
+                                            }
+                                            <span class="abg-popup-chip"><i class="bi bi-file-earmark-text"></i>@branch.EvidenceCount evidence</span>
+                                            @if (!string.IsNullOrWhiteSpace(branch.CapabilityCode))
+                                            {
+                                                <span class="abg-popup-chip"><i class="bi bi-cpu"></i>@branch.CapabilityCode.Replace('_', ' ')</span>
+                                            }
+                                            @if (branch.IsEliminated)
+                                            {
+                                                <span class="abg-popup-chip abg-popup-chip--elim"><i class="bi bi-x-circle"></i>Eliminated</span>
+                                            }
+                                        </div>
+                                        @if (branch.IsEliminated && !string.IsNullOrWhiteSpace(branch.EliminationReason))
+                                        {
+                                            <p class="abg-popup-branch-note">@branch.EliminationReason</p>
+                                        }
+                                        else if (!string.IsNullOrWhiteSpace(branch.StopReason))
+                                        {
+                                            <p class="abg-popup-branch-note">@branch.StopReason</p>
+                                        }
+                                    </li>
+                                }
+                            </ul>
+                        </div>
+                    }
+
+                    @if (ag.InterpretiveResults.Count > 0)
+                    {
+                        <div class="abg-popup-section">
+                            <h5 class="abg-popup-section-title"><i class="bi bi-collection"></i> Result details</h5>
+                            @foreach (var result in ag.InterpretiveResults)
+                            {
+                                <div class="abg-popup-resultset">
+                                    <div class="abg-popup-resultset-head">
+                                        <strong>@result.BranchDisplayName</strong>
+                                        <span class="abg-popup-branch-conf">@result.Confidence.ToString("P0")</span>
+                                    </div>
+                                    @if (!string.IsNullOrWhiteSpace(result.Interpretation))
+                                    {
+                                        <p class="abg-popup-branch-interp">@result.Interpretation</p>
+                                    }
+                                    @if (result.Items.Count > 0)
+                                    {
+                                        <ol class="abg-popup-items">
+                                            @foreach (var item in result.Items)
+                                            {
+                                                <li><span>@item.Name</span><small>@item.Detail</small></li>
+                                            }
+                                        </ol>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-primary" @onclick="CloseAmbiguityGroup">Close</button>
+                </div>
+            </div>
+        </div>
+    }
+
+    @if (_ambiguityEvidenceGroup is { } eg)
+    {
+        var internalEvidence = eg.Evidence.OrderByDescending(e => e.RelevanceScore).ToList();
+        var externalEvidence = eg.ExternalKnowledge.OrderByDescending(e => e.Score).ToList();
+        <div class="um-modal-backdrop" @onclick="CloseAmbiguityEvidence">
+            <div class="um-modal um-modal--lg abg-popup" @onclick:stopPropagation="true">
+                <div class="um-modal-header">
+                    <i class="bi bi-database-check"></i>
+                    <span>@eg.DisplayName &mdash; Evidence &amp; Sources</span>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseAmbiguityEvidence"><i class="bi bi-x-lg"></i></button>
+                </div>
+                <div class="um-modal-body">
+                    <div class="abg-popup-top">
+                        <span class="abg-popup-code">@eg.GroupCode</span>
+                        <span class="abg-popup-conf">@(internalEvidence.Count + externalEvidence.Count) source@((internalEvidence.Count + externalEvidence.Count) == 1 ? "" : "s")</span>
+                    </div>
+
+                    <div class="abg-popup-metrics">
+                        <div class="abg-popup-metric"><span class="abg-popup-metric-lbl">Retrieved evidence</span><span class="abg-popup-metric-val">@internalEvidence.Count</span></div>
+                        <div class="abg-popup-metric"><span class="abg-popup-metric-lbl">External knowledge</span><span class="abg-popup-metric-val">@externalEvidence.Count</span></div>
+                        <div class="abg-popup-metric"><span class="abg-popup-metric-lbl">Branches</span><span class="abg-popup-metric-val">@eg.Branches.Count</span></div>
+                        <div class="abg-popup-metric"><span class="abg-popup-metric-lbl">Candidates</span><span class="abg-popup-metric-val">@eg.Candidates.Count</span></div>
+                    </div>
+
+                    @if (internalEvidence.Count > 0)
+                    {
+                        <div class="abg-popup-section">
+                            <h5 class="abg-popup-section-title"><i class="bi bi-file-earmark-text"></i> Retrieved evidence (@internalEvidence.Count)</h5>
+                            <ul class="abg-popup-branches">
+                                @foreach (var ev in internalEvidence)
+                                {
+                                    var relPct = (int)Math.Round((double)ev.RelevanceScore * 100);
+                                    <li class="abg-popup-branch">
+                                        <div class="abg-popup-branch-head">
+                                            <span class="abg-popup-branch-code">#@ev.RankNumber</span>
+                                            <strong class="abg-popup-branch-name">@ev.Title</strong>
+                                            <span class="abg-popup-branch-conf">@relPct%</span>
+                                        </div>
+                                        @if (!string.IsNullOrWhiteSpace(ev.Excerpt))
+                                        {
+                                            <p class="abg-popup-branch-interp">@ev.Excerpt</p>
+                                        }
+                                        <div class="abg-popup-branch-meta">
+                                            @if (!string.IsNullOrWhiteSpace(ev.ModuleCode))
+                                            {
+                                                <span class="abg-popup-chip"><i class="bi bi-box"></i>@ev.ModuleCode.Replace('_', ' ')</span>
+                                            }
+                                            @if (!string.IsNullOrWhiteSpace(ev.EntityTypeCode))
+                                            {
+                                                <span class="abg-popup-chip"><i class="bi bi-tag"></i>@ev.EntityTypeCode.Replace('_', ' ')</span>
+                                            }
+                                            @foreach (var mb in ev.MatchedBranches)
+                                            {
+                                                <span class="abg-popup-chip"><i class="bi bi-diagram-3"></i>@mb</span>
+                                            }
+                                        </div>
+                                        @if (!string.IsNullOrWhiteSpace(ev.NavigationRoute))
+                                        {
+                                            <p class="abg-popup-branch-note"><a href="@ev.NavigationRoute" target="_blank" rel="noopener"><i class="bi bi-box-arrow-up-right"></i> Open source</a></p>
+                                        }
+                                    </li>
+                                }
+                            </ul>
+                        </div>
+                    }
+
+                    @if (externalEvidence.Count > 0)
+                    {
+                        <div class="abg-popup-section">
+                            <h5 class="abg-popup-section-title"><i class="bi bi-globe"></i> External knowledge (@externalEvidence.Count)</h5>
+                            <ul class="abg-popup-branches">
+                                @foreach (var ex in externalEvidence)
+                                {
+                                    var exPct = (int)Math.Round((double)ex.Score * 100);
+                                    <li class="abg-popup-branch">
+                                        <div class="abg-popup-branch-head">
+                                            <span class="abg-popup-branch-code"><i class="bi bi-globe2"></i> WEB</span>
+                                            <strong class="abg-popup-branch-name">@ex.Title</strong>
+                                            <span class="abg-popup-branch-conf">@exPct%</span>
+                                        </div>
+                                        @if (!string.IsNullOrWhiteSpace(ex.Snippet))
+                                        {
+                                            <p class="abg-popup-branch-interp">@ex.Snippet</p>
+                                        }
+                                        <div class="abg-popup-branch-meta">
+                                            @if (!string.IsNullOrWhiteSpace(ex.BranchDisplayName))
+                                            {
+                                                <span class="abg-popup-chip"><i class="bi bi-diagram-3"></i>@ex.BranchDisplayName</span>
+                                            }
+                                            else if (!string.IsNullOrWhiteSpace(ex.Query))
+                                            {
+                                                <span class="abg-popup-chip"><i class="bi bi-search"></i>@ex.Query</span>
+                                            }
+                                            <span class="abg-popup-chip"><i class="bi bi-clock-history"></i>@ex.RetrievedDateUtc.ToString("yyyy-MM-dd")</span>
+                                        </div>
+                                        @if (!string.IsNullOrWhiteSpace(ex.Url))
+                                        {
+                                            <p class="abg-popup-branch-note"><a href="@ex.Url" target="_blank" rel="noopener"><i class="bi bi-box-arrow-up-right"></i> @ex.Url</a></p>
+                                        }
+                                    </li>
+                                }
+                            </ul>
+                        </div>
+                    }
+
+                    @if (internalEvidence.Count == 0 && externalEvidence.Count == 0)
+                    {
+                        <p class="abg-popup-detail">No evidence or external knowledge was attached to this group.</p>
+                    }
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-primary" @onclick="CloseAmbiguityEvidence">Close</button>
+                </div>
+            </div>
+        </div>
+    }
 </LegalWorkspace>
 
 @code {
@@ -981,8 +1162,12 @@
                                 {
                                     <span class="poloxi-branch-chip" title="Safety-sensitive interpretation group."><i class="bi bi-shield-exclamation"></i>@(group.SafetyRiskCode == "MEDIUM" ? "POSSIBLE SAFETY RISK" : group.SafetyRiskCode)</span>
                                 }
-                                <span class="poloxi-branch-chip"><i class="bi bi-diagram-3"></i>@group.Branches.Count branch@(group.Branches.Count == 1 ? "" : "es")</span>
-                                <span class="poloxi-branch-chip"><i class="bi bi-database-check"></i>@(group.Evidence.Count + group.ExternalKnowledge.Count) evidence</span>
+                                <button type="button" class="poloxi-branch-chip poloxi-branch-chip--action" @onclick="() => OpenAmbiguityGroup(group)" title="View branches and result details">
+                                    <i class="bi bi-diagram-3"></i>@group.Branches.Count branch@(group.Branches.Count == 1 ? "" : "es")<i class="bi bi-box-arrow-up-right poloxi-branch-chip-ext"></i>
+                                </button>
+                                <button type="button" class="poloxi-branch-chip poloxi-branch-chip--action" @onclick="() => OpenAmbiguityEvidence(group)" title="View evidence and external knowledge details">
+                                    <i class="bi bi-database-check"></i>@(group.Evidence.Count + group.ExternalKnowledge.Count) evidence<i class="bi bi-box-arrow-up-right poloxi-branch-chip-ext"></i>
+                                </button>
                             </div>
                             @if (group.InterpretiveResults.Count > 0)
                             {
@@ -1535,6 +1720,16 @@
             ?? _response?.Branches.FirstOrDefault(branch => branch.LevelNumber == 1 && branch.DisplayName.Equals(group.DisplayName, StringComparison.OrdinalIgnoreCase));
         return root is null ? (0m, 0m, group.Confidence) : (root.InterpretationPrior, root.EvidenceSupport, root.PoloxiConfidence > 0 ? root.PoloxiConfidence : group.Confidence);
     }
+
+    // Enterprise drill-down popups for an Ambiguity-first group: Branches & Details, and Evidence &
+    // Sources. Read only live DTO data; never re-rank or fabricate results.
+    private WideAmbiguityGroupDto? _ambiguityPopupGroup;
+    private void OpenAmbiguityGroup(WideAmbiguityGroupDto group) => _ambiguityPopupGroup = group;
+    private void CloseAmbiguityGroup() => _ambiguityPopupGroup = null;
+
+    private WideAmbiguityGroupDto? _ambiguityEvidenceGroup;
+    private void OpenAmbiguityEvidence(WideAmbiguityGroupDto group) => _ambiguityEvidenceGroup = group;
+    private void CloseAmbiguityEvidence() => _ambiguityEvidenceGroup = null;
 
     private static readonly System.Text.RegularExpressions.Regex BranchLevelPrefixPattern = new(@"^L\d+\s*(?:·|-|:)?\s+", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
     private static readonly HashSet<string> ContractAssociationStopwords = new(StringComparer.OrdinalIgnoreCase)

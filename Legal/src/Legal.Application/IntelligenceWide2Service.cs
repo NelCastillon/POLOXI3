@@ -5684,25 +5684,67 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         var builder=new StringBuilder();
         builder.Append("Deliverable Synthesis").AppendLine().AppendLine();
         builder.Append(deliverable.Headline).AppendLine().AppendLine();
-        if(!string.IsNullOrWhiteSpace(deliverable.Outcome))builder.Append("Outcome: ").Append(deliverable.Outcome).AppendLine().AppendLine();
+
+        // Bottom line up front: the determination, framed in plain enterprise language with an
+        // explicit confidence posture so the reader knows how firm the outcome is before the detail.
+        var determinacyFraming=deliverable.DeterminacyCode switch
+        {
+            "RESOLVED"=>"This is a determinate outcome:",
+            "PARTIAL"=>"This is a partial determination — directionally supported but not yet fully settled:",
+            "BLOCKED"=>"This outcome could not be fully determined from the available inputs:",
+            "UNVERIFIED"=>"This outcome rests on model reasoning and is not yet evidence-verified:",
+            _=>"Determination:"
+        };
+        var confidencePosture=deliverable.Confidence>=.75m?"high confidence":deliverable.Confidence>=.5m?"moderate confidence":"low confidence";
+        if(!string.IsNullOrWhiteSpace(deliverable.Outcome))
+            builder.Append("Bottom line: ").Append(determinacyFraming).Append(' ').Append(deliverable.Outcome)
+                .Append(" POLOXI holds this at ").Append(confidencePosture).Append(" (")
+                .Append(deliverable.Confidence.ToString("P0")).Append(" decision confidence, ")
+                .Append(deliverable.EvidenceCoverage.ToString("P0")).Append(" evidence coverage, ")
+                .Append(deliverable.RemainingUncertainty.ToString("P0")).Append(" residual uncertainty).")
+                .AppendLine().AppendLine();
+
+        builder.Append("Rationale").AppendLine();
         builder.Append(deliverable.Reason).AppendLine();
+
         if(deliverable.DecisiveConditions.Count>0)
         {
-            builder.AppendLine().Append("Decisive conditions (outcome-determining):").AppendLine();
+            builder.AppendLine().Append("Decisive conditions (what drove the outcome):").AppendLine();
             foreach(var condition in deliverable.DecisiveConditions)
-                builder.Append("- ").Append(condition.Description).Append(" (support ").Append(condition.Support.ToString("P0")).Append(", ").Append(condition.SourceCode=="EVIDENCE"?"grounded":condition.SourceCode=="INTERPRETIVE"?"reasoning":"unresolved").Append(").").AppendLine();
+                builder.Append("- ").Append(condition.Description).Append(" (support ").Append(condition.Support.ToString("P0")).Append(", ").Append(condition.SourceCode=="EVIDENCE"?"grounded in retrieved evidence":condition.SourceCode=="INTERPRETIVE"?"supported by model reasoning":"unresolved — needs confirmation").Append(").").AppendLine();
         }
+
         if(deliverable.BlockingInputs.Count>0)
         {
-            builder.AppendLine().Append("Required to fully resolve:").AppendLine();
+            builder.AppendLine().Append("Required to fully resolve (close these to reach a determinate outcome):").AppendLine();
             foreach(var item in deliverable.BlockingInputs)builder.Append("- ").Append(item).AppendLine();
         }
+
         if(deliverable.Citations.Count>0)
         {
-            builder.AppendLine().Append("Supporting evidence:").AppendLine();
+            builder.AppendLine().Append("Supporting evidence (what each source contributes):").AppendLine();
             foreach(var citation in deliverable.Citations)
-                builder.Append("- [").Append(citation.SourceCode=="EXTERNAL"?"Web":"Enterprise").Append("] ").Append(citation.Title).AppendLine();
+            {
+                builder.Append("- [").Append(citation.SourceCode=="EXTERNAL"?"Web":"Enterprise").Append("] ").Append(citation.Title);
+                // Surface the substantive excerpt, not just the title, so the reader can see WHY the
+                // source supports the determination without leaving the answer.
+                if(!string.IsNullOrWhiteSpace(citation.Detail))builder.Append(" — ").Append(TrimDescription(citation.Detail));
+                builder.AppendLine();
+            }
         }
+
+        // Interpretive takeaway: translate the determinacy + confidence posture into an action-oriented
+        // recommendation an enterprise reader can act on, instead of ending on raw metrics.
+        builder.AppendLine().Append("What this means: ");
+        builder.Append(deliverable.DeterminacyCode switch
+        {
+            "RESOLVED"=>"the determination is well supported and can be relied on for this request; the supporting evidence above corroborates the outcome.",
+            "PARTIAL"=>"the leading outcome is directionally sound but sensitive to the open inputs listed above — resolve those before treating it as final.",
+            "BLOCKED"=>"the deciding inputs are missing, so no outcome should be relied on until the required inputs above are supplied.",
+            "UNVERIFIED"=>"the outcome is a reasoned estimate only — confirm it against authoritative sources before relying on it.",
+            _=>"review the supporting evidence and open inputs above before acting on this outcome."
+        }).AppendLine();
+
         if(!string.IsNullOrWhiteSpace(existingAnswer)&&!string.Equals(existingAnswer,"POLOXI completed the analysis, but no final prose was returned by the answer composer.",StringComparison.Ordinal))
             builder.AppendLine().Append("Analysis detail:").AppendLine().Append(existingAnswer);
         return builder.ToString();

@@ -17,7 +17,7 @@ namespace Legal.Api.Controllers;
 // (/legal/decision). Evolves independently from the Intelligence Wide (/legal/search) controller.
 [ApiController]
 [Route("api/legal_decision")]
-public sealed class LegalDecisionController(ILegalDecisionService service,IIntelligenceExecutionService executionService,ILegalDocumentCorpusRepository documentCorpusRepository,IAttorneyDecisionInputRepository attorneyDecisionInputRepository,IAttorneyDecisionInputService attorneyDecisionInputService,ILegalDecisionContractService decisionContractService,ILegalDocumentIntakeService documentIntakeService,ILegalMatterCorpusActivationService corpusActivationService,IDecisionIntegrityRepository integrityRepository,IMatterPropositionInformationValueService propositionInformationValueService,INextBestActionService nextBestActionService,IWhatToResolveNextService whatToResolveNextService,IPropositionIntegrationService propositionIntegrationService,IRetrievalPropositionReviewService retrievalReviewService,IRetrievalOrchestrationService retrievalOrchestrationService,ILegalAuthorityOrchestrationService legalAuthorityOrchestrationService,IDecisionRevisionResolver decisionRevisionResolver,Legal.Application.Features.Intelligence.Decision.Channels.IChannelScoringLpiService channelScoringLpiService,Legal.Application.Features.Intelligence.Decision.Channels.IMatterScoringTraceReader matterScoringTraceReader,IOptions<DocumentIntelligenceOptions> documentOptions) : ControllerBase
+public sealed class LegalDecisionController(ILegalDecisionService service,IIntelligenceExecutionService executionService,ILegalDocumentCorpusRepository documentCorpusRepository,IAttorneyDecisionInputRepository attorneyDecisionInputRepository,IAttorneyDecisionInputService attorneyDecisionInputService,ILegalDecisionContractService decisionContractService,ILegalDocumentIntakeService documentIntakeService,ILegalMatterCorpusActivationService corpusActivationService,IDecisionIntegrityRepository integrityRepository,IMatterPropositionInformationValueService propositionInformationValueService,INextBestActionService nextBestActionService,IWhatToResolveNextService whatToResolveNextService,IPropositionIntegrationService propositionIntegrationService,IRetrievalPropositionReviewService retrievalReviewService,IRetrievalOrchestrationService retrievalOrchestrationService,ILegalAuthorityOrchestrationService legalAuthorityOrchestrationService,IDecisionRevisionResolver decisionRevisionResolver,Legal.Application.Features.Intelligence.Decision.Channels.IChannelScoringLpiService channelScoringLpiService,Legal.Application.Features.Intelligence.Decision.Channels.IMatterScoringTraceReader matterScoringTraceReader,ILegalDocumentBinaryStore documentBinaryStore,IOptions<DocumentIntelligenceOptions> documentOptions) : ControllerBase
 {
     private const string CapabilityCode = JudzCapabilities.LegalDecision;
     private Guid TenantId => AuthenticatedRequestContext.GetTenantId(User) ?? throw new UnauthorizedAccessException("An authenticated tenant context is required.");
@@ -125,6 +125,29 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
         await retrievalReviewService.RejectAsync(new LpiReviewRejectRequest(
             TenantId, ActorUserId, propositionId, request.Reason), cancellationToken);
         return NoContent();
+    }
+
+    // Authorized inline streaming of a stored document original (PDF preview). The owning matter is
+    // verified against the tenant and the caller's capability before any byte is read; the opaque
+    // storage reference never leaves the server.
+    [HttpGet("documents/versions/{documentVersionId:guid}/content")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> GetDocumentVersionContent(Guid documentVersionId, CancellationToken cancellationToken)
+    {
+        var lookup = await documentCorpusRepository.GetDocumentVersionContentAsync(TenantId, documentVersionId, cancellationToken);
+        if (lookup is null)
+            return NotFound();
+
+        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, CapabilityCode, lookup.MatterId, null, cancellationToken);
+        if (denied is not null) return denied;
+
+        if (!string.Equals(lookup.MalwareStatusCode, "CLEAN", StringComparison.OrdinalIgnoreCase))
+            return StatusCode(StatusCodes.Status409Conflict, "The document original is not available for preview.");
+
+        var read = await documentBinaryStore.OpenReadAsync(TenantId, lookup.StorageReference, cancellationToken);
+        var contentType = string.IsNullOrWhiteSpace(lookup.ContentType) ? "application/octet-stream" : lookup.ContentType;
+        Response.Headers.ContentDisposition = $"inline; filename=\"{Uri.EscapeDataString(lookup.FileName)}\"";
+        return File(read.Content, contentType, enableRangeProcessing: true);
     }
 
     // Revise an ACCEPTED proposition: supersede it with a corrected one through the SHARED funnel. The

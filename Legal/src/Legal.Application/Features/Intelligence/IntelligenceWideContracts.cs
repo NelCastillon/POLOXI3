@@ -1534,6 +1534,14 @@ public sealed record WideExternalKnowledgeSnippet
     public decimal PropositionSupportScore{get;set;}
     // PropositionSupportStatus: VERIFIED_SUPPORT | AUTHORITY_FOUND_BUT_SUPPORT_UNCLEAR | UNVERIFIED.
     public string? PropositionSupportStatus{get;set;}
+
+    // Authoritative source-document version for matter-corpus snippets (MATTER_CORPUS provider). When set,
+    // the UI can open/stream the ACTUAL uploaded document via the authenticated content endpoint instead of
+    // the non-navigable matter-corpus:// identity Url. Null for general-web/live snippets and legacy rows.
+    public Guid? LegalDocumentVersionId{get;set;}
+    // Human-readable source file name for the corpus document, used as the link/preview title. Null when
+    // no backing document version is resolved.
+    public string? LegalDocumentFileName{get;set;}
 }
 
 // LLM structured outputs (strict JSON schema payloads).

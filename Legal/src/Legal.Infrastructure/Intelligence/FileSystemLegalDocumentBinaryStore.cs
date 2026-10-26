@@ -20,6 +20,25 @@ public sealed class FileSystemLegalDocumentBinaryStore(IOptions<DocumentIntellig
         return new Uri(path).AbsoluteUri;
     }
 
+    public Task<LegalDocumentReadResult> OpenReadAsync(Guid tenantId, string storageReference, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(storageReference))
+            throw new ArgumentException("A storage reference is required.", nameof(storageReference));
+        if (!Uri.TryCreate(storageReference, UriKind.Absolute, out var uri) || !uri.IsFile)
+            throw new InvalidOperationException("The stored document reference is not a local file reference.");
+
+        var path = Path.GetFullPath(uri.LocalPath);
+        // Contain reads to the configured storage root so a stored reference can never escape it.
+        var root = _root.EndsWith(Path.DirectorySeparatorChar) ? _root : _root + Path.DirectorySeparatorChar;
+        if (!path.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("The stored document reference is outside the configured storage root.");
+        if (!File.Exists(path))
+            throw new FileNotFoundException("The stored document original was not found.", path);
+
+        var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        return Task.FromResult(new LegalDocumentReadResult(stream, stream.Length));
+    }
+
     private static string ResolveRoot(string configuredRoot)
     {
         if (string.IsNullOrWhiteSpace(configuredRoot))

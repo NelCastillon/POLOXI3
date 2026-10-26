@@ -44,7 +44,17 @@ public interface ILegalDocumentBinaryStore
         string fileName,
         Stream content,
         CancellationToken cancellationToken = default);
+
+    // Open a read stream over a previously stored immutable original, identified by the opaque
+    // storage reference returned from StoreImmutableAsync. Callers MUST authorize the tenant/matter
+    // against the owning document version (via the corpus repository) before requesting any read.
+    Task<LegalDocumentReadResult> OpenReadAsync(
+        Guid tenantId,
+        string storageReference,
+        CancellationToken cancellationToken = default);
 }
+
+public sealed record LegalDocumentReadResult(Stream Content, long TotalLength);
 
 public interface ILegalDocumentSecurityScanner
 {

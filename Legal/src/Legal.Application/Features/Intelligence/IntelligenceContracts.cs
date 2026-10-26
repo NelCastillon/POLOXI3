@@ -96,7 +96,15 @@ public sealed record SemanticGroundedBranch(string? BranchCode,string? Capabilit
 public sealed record PoloxiHierarchyProposal(string ConceptCode,string DisplayName,decimal Confidence,IReadOnlyCollection<PoloxiProposedBranch> Branches);
 public sealed record PoloxiHierarchyRecord(Guid HierarchyId,string QuerySignature,string ConceptCode,string DisplayName,string NormalizedQuery,int VersionNumber,string StatusCode,string? GeneratedByProviderCode,string? GeneratedByModelCode,decimal Confidence,int UsageCount,int SuccessfulUsageCount,DateTime? ExpiresDateUtc,IReadOnlyCollection<PoloxiBranchRecord> Branches);
 public sealed record PoloxiBranchRecord(Guid HierarchyBranchId,Guid? ParentHierarchyBranchId,string BranchCode,string DisplayName,string ProposedCondition,string? CapabilityCode,string ValidationStatusCode,string? ValidationMessage,string? SearchText,bool OrderByRecency,decimal Confidence,int SortOrder);
-public sealed record PoloxiEvidenceDto(Guid HierarchyBranchId,Guid SearchDocumentId,string EntityTypeCode,Guid EntityId,string ModuleCode,string Title,string? Excerpt,string? NavigationRoute,decimal RelevanceScore,int RankNumber,IReadOnlyCollection<string> MatchedBranches);
+public sealed record PoloxiEvidenceDto(Guid HierarchyBranchId,Guid SearchDocumentId,string EntityTypeCode,Guid EntityId,string ModuleCode,string Title,string? Excerpt,string? NavigationRoute,decimal RelevanceScore,int RankNumber,IReadOnlyCollection<string> MatchedBranches)
+{
+    // Authoritative uploaded-document version backing this evidence row (matter-corpus document evidence).
+    // When set, the UI can open/stream the ACTUAL source document via the authenticated content endpoint.
+    // Null for matter-fact rows and any evidence not derived from a stored document version.
+    public Guid? LegalDocumentVersionId { get; init; }
+    // Human-readable source file name for the backing document version, used as the preview/link title.
+    public string? LegalDocumentFileName { get; init; }
+}
 public sealed record PoloxiSearchResponse(Guid PoloxiExecutionId,Guid HierarchyId,string Query,string ConceptCode,string ConceptDisplayName,int HierarchyVersion,bool WasHierarchyReused,decimal Confidence,IReadOnlyCollection<PoloxiBranchRecord> Branches,IReadOnlyCollection<PoloxiEvidenceDto> Evidence,string? GroundedExplanation,string ExplanationStatusCode,long DurationMilliseconds);
 public sealed record PoloxiExecutionStart(Guid TenantId,Guid HierarchyId,Guid UserId,string QueryText,string CorrelationId,bool WasHierarchyReused,int ValidBranchCount,int UnsupportedBranchCount,decimal Confidence);
 // GRIP-style adaptive retrieval contracts (wide path). OutcomeCode values map 1:1 to the

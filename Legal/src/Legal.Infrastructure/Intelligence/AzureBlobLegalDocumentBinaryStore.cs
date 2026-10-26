@@ -61,4 +61,28 @@ public sealed class AzureBlobLegalDocumentBinaryStore : ILegalDocumentBinaryStor
 
         return version.Uri.AbsoluteUri;
     }
+
+    public async Task<LegalDocumentReadResult> OpenReadAsync(Guid tenantId, string storageReference, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(storageReference))
+            throw new ArgumentException("A storage reference is required.", nameof(storageReference));
+        if (!Uri.TryCreate(storageReference, UriKind.Absolute, out var uri))
+            throw new InvalidOperationException("The stored document reference is not a valid URI.");
+
+        // The stored reference is the versioned blob URI; resolve the blob path relative to the
+        // configured container and preserve the immutable version id when present.
+        var blobName = uri.AbsolutePath.TrimStart('/');
+        var containerPrefix = _container.Name + "/";
+        if (blobName.StartsWith(containerPrefix, StringComparison.OrdinalIgnoreCase))
+            blobName = blobName[containerPrefix.Length..];
+
+        var blob = _container.GetBlobClient(blobName);
+        var query = System.Web.HttpUtility.ParseQueryString(uri.Query);
+        var versionId = query["versionid"] ?? query["versionId"];
+        if (!string.IsNullOrWhiteSpace(versionId))
+            blob = blob.WithVersion(versionId);
+
+        var download = await blob.DownloadStreamingAsync(cancellationToken: cancellationToken);
+        return new LegalDocumentReadResult(download.Value.Content, download.Value.Details.ContentLength);
+    }
 }

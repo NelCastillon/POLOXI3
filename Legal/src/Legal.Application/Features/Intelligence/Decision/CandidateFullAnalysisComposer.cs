@@ -333,7 +333,8 @@ internal static class CandidateFullAnalysisComposer
                     HrrPath: p.PropositionText,
                     AerRelationshipCode: s.RelationshipTypeCode,
                     AerTone: RelationTone(s.RelationshipTypeCode),
-                    VerificationPct: ev.Confidence is { } c ? Pct(c) : null));
+                    VerificationPct: ev.Confidence is { } c ? Pct(c) : null,
+                    LegalDocumentVersionId: ev.LegalDocumentVersionId));
             }
         }
 

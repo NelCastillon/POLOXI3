@@ -1,0 +1,377 @@
+@* Research sources — co-counsel style panel.
+   Combines (1) live provider health from the DB-backed Legal_AuthoritySource registry
+   (LastRunStatus / LastRunDateUtc per provider) and (2) the external legal authorities that
+   actually grounded THIS answer (retrieved snippets + AI-proposed leads), with source badges,
+   jurisdiction, and clickable citations. All data is real — nothing is mocked. *@
+@using Legal.Application.Features.Intelligence
+@inject ApiClient Api
+@inject IJSRuntime JS
+
+@{
+    var snippets = (Response?.ExternalKnowledge ?? Array.Empty<WideExternalKnowledgeSnippet>())
+        .Where(s => !string.IsNullOrWhiteSpace(s.Title))
+        .DistinctBy(s => (s.Title, s.Snippet, (s.Url ?? string.Empty).Split('#')[0]))
+        .ToList();
+    var proposed = (Response?.ProposedLegalAuthorities ?? Array.Empty<WideProposedAuthorityDto>()).ToList();
+    var references = (Response?.ExternalReferences ?? Array.Empty<WideExternalReferenceDto>()).ToList();
+    var hasAnyResearch = snippets.Count > 0 || proposed.Count > 0 || references.Count > 0;
+}
+
+@if (hasAnyResearch)
+{
+    <section class="research-panel poloxi-reveal" aria-label="Research sources">
+        <header class="research-panel-head">
+            <div class="research-panel-title">
+                <i class="bi bi-journal-bookmark-fill"></i>
+                <div>
+                    <h3>Research sources</h3>
+                    <p>External legal authorities consulted for this matter — case law, statutes, and regulations.</p>
+                </div>
+            </div>
+            </header>
+
+            @* Matter anchor (display only). Driven by the DB-backed Matter Context diagnostic — it is
+               explicitly "never evidence"; it scopes/labels the research, it is never cited as authority. *@
+            @{ var matter = Response?.MatterContext; }
+            @if (matter is not null && HasMatterAnchor(matter))
+            {
+                <div class="research-matter" role="note" aria-label="Research scoped to matter">
+                    <i class="bi bi-folder2-open"></i>
+                    <span class="research-matter-label">Scoped to matter:</span>
+                    @if (!string.IsNullOrWhiteSpace(matter.PracticeAreaCode))
+                    {
+                        <span class="research-matter-chip">@FriendlyCode(matter.PracticeAreaCode!)</span>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(matter.ResolvedDomainPackCode))
+                    {
+                        <span class="research-matter-chip research-matter-chip--pack" title="Resolved DB-backed domain pack">
+                            <i class="bi bi-box-seam"></i> @FriendlyCode(matter.ResolvedDomainPackCode!)
+                        </span>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(matter.DecisionIntent))
+                    {
+                        <span class="research-matter-chip research-matter-chip--intent">@FriendlyCode(matter.DecisionIntent!)</span>
+                    }
+                    <span class="research-matter-note">scoping context · not cited as authority</span>
+                </div>
+            }
+
+            @* Live provider health strip (reused standalone diagnostics component) *@
+            <ResearchHealthPanel Embedded="true" />
+
+            @* Evidence-bound synthesis. Reuses the already-computed, guard-validated Legal Answer
+               (verified-authority whitelist enforced server-side) — NO new LLM call. Surfaced here so the
+               conclusion sits directly beside the authorities that support it. *@
+            @{ var legal = Response?.LegalAnswer; }
+            @if (legal is not null)
+            {
+                <div class="research-synthesis" role="note" aria-label="Evidence-bound synthesis">
+                    <div class="research-synthesis-head">
+                        <i class="bi bi-stars"></i>
+                        <span>Synthesis</span>
+                        <span class="research-synthesis-tag">grounded in @legal.KeyAuthorities.Count verified authorit@(legal.KeyAuthorities.Count == 1 ? "y" : "ies")</span>
+                    </div>
+                    <p class="research-synthesis-bottomline">@legal.BottomLine</p>
+                    @if (legal.KeyAuthorities.Count > 0)
+                    {
+                        <div class="research-synthesis-authorities">
+                            @foreach (var authority in legal.KeyAuthorities)
+                            {
+                                var chipKey = NormalizeAuthority(authority.Name);
+                                <span class="research-synthesis-chip @(IsActiveKey(chipKey) ? "research-synthesis-chip--active" : null)"
+                                      title="@authority.Relevance"
+                                      @onmouseover="() => SetActiveAuthority(chipKey)"
+                                      @onmouseout="() => SetActiveAuthority(null)"
+                                      @onfocusin="() => SetActiveAuthority(chipKey)"
+                                      @onfocusout="() => SetActiveAuthority(null)"
+                                      tabindex="0">
+                                    <i class="bi bi-link-45deg"></i> @authority.Name
+                                </span>
+                            }
+                        </div>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(legal.DecisiveMissingFact))
+                    {
+                        <p class="research-synthesis-line research-synthesis-line--decisive">
+                            <i class="bi bi-exclamation-diamond"></i>
+                            <span><strong>What could change this:</strong> @legal.DecisiveMissingFact</span>
+                        </p>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(legal.RemainingUncertainty))
+                    {
+                        <p class="research-synthesis-line research-synthesis-line--uncertainty">
+                            <i class="bi bi-question-circle"></i>
+                            <span><strong>Remaining uncertainty:</strong> @legal.RemainingUncertainty</span>
+                        </p>
+                    }
+                </div>
+            }
+
+        @* Retrieved external authorities (admitted / verified snippets) *@
+        @if (snippets.Count > 0)
+        {
+            var branches = BuildMeceBranches(snippets);
+            <div class="research-group">
+                <h4><i class="bi bi-shield-check"></i> Retrieved authorities <span class="research-count">@snippets.Count</span>
+                    <small class="research-group-note">MECE coverage · @branches.Count(b => b.Covered)/@branches.Count branches</small></h4>
+
+                @* MECE coverage matrix: jurisdiction × authority-kind. Covered = at least one admitted
+                   authority populated the branch; Gap = no evidence retrieved for that branch. Advisory only. *@
+                <div class="research-mece" role="list" aria-label="Coverage by jurisdiction and authority type">
+                    @foreach (var branch in branches)
+                    {
+                        <div class="research-mece-branch @(branch.Covered ? "research-mece--covered" : "research-mece--gap")" role="listitem"
+                             title="@(branch.Covered ? $"{branch.Items.Count} authority(ies) retrieved" : "No authority retrieved for this branch")">
+                            <span class="research-mece-dot"></span>
+                            <span class="research-mece-label">@branch.Jurisdiction · @branch.Kind</span>
+                            @if (branch.Covered)
+                            {
+                                <span class="research-mece-count">@branch.Items.Count</span>
+                            }
+                            else
+                            {
+                                <span class="research-mece-gaptag">gap</span>
+                            }
+                        </div>
+                    }
+                </div>
+
+                @foreach (var branch in branches.Where(b => b.Covered))
+                {
+                    <div class="research-mece-section">
+                        <div class="research-mece-heading"><i class="bi bi-diagram-3"></i> @branch.Jurisdiction · @branch.Kind</div>
+                        <ul class="research-list">
+                            @foreach (var snippet in branch.Items)
+                            {
+                        <li class="research-item research-item--clickable @(IsMatchedSnippet(snippet) ? "research-item--matched" : null)" @onclick="() => OpenAsync(snippet.Url)"
+                            title="@(string.IsNullOrWhiteSpace(snippet.Url) ? snippet.Title : $"Open {snippet.Url}")">
+                            <div class="research-item-main">
+                                <div class="research-item-title">
+                                    <strong>@snippet.Title</strong>
+                                    @if (snippet.AuthorityIdentityVerified)
+                                    {
+                                        <span class="research-badge research-badge--verified"><i class="bi bi-patch-check-fill"></i> Verified</span>
+                                    }
+                                </div>
+                                <div class="research-item-meta">
+                                    @if (!string.IsNullOrWhiteSpace(snippet.SourceProvider))
+                                    {
+                                        <span class="research-badge research-badge--source">@FriendlyProvider(snippet.SourceProvider!)</span>
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(snippet.AuthorityKind))
+                                    {
+                                        <span class="research-badge research-badge--kind">@snippet.AuthorityKind</span>
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(snippet.Jurisdiction))
+                                    {
+                                        <span class="research-badge research-badge--juris"><i class="bi bi-geo-alt"></i> @snippet.Jurisdiction</span>
+                                    }
+                                    @{ var support = SupportEdge(snippet.PropositionSupportStatus); }
+                                    @if (support is not null)
+                                    {
+                                        <span class="research-badge research-edge--@support.Value.Css" title="Graph proposition-support edge">
+                                            <i class="bi bi-link-45deg"></i> @support.Value.Label
+                                        </span>
+                                    }
+                                </div>
+                                @if (!string.IsNullOrWhiteSpace(snippet.Snippet))
+                                {
+                                    <p class="research-item-excerpt">@snippet.Snippet</p>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(snippet.Url))
+                                {
+                                    <a class="research-item-cite" href="@snippet.Url" target="_blank" rel="noopener noreferrer" @onclick:stopPropagation="true">
+                                        @ShortUrl(snippet.Url!) <i class="bi bi-box-arrow-up-right"></i>
+                                    </a>
+                                }
+                            </div>
+                        </li>
+                    }
+                        </ul>
+                    </div>
+                }
+            </div>
+        }
+
+        @* AI-proposed leads (never evidence) *@
+        @if (proposed.Count > 0)
+        {
+            <div class="research-group">
+                <h4><i class="bi bi-lightbulb"></i> Suggested leads <span class="research-count">@proposed.Count</span>
+                    <small class="research-group-note">AI leads · not evidence</small></h4>
+                <ul class="research-list">
+                    @foreach (var authority in proposed)
+                    {
+                        var verified = string.Equals(authority.VerificationStatus, "VERIFIED", StringComparison.OrdinalIgnoreCase);
+                        <li class="research-item @(string.IsNullOrWhiteSpace(authority.Url) ? "" : "research-item--clickable")"
+                            @onclick="() => OpenAsync(authority.Url)">
+                            <div class="research-item-main">
+                                <div class="research-item-title">
+                                    <strong>@authority.Name</strong>
+                                    @if (verified)
+                                    {
+                                        <span class="research-badge research-badge--verified"><i class="bi bi-check-circle"></i> Confirmed by source</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="research-badge research-badge--lead"><i class="bi bi-question-circle"></i> Unconfirmed lead</span>
+                                    }
+                                </div>
+                                <div class="research-item-meta">
+                                    @if (!string.IsNullOrWhiteSpace(authority.Kind))
+                                    {
+                                        <span class="research-badge research-badge--kind">@authority.Kind</span>
+                                    }
+                                </div>
+                                @if (!string.IsNullOrWhiteSpace(authority.Relevance))
+                                {
+                                    <p class="research-item-excerpt">@authority.Relevance</p>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(authority.Url))
+                                {
+                                    <a class="research-item-cite" href="@authority.Url" target="_blank" rel="noopener noreferrer" @onclick:stopPropagation="true">
+                                        @ShortUrl(authority.Url!) <i class="bi bi-box-arrow-up-right"></i>
+                                    </a>
+                                }
+                            </div>
+                        </li>
+                    }
+                </ul>
+            </div>
+        }
+
+        @* LLM-surfaced external references *@
+        @if (references.Count > 0)
+        {
+            <div class="research-group">
+                <h4><i class="bi bi-globe2"></i> Related references <span class="research-count">@references.Count</span>
+                    <small class="research-group-note">Model knowledge · not enterprise-verified</small></h4>
+                <ul class="research-list">
+                    @foreach (var reference in references)
+                    {
+                        <li class="research-item research-item--clickable" @onclick="() => OpenAsync(reference.Url)">
+                            <div class="research-item-main">
+                                <div class="research-item-title"><strong>@reference.Title</strong></div>
+                                @if (!string.IsNullOrWhiteSpace(reference.Source))
+                                {
+                                    <div class="research-item-meta"><span class="research-badge research-badge--source">@reference.Source</span></div>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(reference.Summary))
+                                {
+                                    <p class="research-item-excerpt">@reference.Summary</p>
+                                }
+                                <a class="research-item-cite" href="@reference.Url" target="_blank" rel="noopener noreferrer" @onclick:stopPropagation="true">
+                                    @ShortUrl(reference.Url) <i class="bi bi-box-arrow-up-right"></i>
+                                </a>
+                            </div>
+                        </li>
+                    }
+                </ul>
+            </div>
+        }
+    </section>
+}
+
+@code {
+    [Parameter] public WideSearchResponse? Response { get; set; }
+
+    // Hovered/focused synthesis authority (normalized). Drives the evidence↔conclusion cross-highlight:
+    // the matching retrieved authority card lights up while a synthesis chip is active. Presentation only.
+    private string? _activeAuthorityKey;
+
+    private void SetActiveAuthority(string? key)
+    {
+        if (_activeAuthorityKey == key) return;
+        _activeAuthorityKey = key;
+        StateHasChanged();
+    }
+
+    private bool IsActiveKey(string? key)
+        => !string.IsNullOrEmpty(key) && string.Equals(_activeAuthorityKey, key, StringComparison.Ordinal);
+
+    // A retrieved snippet matches the active synthesis chip when their normalized authority names
+    // contain one another — tolerant to reporter suffixes and short-form vs full citation differences.
+    private bool IsMatchedSnippet(WideExternalKnowledgeSnippet snippet)
+    {
+        if (string.IsNullOrEmpty(_activeAuthorityKey)) return false;
+        var title = NormalizeAuthority(snippet.Title);
+        if (string.IsNullOrEmpty(title)) return false;
+        return title == _activeAuthorityKey
+            || title.Contains(_activeAuthorityKey, StringComparison.Ordinal)
+            || _activeAuthorityKey.Contains(title, StringComparison.Ordinal);
+    }
+
+    // Normalize an authority/title for cross-referencing: lowercase, strip punctuation, collapse spaces.
+    private static string NormalizeAuthority(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return string.Empty;
+        var chars = value.Trim().ToLowerInvariant()
+            .Select(c => char.IsLetterOrDigit(c) ? c : ' ');
+        return string.Join(' ', new string(chars.ToArray()).Split(' ', StringSplitOptions.RemoveEmptyEntries));
+    }
+
+    private async Task OpenAsync(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return;
+        try { await JS.InvokeVoidAsync("open", url, "_blank", "noopener"); }
+        catch { /* popup blocked or JS unavailable — the inline citation link remains usable */ }
+    }
+
+    private static string ShortUrl(string url)
+    {
+        if (Uri.TryCreate(url, UriKind.Absolute, out var uri))
+            return uri.Host + (uri.AbsolutePath.Length > 1 ? uri.AbsolutePath.TrimEnd('/') : string.Empty);
+        return url;
+    }
+
+    private static string FriendlyProvider(string code) => code?.Trim().ToUpperInvariant() switch
+    {
+        "COURTLISTENER" => "CourtListener",
+        "GOVINFO" or "GOVINFO_ECFR" or "GOVINFO_ECFR_FALLBACK" => "GovInfo / eCFR",
+        "CORNELL_LII" or "CORNELLLII" => "Cornell LII",
+        "OFFICIAL_AUTHORITY" => "Official authority",
+        null or "" => "Source",
+        _ => code
+    };
+
+    // Matter anchor is display-only and must have at least one real DB-backed field to show.
+    private static bool HasMatterAnchor(WideMatterContextDiagnosticDto matter)
+        => !string.IsNullOrWhiteSpace(matter.PracticeAreaCode)
+        || !string.IsNullOrWhiteSpace(matter.ResolvedDomainPackCode)
+        || !string.IsNullOrWhiteSpace(matter.DecisionIntent);
+
+    // Render CODE_LIKE values as "Code Like" for display without inventing any content.
+    private static string FriendlyCode(string code)
+    {
+        var cleaned = code.Trim().Replace('_', ' ').Replace('-', ' ');
+        return System.Globalization.CultureInfo.CurrentCulture.TextInfo.ToTitleCase(cleaned.ToLowerInvariant());
+    }
+
+    // MECE coverage branch: jurisdiction × authority-kind. Presentational grouping only — it does not
+    // alter retrieval or candidate scoring. "Covered" simply means an admitted snippet populated the branch.
+    private sealed record MeceBranch(string Jurisdiction, string Kind, List<WideExternalKnowledgeSnippet> Items)
+    {
+        public bool Covered => Items.Count > 0;
+    }
+
+    private static IReadOnlyList<MeceBranch> BuildMeceBranches(IReadOnlyList<WideExternalKnowledgeSnippet> snippets)
+        => snippets
+            .GroupBy(s => (
+                Jurisdiction: string.IsNullOrWhiteSpace(s.Jurisdiction) ? "Unspecified" : s.Jurisdiction!.Trim(),
+                Kind: string.IsNullOrWhiteSpace(s.AuthorityKind) ? "Authority" : s.AuthorityKind!.Trim()))
+            .Select(g => new MeceBranch(g.Key.Jurisdiction, g.Key.Kind, g.ToList()))
+            .OrderBy(b => b.Jurisdiction, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(b => b.Kind, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+    // Graph proposition-support edge: how strongly this retrieved authority supports the bound proposition.
+    private static (string Css, string Label)? SupportEdge(string? status)
+    {
+        if (string.IsNullOrWhiteSpace(status)) return null;
+        var s = status.Trim().ToUpperInvariant();
+        if (s is "SUPPORTED" or "STRONG" or "STRONGLY_SUPPORTED") return ("strong", "Supports");
+        if (s is "PARTIAL" or "WEAK" or "PARTIALLY_SUPPORTED") return ("partial", "Partial support");
+        if (s is "UNSUPPORTED" or "CONTRADICTED" or "NOT_SUPPORTED") return ("none", "No support");
+        return ("partial", status.Trim());
+    }
+}

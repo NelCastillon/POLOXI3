@@ -835,6 +835,21 @@ public sealed class LegalDocumentCorpusRepository(ISqlConnectionFactory connecti
             """, new { TenantId = tenantId, DocumentVersionId = documentVersionId }, cancellationToken: cancellationToken));
     }
 
+    public async Task<LegalDocumentVersionContentLookup?> GetDocumentVersionContentAsync(Guid tenantId, Guid documentVersionId, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return await connection.QuerySingleOrDefaultAsync<LegalDocumentVersionContentLookup>(new CommandDefinition(
+            """
+            SELECT version.LegalDocumentVersionId, version.LegalDocumentId, document.DecisionMatterId AS MatterId,
+                   document.FileName, document.ContentType, version.StorageReference,
+                   version.MalwareStatusCode
+            FROM POLOXI.Legal_MatterDocumentVersion version
+            INNER JOIN POLOXI.Legal_MatterDocument document ON document.LegalDocumentId=version.LegalDocumentId
+            WHERE version.LegalDocumentVersionId=@DocumentVersionId AND version.TenantId=@TenantId
+              AND document.TenantId=@TenantId AND version.IsDeleted=0 AND document.IsDeleted=0;
+            """, new { TenantId = tenantId, DocumentVersionId = documentVersionId }, cancellationToken: cancellationToken));
+    }
+
     public async Task<IReadOnlyCollection<DecisionRetrievalTelemetryDto>> GetRetrievalTelemetryAsync(Guid tenantId, Guid? matterId, Guid? decisionSessionId, CancellationToken cancellationToken = default)
     {
         using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);

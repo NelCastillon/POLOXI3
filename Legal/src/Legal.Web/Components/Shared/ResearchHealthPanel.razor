@@ -1,0 +1,114 @@
+@* Research sources diagnostics — live provider health.
+   Surfaces LastRunStatus / LastRunDateUtc per external legal authority provider from the
+   DB-backed Legal_AuthoritySource registry. Used both standalone (quick diagnostics on the
+   composer) and inside ResearchSourcesPanel. All data is real; failures never break the page. *@
+@using Legal.Application.Features.Intelligence
+@inject ApiClient Api
+
+@if (_loaded && _providers.Count == 0 && !Embedded)
+{
+    <div class="research-health-standalone research-health-empty">
+        <i class="bi bi-wifi-off"></i> No external authority providers are registered.
+    </div>
+}
+else if (_providers.Count > 0)
+{
+    <div class="@(Embedded ? "research-health" : "research-health research-health-standalone")" role="group" aria-label="Research provider health">
+        @if (!Embedded)
+        {
+            <span class="research-health-heading"><i class="bi bi-activity"></i> Research sources</span>
+        }
+        @foreach (var provider in _providers)
+        {
+            var state = HealthState(provider.LastRunStatus);
+            <div class="research-health-chip research-health--@state.Css" role="status" title="@HealthTooltip(provider)">
+                <span class="research-health-dot"></span>
+                <span class="research-health-name">@FriendlyProvider(provider.ProviderCode)</span>
+                <span class="research-health-state">@state.Label</span>
+                @if (provider.LastRunDateUtc is { } when)
+                {
+                    <span class="research-health-when">@RelativeTime(when)</span>
+                }
+                @if (!provider.IsEnabled)
+                {
+                    <span class="research-health-off">off</span>
+                }
+            </div>
+        }
+        <button type="button" class="research-health-refresh um-btn um-btn-ghost um-btn-sm" title="Re-check provider health" @onclick="LoadProvidersAsync">
+            <i class="bi bi-arrow-clockwise @(_loading ? "research-health-spin" : "")"></i>
+        </button>
+    </div>
+}
+
+@code {
+    /// <summary>When true the strip renders inline for embedding inside another panel (no heading / standalone chrome).</summary>
+    [Parameter] public bool Embedded { get; set; }
+
+    private IReadOnlyList<LegalAuthoritySourceAdminDto> _providers = Array.Empty<LegalAuthoritySourceAdminDto>();
+    private bool _loaded;
+    private bool _loading;
+
+    protected override async Task OnInitializedAsync() => await LoadProvidersAsync();
+
+    private async Task LoadProvidersAsync()
+    {
+        _loading = true;
+        try
+        {
+            var sources = await Api.GetLegalAuthoritySourcesAsync();
+            _providers = sources
+                .GroupBy(s => s.ProviderCode, StringComparer.OrdinalIgnoreCase)
+                .Select(g => g.OrderByDescending(s => s.LastRunDateUtc ?? DateTime.MinValue).First())
+                .OrderBy(s => s.ProviderCode, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+        catch
+        {
+            // Diagnostics must never break the page; absence of data simply hides the strip.
+            _providers = Array.Empty<LegalAuthoritySourceAdminDto>();
+        }
+        finally
+        {
+            _loading = false;
+            _loaded = true;
+        }
+    }
+
+    private static string HealthTooltip(LegalAuthoritySourceAdminDto provider)
+    {
+        var status = string.IsNullOrWhiteSpace(provider.LastRunStatus) ? "never run" : provider.LastRunStatus;
+        var when = provider.LastRunDateUtc is { } d ? $" · {d:yyyy-MM-dd HH:mm} UTC" : string.Empty;
+        var key = provider.HasApiKey ? " · API key configured" : " · no API key";
+        return $"{provider.ProviderCode} · {status}{when}{key}";
+    }
+
+    private static (string Css, string Label) HealthState(string? status)
+    {
+        if (string.IsNullOrWhiteSpace(status)) return ("idle", "Not run");
+        var s = status.Trim().ToUpperInvariant();
+        if (s is "RESULTS_FOUND" or "SUCCEEDED" or "SUCCESS") return ("ok", "Healthy");
+        if (s is "NO_RESULTS" or "NO_CITATIONS_RESOLVED" or "COVERAGE_GAP") return ("warn", "No results");
+        return ("error", "Error");
+    }
+
+    private static string RelativeTime(DateTime utc)
+    {
+        var delta = DateTime.UtcNow - utc;
+        if (delta.TotalSeconds < 60) return "just now";
+        if (delta.TotalMinutes < 60) return $"{(int)delta.TotalMinutes}m ago";
+        if (delta.TotalHours < 24) return $"{(int)delta.TotalHours}h ago";
+        if (delta.TotalDays < 30) return $"{(int)delta.TotalDays}d ago";
+        return utc.ToString("yyyy-MM-dd");
+    }
+
+    private static string FriendlyProvider(string code) => code?.Trim().ToUpperInvariant() switch
+    {
+        "COURTLISTENER" => "CourtListener",
+        "GOVINFO" or "GOVINFO_ECFR" or "GOVINFO_ECFR_FALLBACK" => "GovInfo / eCFR",
+        "CORNELL_LII" or "CORNELLLII" => "Cornell LII",
+        "OFFICIAL_AUTHORITY" => "Official authority",
+        null or "" => "Source",
+        _ => code
+    };
+}

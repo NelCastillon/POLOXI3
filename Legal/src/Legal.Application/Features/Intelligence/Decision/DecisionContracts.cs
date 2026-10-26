@@ -1459,7 +1459,8 @@ public sealed record CandidateMaterialEvidenceDto(
     string? HrrPath,
     string AerRelationshipCode,
     string AerTone,
-    int? VerificationPct);
+    int? VerificationPct,
+    Guid? LegalDocumentVersionId = null);
 
 // Legal-authority roll-up and the top controlling authority (kept distinct from ordinary evidence).
 public sealed record CandidateAuthoritySummaryDto(

@@ -65,6 +65,9 @@ public sealed class MatterCorpusWorkflowIntegrationTests
             StoredBytes=buffer.ToArray();
             return $"immutable://{tenantId:N}/{documentId:N}/1";
         }
+
+        public Task<LegalDocumentReadResult> OpenReadAsync(Guid tenantId,string storageReference,CancellationToken cancellationToken=default)
+            =>Task.FromResult(new LegalDocumentReadResult(new MemoryStream(StoredBytes,writable:false),StoredBytes.Length));
     }
 
     private sealed class AcceptingValidator:ILegalDocumentIntakeValidator
@@ -179,6 +182,7 @@ public sealed class MatterCorpusWorkflowIntegrationTests
         public Task<IReadOnlyCollection<LegalMatterContextItem>> SearchLegacyProjectionAsync(Guid tenantId,Guid userId,Guid matterId,string query,int maximumItems,CancellationToken cancellationToken=default)=>Task.FromResult<IReadOnlyCollection<LegalMatterContextItem>>([]);
         public Task MarkProcessingFailedAsync(Guid tenantId,Guid userId,Guid documentVersionId,string errorCode,string errorMessage,CancellationToken cancellationToken=default)=>Task.CompletedTask;
         public Task<Guid?> GetDocumentMatterIdAsync(Guid tenantId,Guid documentVersionId,CancellationToken cancellationToken=default)=>Task.FromResult<Guid?>(documents.SingleOrDefault()?.MatterId);
+        public Task<LegalDocumentVersionContentLookup?> GetDocumentVersionContentAsync(Guid tenantId,Guid documentVersionId,CancellationToken cancellationToken=default)=>Task.FromResult<LegalDocumentVersionContentLookup?>(null);
         public Task<IReadOnlyCollection<DecisionRetrievalTelemetryDto>> GetRetrievalTelemetryAsync(Guid tenantId,Guid? matterId,Guid? decisionSessionId,CancellationToken cancellationToken=default)=>Task.FromResult<IReadOnlyCollection<DecisionRetrievalTelemetryDto>>([]);
         public Task PersistRetrievalTelemetryAsync(Guid tenantId,Guid userId,DecisionRetrievalTelemetry telemetry,CancellationToken cancellationToken=default)=>Task.CompletedTask;
         public Task<Guid> CreateUploadBatchAsync(Guid tenantId,Guid userId,Guid matterId,StartUploadBatchCommand command,CancellationToken cancellationToken=default)=>Task.FromResult(Guid.NewGuid());

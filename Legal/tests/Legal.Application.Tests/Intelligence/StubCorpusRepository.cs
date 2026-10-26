@@ -15,6 +15,7 @@ public abstract class StubCorpusRepository : ILegalDocumentCorpusRepository
     public Task<DecisionRetrievalArchitectureSettings> GetRetrievalArchitectureSettingsAsync(CancellationToken cancellationToken = default) => throw NotUsed();
     public Task MarkProcessingFailedAsync(Guid tenantId, Guid userId, Guid documentVersionId, string errorCode, string errorMessage, CancellationToken cancellationToken = default) => throw NotUsed();
     public Task<Guid?> GetDocumentMatterIdAsync(Guid tenantId, Guid documentVersionId, CancellationToken cancellationToken = default) => throw NotUsed();
+    public Task<LegalDocumentVersionContentLookup?> GetDocumentVersionContentAsync(Guid tenantId, Guid documentVersionId, CancellationToken cancellationToken = default) => throw NotUsed();
     public Task<IReadOnlyCollection<DecisionRetrievalTelemetryDto>> GetRetrievalTelemetryAsync(Guid tenantId, Guid? matterId, Guid? decisionSessionId, CancellationToken cancellationToken = default) => throw NotUsed();
     public Task<IReadOnlyCollection<LegalMatterContextItem>> SearchRoutedMatterContextAsync(Guid tenantId, Guid matterId, string query, IReadOnlyCollection<string> documentTypeCodes, int maximumItems, IReadOnlyCollection<float>? queryEmbedding = null, CancellationToken cancellationToken = default) => throw NotUsed();
     public Task<IReadOnlyCollection<LegalDocumentDto>> GetMatterDocumentsAsync(Guid tenantId, Guid matterId, CancellationToken cancellationToken = default) => throw NotUsed();

@@ -47,6 +47,19 @@ internal static class WideCorpusEvidenceProjection
         if (graph is null || graph.Propositions is null || graph.Propositions.Count == 0)
             return result;
 
+        // Map each supporting evidence item to the ACTUAL uploaded document version (+ file name) so a
+        // corpus snippet can deep-link to the real source document instead of the non-navigable
+        // matter-corpus:// identity Url. Empty when the graph carries no evidence rows.
+        var documentByItemId = new Dictionary<Guid, (Guid VersionId, string FileName)>();
+        if (graph.Evidence is not null)
+        {
+            foreach (var item in graph.Evidence)
+            {
+                if (item.LegalDocumentVersionId != Guid.Empty)
+                    documentByItemId[item.LegalEvidenceItemId] = (item.LegalDocumentVersionId, item.DocumentFileName);
+            }
+        }
+
         var branchTokens = branches
             .Select(branch => (branch, tokens: Tokenize($"{branch.DisplayName} {branch.Interpretation}")))
             .ToArray();
@@ -64,6 +77,20 @@ internal static class WideCorpusEvidenceProjection
 
             var (status, supportScore) = ClassifyAdmission(proposition, hasSupportEdge, hasContradiction);
 
+            // Resolve the backing source document from the proposition's SUPPORTS edges (prefer a
+            // SUPPORTS edge; otherwise accept any edge that resolves). Stays null when no supporting
+            // evidence item maps to a stored document version, so the snippet keeps its identity Url.
+            (Guid VersionId, string FileName)? sourceDocument = null;
+            foreach (var edge in support)
+            {
+                if (documentByItemId.TryGetValue(edge.LegalEvidenceItemId, out var doc))
+                {
+                    sourceDocument = doc;
+                    if (string.Equals(edge.RelationshipTypeCode, LegalDocumentRelationshipTypes.Supports, StringComparison.OrdinalIgnoreCase))
+                        break;
+                }
+            }
+
             var propositionTokens = Tokenize(proposition.PropositionText);
             var matched = false;
 
@@ -74,15 +101,15 @@ internal static class WideCorpusEvidenceProjection
                     continue;
 
                 matched = true;
-                // Weight the proposition's intrinsic admission score by claim↔branch overlap so an
+                // Weight the proposition's intrinsic admission score by claim/branch overlap so an
                 // on-point proposition contributes more than a tangential one. Never exceeds the
                 // intrinsic score, so presence alone can never inflate support.
                 var branchSupportScore = Math.Clamp(supportScore * overlap, 0m, 1m);
-                result.Add(BuildSnippet(proposition, branch.WideBranchId, branch.DisplayName, status, branchSupportScore, nowUtc));
+                result.Add(BuildSnippet(proposition, branch.WideBranchId, branch.DisplayName, status, branchSupportScore, nowUtc, sourceDocument));
             }
 
             if (!matched)
-                result.Add(BuildSnippet(proposition, branchId: null, branchDisplayName: null, status, supportScore: 0m, nowUtc));
+                result.Add(BuildSnippet(proposition, branchId: null, branchDisplayName: null, status, supportScore: 0m, nowUtc, sourceDocument));
         }
 
         return result;
@@ -133,12 +160,17 @@ internal static class WideCorpusEvidenceProjection
         // Map each supporting evidence item to its domain EvidenceTypeCode so admitted propositions can
         // carry the real document evidence type instead of a generic placeholder.
         var evidenceTypeByItemId = new Dictionary<Guid, string>();
+        // Map each supporting evidence item to the ACTUAL uploaded document version (+ file name) so the
+        // evidence row can deep-link to the real source document via the authenticated content endpoint.
+        var documentByItemId = new Dictionary<Guid, (Guid VersionId, string FileName)>();
         if (graph.Evidence is not null)
         {
             foreach (var item in graph.Evidence)
             {
                 if (!string.IsNullOrWhiteSpace(item.EvidenceTypeCode))
                     evidenceTypeByItemId[item.LegalEvidenceItemId] = item.EvidenceTypeCode.Trim();
+                if (item.LegalDocumentVersionId != Guid.Empty)
+                    documentByItemId[item.LegalEvidenceItemId] = (item.LegalDocumentVersionId, item.DocumentFileName);
             }
         }
 
@@ -163,17 +195,20 @@ internal static class WideCorpusEvidenceProjection
             if (!string.Equals(status, StatusVerifiedSupport, StringComparison.Ordinal))
                 continue;
 
-            // Resolve the document evidence-type code from the proposition's SUPPORTS edges.
+            // Resolve the document evidence-type code AND the backing source document from the
+            // proposition's SUPPORTS edges.
             var entityTypeCode = DefaultDocumentEntityTypeCode;
+            (Guid VersionId, string FileName)? sourceDocument = null;
             foreach (var edge in support)
             {
                 if (!string.Equals(edge.RelationshipTypeCode, LegalDocumentRelationshipTypes.Supports, StringComparison.OrdinalIgnoreCase))
                     continue;
                 if (evidenceTypeByItemId.TryGetValue(edge.LegalEvidenceItemId, out var typeCode))
-                {
                     entityTypeCode = typeCode;
+                if (sourceDocument is null && documentByItemId.TryGetValue(edge.LegalEvidenceItemId, out var doc))
+                    sourceDocument = doc;
+                if (sourceDocument is not null && !string.Equals(entityTypeCode, DefaultDocumentEntityTypeCode, StringComparison.Ordinal))
                     break;
-                }
             }
 
             var propositionTokens = Tokenize(proposition.PropositionText);
@@ -192,7 +227,11 @@ internal static class WideCorpusEvidenceProjection
                     NavigationRoute: null,
                     RelevanceScore: 1m,
                     RankNumber: ++rank,
-                    MatchedBranches: [branch.DisplayName]));
+                    MatchedBranches: [branch.DisplayName])
+                {
+                    LegalDocumentVersionId = sourceDocument?.VersionId,
+                    LegalDocumentFileName = sourceDocument?.FileName,
+                });
             }
         }
 
@@ -205,7 +244,8 @@ internal static class WideCorpusEvidenceProjection
         string? branchDisplayName,
         string status,
         decimal supportScore,
-        DateTime nowUtc)
+        DateTime nowUtc,
+        (Guid VersionId, string FileName)? sourceDocument = null)
     {
         var admitted = string.Equals(status, StatusVerifiedSupport, StringComparison.Ordinal);
         return new WideExternalKnowledgeSnippet
@@ -213,7 +253,7 @@ internal static class WideCorpusEvidenceProjection
             // Query is the attribution fallback channel for rows without a BranchId; when a branch is
             // matched, BranchId is authoritative and Query simply mirrors the branch name.
             Query = branchDisplayName ?? proposition.PropositionText,
-            Title = "Matter evidence",
+            Title = sourceDocument is { } doc && !string.IsNullOrWhiteSpace(doc.FileName) ? doc.FileName : "Matter evidence",
             // Stable, de-dup-friendly identity for the corpus proposition (+ branch) pair.
             Url = $"matter-corpus://proposition/{proposition.LegalFactPropositionId:N}" + (branchId is { } id ? $"#{id:N}" : string.Empty),
             Snippet = proposition.PropositionText,
@@ -229,6 +269,10 @@ internal static class WideCorpusEvidenceProjection
             AuthorityIdentityVerified = admitted,
             PropositionSupportScore = supportScore,
             PropositionSupportStatus = status,
+            // Authoritative uploaded-document version backing this proposition, when resolvable. Lets the UI
+            // open/stream the ACTUAL source document instead of the non-navigable matter-corpus:// Url.
+            LegalDocumentVersionId = sourceDocument?.VersionId,
+            LegalDocumentFileName = sourceDocument?.FileName,
         };
     }
 

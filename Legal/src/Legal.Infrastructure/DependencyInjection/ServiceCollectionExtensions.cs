@@ -303,6 +303,10 @@ public static class ServiceCollectionExtensions
 
         // Judz Citator — authority treatment & good-law validity.
         services.AddScoped<Legal.Application.Abstractions.Intelligence.ICitatorRepository, CitatorRepository>();
+        // Live (advisory) good-law provider backed by CourtListener. Supplements DB treatments for
+        // authorities the tenant has not recorded; fail-soft, provenance-tagged, never authoritative.
+        services.AddScoped<Legal.Application.Abstractions.Intelligence.ILegalGroundingConfigurationSource, LegalGroundingConfigurationSource>();
+        services.AddHttpClient<Legal.Application.Abstractions.Intelligence.ICitatorProvider, CourtListenerCitatorProvider>();
         services.AddScoped<Legal.Application.Abstractions.Intelligence.ICitatorService, Legal.Application.Features.Intelligence.Citator.CitatorService>();
 
         // Judz Matter Lifecycle — reusable operational stage engine (separate from POLOXI Core).

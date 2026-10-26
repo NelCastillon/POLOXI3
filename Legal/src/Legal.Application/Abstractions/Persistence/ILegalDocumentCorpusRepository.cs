@@ -20,6 +20,13 @@ public interface ILegalDocumentCorpusRepository
         Guid documentVersionId,
         CancellationToken cancellationToken = default);
 
+    // Resolve the owning matter, display name, content type, and opaque storage reference for a
+    // document version so the API can authorize and stream the stored original (PDF preview).
+    Task<LegalDocumentVersionContentLookup?> GetDocumentVersionContentAsync(
+        Guid tenantId,
+        Guid documentVersionId,
+        CancellationToken cancellationToken = default);
+
     Task<IReadOnlyCollection<DecisionRetrievalTelemetryDto>> GetRetrievalTelemetryAsync(
         Guid tenantId,
         Guid? matterId,
@@ -365,3 +372,13 @@ public interface ILegalDocumentCorpusRepository
         Guid matterId,
         CancellationToken cancellationToken = default);
 }
+
+// Minimal projection used to authorize and stream a stored document original for preview.
+public sealed record LegalDocumentVersionContentLookup(
+    Guid LegalDocumentVersionId,
+    Guid LegalDocumentId,
+    Guid MatterId,
+    string FileName,
+    string ContentType,
+    string StorageReference,
+    string MalwareStatusCode);

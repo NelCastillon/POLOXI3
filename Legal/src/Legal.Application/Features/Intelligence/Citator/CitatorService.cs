@@ -4,9 +4,11 @@ using Legal.Application.Features.Intelligence.Citator;
 namespace Legal.Application.Features.Intelligence.Citator;
 
 // Computes a good-law validity flag for each requested authority: the worst flag (highest severity)
-// among its recorded treatments, using the DB-backed flag-level vocabulary. Authorities with no
-// citator data resolve to the "Unknown" flag. Advisory only — never blocks a decision.
-public sealed class CitatorService(ICitatorRepository repository) : ICitatorService
+// among its recorded treatments, using the DB-backed flag-level vocabulary. DB-backed tenant treatments
+// are the authoritative source; an optional live citator provider (e.g. CourtListener) supplies ADVISORY
+// treatments that are merged in only when the DB has no authoritative row for that authority. Authorities
+// with neither DB nor provider data resolve to the "Unknown" flag. Advisory only — never blocks a decision.
+public sealed class CitatorService(ICitatorRepository repository, ICitatorProvider? liveProvider = null) : ICitatorService
 {
     private const string UnknownFlagCode = "Unknown";
 
@@ -31,6 +33,35 @@ public sealed class CitatorService(ICitatorRepository repository) : ICitatorServ
         var treatmentsByIdentity = treatments
             .GroupBy(t => t.CitedAuthorityIdentity, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => (IReadOnlyList<AuthorityTreatmentDto>)g.ToList(), StringComparer.OrdinalIgnoreCase);
+
+        // Authoritative DB treatments win. For authorities the tenant has NOT recorded any treatment for,
+        // consult the optional live citator provider for an ADVISORY signal. The provider is fail-soft and
+        // only returns authorities it could actually evidence; everything else stays Unknown below.
+        if (liveProvider is not null)
+        {
+            var uncovered = identities
+                .Where(id => !treatmentsByIdentity.TryGetValue(id, out var rows) || rows.Count == 0)
+                .ToArray();
+            if (uncovered.Length > 0)
+            {
+                IReadOnlyDictionary<string, IReadOnlyList<AuthorityTreatmentDto>> live;
+                try
+                {
+                    live = await liveProvider.GetTreatmentsAsync(tenantId, uncovered, cancellationToken);
+                }
+                catch (Exception) when (!cancellationToken.IsCancellationRequested)
+                {
+                    // Provider is advisory: any failure simply leaves the uncovered authorities Unknown.
+                    live = new Dictionary<string, IReadOnlyList<AuthorityTreatmentDto>>(StringComparer.OrdinalIgnoreCase);
+                }
+
+                foreach (var (identity, rows) in live)
+                {
+                    if (rows.Count > 0)
+                        treatmentsByIdentity[identity] = rows;
+                }
+            }
+        }
 
         var results = new List<AuthorityValidityDto>(identities.Length);
         foreach (var identity in identities)
