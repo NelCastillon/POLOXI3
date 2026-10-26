@@ -253,7 +253,11 @@ internal static class WideCorpusEvidenceProjection
             // Query is the attribution fallback channel for rows without a BranchId; when a branch is
             // matched, BranchId is authoritative and Query simply mirrors the branch name.
             Query = branchDisplayName ?? proposition.PropositionText,
-            Title = sourceDocument is { } doc && !string.IsNullOrWhiteSpace(doc.FileName) ? doc.FileName : "Matter evidence",
+            // A snippet backed by a resolvable uploaded document is DOCUMENT EVIDENCE (titled by its file
+            // name); only a proposition with no backing document falls back to the generic matter label.
+            Title = sourceDocument is { } doc && !string.IsNullOrWhiteSpace(doc.FileName)
+                ? $"Document Evidence — {doc.FileName}"
+                : "Matter evidence",
             // Stable, de-dup-friendly identity for the corpus proposition (+ branch) pair.
             Url = $"matter-corpus://proposition/{proposition.LegalFactPropositionId:N}" + (branchId is { } id ? $"#{id:N}" : string.Empty),
             Snippet = proposition.PropositionText,

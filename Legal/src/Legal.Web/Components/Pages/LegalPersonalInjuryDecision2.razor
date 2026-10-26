@@ -2499,6 +2499,26 @@
 
     private void CloseAmbiguityEvidence() => _ambiguityEvidenceGroup = null;
 
+    // Distinct evidence-SOURCE count for a group's badge. The raw Evidence/ExternalKnowledge collections
+    // hold one row per proposition/branch attribution, so the same underlying document or URL can appear
+    // thousands of times. Counting every raw row produced absurd totals (e.g. 35K). Here we collapse to
+    // the number of distinct real sources: enterprise evidence by backing document/entity, external
+    // knowledge by document version or URL.
+    private static int AmbiguityGroupEvidenceCount(WideAmbiguityGroupDto group)
+    {
+        var enterprise = group.Evidence
+            .Select(e => $"ENT:{e.EntityTypeCode}:{e.EntityId}")
+            .Where(key => !string.IsNullOrWhiteSpace(key));
+
+        var external = group.ExternalKnowledge
+            .Select(k => k.LegalDocumentVersionId is { } v
+                ? $"DOC:{v}"
+                : !string.IsNullOrWhiteSpace(k.Url) ? $"URL:{k.Url}" : $"TTL:{k.Title}")
+            .Where(key => !string.IsNullOrWhiteSpace(key));
+
+        return enterprise.Concat(external).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+    }
+
     internal bool _uploading;
     internal int _uploadTotal;
     internal int _uploadIndex;
@@ -4650,8 +4670,8 @@
                                 <button type="button" class="poloxi-branch-chip poloxi-branch-chip--action" @onclick="() => OpenAmbiguityGroup(group)" title="View branches and result details">
                                     <i class="bi bi-diagram-3"></i>@group.Branches.Count branch@(group.Branches.Count == 1 ? "" : "es")<i class="bi bi-box-arrow-up-right poloxi-branch-chip-ext"></i>
                                 </button>
-                                <button type="button" class="poloxi-branch-chip poloxi-branch-chip--action" @onclick="() => OpenAmbiguityEvidence(group)" title="View evidence and external knowledge details">
-                                    <i class="bi bi-database-check"></i>@(group.Evidence.Count + group.ExternalKnowledge.Count) evidence<i class="bi bi-box-arrow-up-right poloxi-branch-chip-ext"></i>
+                                <button type="button" class="poloxi-branch-chip poloxi-branch-chip--action" @onclick="() => OpenAmbiguityEvidence(group)" title="Distinct evidence sources (documents and external references) backing this interpretation">
+                                    <i class="bi bi-database-check"></i>@AmbiguityGroupEvidenceCount(group) evidence<i class="bi bi-box-arrow-up-right poloxi-branch-chip-ext"></i>
                                 </button>
                             </div>
                             @if (group.InterpretiveResults.Count > 0)
@@ -6812,11 +6832,13 @@
     // excerpt (the line that links to the proposition) and a deep link to open the underlying document.
     private WideFactorReferenceDto? _referenceDetail;
 
-    // When a factor reference points at an ACTUAL uploaded document version, open the same embedded PDF
-    // preview modal used everywhere else (material evidence, retrieved evidence) rather than the citation-only
-    // reference popup. References without a resolvable document version (matter fields, counts, authorities)
-    // still fall back to the citation popup. Never fabricates a version id.
-    internal void OpenReferenceDetail(WideFactorReferenceDto reference)
+    // When a factor reference points at an ACTUAL uploaded document, open the same embedded PDF preview
+    // modal used everywhere else (material evidence, retrieved evidence) rather than the citation-only
+    // reference popup. Resolution order: (1) an explicit DocumentVersionId streams directly; (2) a
+    // DocumentId (no version) is resolved to its latest stored version via the matter document lookup.
+    // References with no resolvable document (matter fields, counts, authorities) fall back to the citation
+    // popup. Never fabricates a version id.
+    internal async Task OpenReferenceDetail(WideFactorReferenceDto reference)
     {
         if (reference.DocumentVersionId is { } versionId && versionId != Guid.Empty)
         {
@@ -6824,7 +6846,38 @@
             return;
         }
 
+        if (reference.DocumentId is { } documentId && documentId != Guid.Empty
+            && await ResolveLatestDocumentVersionAsync(documentId) is { } resolved)
+        {
+            OpenDocumentPreview(resolved.VersionId, string.IsNullOrWhiteSpace(resolved.FileName) ? reference.Label : resolved.FileName);
+            return;
+        }
+
         _referenceDetail = reference;
+    }
+
+    // Resolve a LegalDocumentId to the LegalDocumentVersionId of its latest stored version (+ file name)
+    // so a reference that only carries the document identity can still open the ACTUAL PDF. Returns null
+    // when the document is not found in the current matter or has no stored versions. Never fabricated.
+    private async Task<(Guid VersionId, string FileName)?> ResolveLatestDocumentVersionAsync(Guid documentId)
+    {
+        if (EffectiveMatterId is not { } matterId || matterId == Guid.Empty)
+            return null;
+        try
+        {
+            var documents = await Api.GetLegalMatterDocumentsAsync(matterId);
+            var document = documents.FirstOrDefault(d => d.LegalDocumentId == documentId);
+            var latest = document?.Versions?
+                .OrderByDescending(v => v.VersionNumber)
+                .FirstOrDefault();
+            if (latest is null)
+                return null;
+            return (latest.LegalDocumentVersionId, document!.FileName);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private void CloseReferenceDetail() => _referenceDetail = null;
