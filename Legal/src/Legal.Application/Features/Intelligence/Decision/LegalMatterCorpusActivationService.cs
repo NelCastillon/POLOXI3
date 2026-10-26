@@ -48,12 +48,16 @@ public sealed class LegalMatterCorpusActivationService(
         // (no snapshot yet) it would be a pure no-op, so skip it entirely and defer CDI to the document
         // change/upload path that runs after a decision has been produced.
         var hasDecisionSnapshot = await integrityRepository.GetLatestMatterSnapshotAsync(tenantId, matterId, cancellationToken) is not null;
+        // Documents are routinely uploaded without a Domain Pack while the matter itself carries one. Fall back to
+        // the matter's pack so the interpreter always receives the canonical concept/evidence-type vocabulary.
+        var matterDomainPackCode = await ResolveMatterDomainPackCodeAsync(tenantId, matterId, cancellationToken);
         foreach (var version in pending)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var passagesRead = 0;
             var evidenceExtracted = 0;
             var conceptBound = false;
+            var effectiveDomainPackCode = string.IsNullOrWhiteSpace(version.DomainPackCode) ? matterDomainPackCode : version.DomainPackCode;
             try
             {
                 if (settings.Stage1SemanticEnrichmentEnabled)
@@ -64,9 +68,9 @@ public sealed class LegalMatterCorpusActivationService(
                     if (passages.Count > 0)
                     {
                         var domainConcepts = await ResolveDomainConceptsAsync(
-                            tenantId, version.DomainPackCode, conceptsByPack, cancellationToken);
+                            tenantId, effectiveDomainPackCode, conceptsByPack, cancellationToken);
                         conceptBound = domainConcepts.Count > 0;
-                        var resolvedPack = await domainPackResolver.ResolveAsync(tenantId, version.DomainPackCode, cancellationToken);
+                        var resolvedPack = await domainPackResolver.ResolveAsync(tenantId, effectiveDomainPackCode, cancellationToken);
                         // Semantic extraction is its own feature (LEGAL_DOCUMENT_SEMANTIC_EXTRACTION) with its own
                         // policy whose primary deployment is the configured reasoning model (Astra). Do NOT forward
                         // the user's decision/answer model selection here: any override steers the route repository
@@ -74,7 +78,7 @@ public sealed class LegalMatterCorpusActivationService(
                         // extraction to the generic Auto model (gpt-4.1-mini) and producing no admissible evidence.
                         var proposal = await semanticInterpreter.InterpretAsync(
                             tenantId, matterId, version.LegalDocumentId, version.LegalDocumentVersionId,
-                            version.DomainPackCode, domainConcepts, passages, correlationId, modelCodeOverride: null, resolvedPack, cancellationToken);
+                            effectiveDomainPackCode, domainConcepts, passages, correlationId, modelCodeOverride: null, resolvedPack, cancellationToken);
                         evidenceExtracted = proposal.EvidenceItems.Count;
                         await corpusRepository.SaveSemanticProposalAsync(
                             tenantId, userId, matterId, version.LegalDocumentId,
@@ -199,6 +203,21 @@ public sealed class LegalMatterCorpusActivationService(
 
         cache[domainPackCode] = concepts;
         return concepts;
+    }
+
+    // Fail-soft: a lookup failure simply yields no fallback pack and the version activates as before.
+    private async Task<string?> ResolveMatterDomainPackCodeAsync(Guid tenantId, Guid matterId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var matter = await decisionRepository.GetMatterAsync(tenantId, matterId, cancellationToken);
+            return string.IsNullOrWhiteSpace(matter?.DomainPackCode) ? null : matter.DomainPackCode.Trim();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "Failed to resolve Domain Pack for matter {MatterId}; activating without matter-level pack fallback.", matterId);
+            return null;
+        }
     }
 
     // Generates embeddings for up to EmbeddingPassageBatchLimit passages of a version that still lack one,

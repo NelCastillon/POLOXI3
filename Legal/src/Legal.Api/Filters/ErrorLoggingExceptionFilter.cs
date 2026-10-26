@@ -17,6 +17,13 @@ public sealed class ErrorLoggingExceptionFilter(IErrorLogService errorLog) : IAs
         var httpContext = context.HttpContext;
         var request = httpContext.Request;
 
+        // A client-aborted request (navigation, circuit reset, timeout) surfaces as a cancellation.
+        // That is not an application fault, so do not persist it as an error-log entry.
+        if (httpContext.RequestAborted.IsCancellationRequested && context.Exception is OperationCanceledException)
+        {
+            return;
+        }
+
         var descriptor = context.ActionDescriptor as Microsoft.AspNetCore.Mvc.Controllers.ControllerActionDescriptor;
         var module = descriptor?.ControllerName is { Length: > 0 } controller
             ? $"Api.{controller}"
@@ -46,7 +53,9 @@ public sealed class ErrorLoggingExceptionFilter(IErrorLogService errorLog) : IAs
             UserId = AuthenticatedRequestContext.GetUserId(httpContext.User)
         };
 
-        await errorLog.LogAsync(entry, httpContext.RequestAborted);
+        // Persist independently of the request lifetime: if the client has already gone away the
+        // aborted token would cancel the insert and lose the record.
+        await errorLog.LogAsync(entry, CancellationToken.None);
 
         // Do not mark handled: let the framework produce its normal ProblemDetails/error response.
     }

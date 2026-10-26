@@ -53,6 +53,12 @@ public sealed class LegalDocumentSemanticInterpreter(IAiProviderRouter aiRouter)
             .OrderBy(evt => evt.SortOrder)
             .Select(evt => new { evt.EventTypeCode, evt.DimensionCode, evt.Name, evt.Description })
             .ToArray();
+        // Canonical Evidence Type vocabulary (Legal_DecisionDomainPackEvidenceType). Supplied in the SAME call so
+        // every extracted evidence item binds to the code Wide2 scope/presence gating keys on. Code/name/dimension
+        // only (no description) to keep the fixed prompt section compact for packs with hundreds of types.
+        var evidenceTypes = (resolvedPack?.EvidenceTypes ?? [])
+            .Select(evidenceType => new { evidenceType.EvidenceTypeCode, evidenceType.Name, evidenceType.DimensionCode })
+            .ToArray();
         var resolvedModelOverride = string.IsNullOrWhiteSpace(modelCodeOverride) ? null : modelCodeOverride.Trim();
 
         // Input budget: the tenant AI safety guard (Intelligence.Safety.MaximumInputCharacters) rejects any
@@ -63,7 +69,7 @@ public sealed class LegalDocumentSemanticInterpreter(IAiProviderRouter aiRouter)
         // prompt and the fixed concept/entity/event sections), extracted independently, then merged. Proposal
         // keys are namespaced per batch so keys never collide across batches, and Govern runs once against the
         // full passage set so passage-span admission and Domain Pack binding are unchanged.
-        var fixedSections = JsonSerializer.Serialize(new { DomainConcepts = concepts, DomainEntityTypes = entityTypes, DomainEventTypes = eventTypes });
+        var fixedSections = JsonSerializer.Serialize(new { DomainConcepts = concepts, DomainEntityTypes = entityTypes, DomainEventTypes = eventTypes, DomainEvidenceTypes = evidenceTypes });
         var perRequestPassageBudget = Math.Max(
             MinimumPassageCharacterBudget,
             InputCharacterCeiling - SystemPrompt.Length - fixedSections.Length - PromptEnvelopeReserve);
@@ -90,6 +96,7 @@ public sealed class LegalDocumentSemanticInterpreter(IAiProviderRouter aiRouter)
                 DomainConcepts = concepts,
                 DomainEntityTypes = entityTypes,
                 DomainEventTypes = eventTypes,
+                DomainEvidenceTypes = evidenceTypes,
                 Passages = sourcePassages
             });
             var result = await aiRouter.GenerateAsync(
@@ -182,6 +189,11 @@ public sealed class LegalDocumentSemanticInterpreter(IAiProviderRouter aiRouter)
         // there would discard every extracted evidence item, leaving documents perpetually "not activated".
         // So concept binding is enforced only when a concept set actually exists.
         var requireConceptBinding = conceptsByCode.Count > 0;
+        // Canonical evidence-type binding (same governance pattern as entity/event codes): when the Domain Pack
+        // supplies an Evidence Type vocabulary, each item's evidenceTypeCode is resolved exact -> normalized ->
+        // UNCLASSIFIED. The item is never dropped; the model's raw code is preserved for review. With no pack
+        // vocabulary the code is left as emitted (packless intake path).
+        var evidenceTypeBinder = EvidenceTypeCodeBinder.Create(resolvedPack?.EvidenceTypes ?? []);
         var evidence = proposal.EvidenceItems
             .Where(item => !string.IsNullOrWhiteSpace(item.ProposalKey) &&
                            !string.IsNullOrWhiteSpace(item.Summary) &&
@@ -193,8 +205,11 @@ public sealed class LegalDocumentSemanticInterpreter(IAiProviderRouter aiRouter)
             .Select(item =>
             {
                 var concept = item.DomainConceptCode is not null && conceptsByCode.TryGetValue(item.DomainConceptCode, out var match) ? match : null;
+                var boundEvidenceTypeCode = evidenceTypeBinder.Bind(item.EvidenceTypeCode);
                 return item with
                 {
+                    EvidenceTypeCode = boundEvidenceTypeCode,
+                    RawEvidenceTypeCode = string.Equals(boundEvidenceTypeCode, item.EvidenceTypeCode, StringComparison.Ordinal) ? null : item.EvidenceTypeCode,
                     DimensionCode = concept?.DimensionCode ?? item.DimensionCode,
                     DomainConceptCode = concept?.ConceptCode,
                     VerificationProfileCode = concept?.VerificationProfileCode ?? item.VerificationProfileCode,
@@ -313,6 +328,9 @@ public sealed class LegalDocumentSemanticInterpreter(IAiProviderRouter aiRouter)
 
         When DomainEntityTypes/DomainEventTypes are supplied, also extract domainEntities/domainEvents that occur in the
         passages, each bound to one supplied entityTypeCode/eventTypeCode and citing a supplied passageId; omit any you cannot bind.
+        When DomainEvidenceTypes are supplied, every evidenceItems.evidenceTypeCode MUST be one of the supplied
+        evidenceTypeCode values, copied exactly. Choose the single closest type for the passage content; do not invent,
+        rename, or reformat codes. Use UNCLASSIFIED only when no supplied type reasonably applies.
         All facts are allegations pending independent verification. Return strict JSON matching the schema.
         """;
 

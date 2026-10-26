@@ -706,7 +706,8 @@ COALESCE(TRY_CONVERT(decimal(9,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultVa
 COALESCE(TRY_CONVERT(decimal(9,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.MatterScopePendingReviewFloor' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),0.10) MatterScopePendingReviewFloor,
 COALESCE(TRY_CONVERT(decimal(9,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.MatterScopeZeroScoreCeiling' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),0.05) MatterScopeZeroScoreCeiling,
 COALESCE(TRY_CONVERT(decimal(9,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.MatterScopeImmediateRelevance' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),0.60) MatterScopeImmediateRelevance,
-COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.EnableEvidenceAwareL3Routing' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'true') EnableEvidenceAwareL3Routing;
+COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.EnableEvidenceAwareL3Routing' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'true') EnableEvidenceAwareL3Routing,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.LandscapeShardSize' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),6) LandscapeShardSize;
 -- V3.3 POLOXI.Legal_AnswerKind lookup (tenant rows override global rows with the same code).
 SELECT AnswerKindCode,DepthCeiling,MaxInformationRounds,RunsCandidateCompetition
 FROM(SELECT AnswerKindCode,DepthCeiling,MaxInformationRounds,RunsCandidateCompetition,
@@ -835,7 +836,8 @@ WHERE Rn=1 ORDER BY AnswerKindCode;
             MatterScopePendingReviewFloor=Math.Clamp(row.MatterScopePendingReviewFloor,0m,1m),
             MatterScopeZeroScoreCeiling=Math.Clamp(row.MatterScopeZeroScoreCeiling,0m,1m),
             MatterScopeImmediateRelevance=Math.Clamp(row.MatterScopeImmediateRelevance,0m,1m),
-            EnableEvidenceAwareL3Routing=string.Equals(row.EnableEvidenceAwareL3Routing,"true",StringComparison.OrdinalIgnoreCase)
+            EnableEvidenceAwareL3Routing=string.Equals(row.EnableEvidenceAwareL3Routing,"true",StringComparison.OrdinalIgnoreCase),
+            LandscapeShardSize=Math.Clamp(row.LandscapeShardSize,0,24)
         };
     }
 
@@ -1007,7 +1009,7 @@ WHERE WideExecutionId=@WideExecutionId AND TenantId=@TenantId AND IsDeleted=0;
         decimal L3TierAThreshold,int L3TierABatchSize,int L3TierAPassagesPerParent,int L3PassageMapConcurrency,int L3PassageMapTopN,int L3FactorSliceMaxItems,
         string EnableL2RelevanceReview,int L2ReviewBatchSize,string EnableMatterEvidenceScopeGate,decimal MatterScopeOutThreshold,string MatterScopeInclusionFirst,
         int DomainPackDepthCeiling,int L2ReviewPromptBudgetChars,int L2ReviewMaxRetries,int L2ReviewConcurrency,int MatterScopeMinimumMappedPassages,decimal MatterScopeDecisivePassageScore,decimal MatterScopePendingReviewFloor,
-        decimal MatterScopeZeroScoreCeiling,decimal MatterScopeImmediateRelevance,string EnableEvidenceAwareL3Routing);
+        decimal MatterScopeZeroScoreCeiling,decimal MatterScopeImmediateRelevance,string EnableEvidenceAwareL3Routing,int LandscapeShardSize);
 
     private sealed record WideAnswerKindRow(string AnswerKindCode,int DepthCeiling,int? MaxInformationRounds,bool RunsCandidateCompetition);
 

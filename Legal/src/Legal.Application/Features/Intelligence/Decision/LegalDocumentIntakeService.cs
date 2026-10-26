@@ -15,6 +15,7 @@ public sealed class LegalDocumentIntakeService(
     ILegalDocumentCorpusRepository corpusRepository,
     IDomainPackResolver domainPackResolver,
     IMatterChangeProcessor matterChangeProcessor,
+    ILegalDecisionRepository decisionRepository,
     ILogger<LegalDocumentIntakeService> logger) : ILegalDocumentIntakeService
 {
     public async Task<LegalDocumentDto> IngestAsync(LegalDocumentIntakeRequest request, Stream content, CancellationToken cancellationToken = default)
@@ -146,11 +147,19 @@ public sealed class LegalDocumentIntakeService(
                 // the extracted document is preserved and enrichment is simply skipped.
                 try
                 {
-                    var resolvedPack = await domainPackResolver.ResolveAsync(request.TenantId, request.DomainPackCode, cancellationToken);
+                    // Fall back to the matter's Domain Pack when the upload carries none so the interpreter
+                    // receives the canonical concept/evidence-type vocabulary for this matter.
+                    var effectiveDomainPackCode = request.DomainPackCode;
+                    if (string.IsNullOrWhiteSpace(effectiveDomainPackCode))
+                    {
+                        var matter = await decisionRepository.GetMatterAsync(request.TenantId, request.MatterId, cancellationToken);
+                        effectiveDomainPackCode = string.IsNullOrWhiteSpace(matter?.DomainPackCode) ? null : matter.DomainPackCode.Trim();
+                    }
+                    var resolvedPack = await domainPackResolver.ResolveAsync(request.TenantId, effectiveDomainPackCode, cancellationToken);
                     var concepts = resolvedPack.Concepts;
                     var proposal = await semanticInterpreter.InterpretAsync(
                         request.TenantId, request.MatterId, documentId, version.LegalDocumentVersionId,
-                        request.DomainPackCode, concepts, passages, request.CorrelationId, request.ModelCode, resolvedPack, cancellationToken);
+                        effectiveDomainPackCode, concepts, passages, request.CorrelationId, request.ModelCode, resolvedPack, cancellationToken);
                     await corpusRepository.SaveSemanticProposalAsync(
                         request.TenantId, request.UserId, request.MatterId, documentId,
                         version.LegalDocumentVersionId, proposal, cancellationToken);

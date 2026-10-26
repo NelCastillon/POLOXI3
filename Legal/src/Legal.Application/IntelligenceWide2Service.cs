@@ -24,13 +24,65 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     private int _progressCompetingOutcomes;
     private int _progressIdentifiedFactors;
     private int _progressAdmittedEvidence;
+
+    // Distinct admitted-evidence count by entity identity ({EntityTypeCode}:{EntityId}). The running
+    // evidence list accumulates one entry per branch/level a passage grounds under, so a raw .Count sums
+    // occurrences and over-reports the cockpit "Admitted evidence" chip. Counting distinct identities keeps
+    // the live value aligned with the final EnterpriseEvidenceCount reconciliation.
+    private static int DistinctAdmittedEvidenceCount(IEnumerable<PoloxiEvidenceDto> evidence)=>
+        evidence.Select(item=>$"{item.EntityTypeCode}:{item.EntityId:D}").Distinct(StringComparer.OrdinalIgnoreCase).Count();
     // Evidence types that survived every deterministic gate and were materialized as L2 branches for
     // L3 generation. Summed across dimensions by BuildDomainPackLevel2Branches.
     private int _progressEligibleEvidenceTypes;
     // Evidence types that also survived the matter funnel / Blended Score gate and were dispatched to L3.
     private int _progressL3EvidenceTypes;
+    // ── Phase wall-clock telemetry ──
+    // Captures the wall-clock duration of each coarse pipeline phase (ANALYZING, HIERARCHY, NARROWING, …)
+    // using the existing progress markers as boundaries. This is the ONLY source of non-LLM phase timing:
+    // AI.Legal_Execution meters LLM calls, but the retrieval/ranking/ARL work between stages was previously
+    // invisible. The collected WideStageTimingDto entries are assigned to WideSearchResponse.StageTimings and
+    // persisted by AnalysisRunLedgerWriter. Fully fail-soft and host-agnostic; never affects the answer.
+    private readonly List<WideStageTimingDto> _phaseTimings=[];
+    private readonly Stopwatch _phaseStopwatch=new();
+    private string? _phaseCurrentCode;
+    private long _phaseLastElapsedMs;
+    // Resets the phase-timing collector at the start of a run.
+    private void ResetPhaseTimings()
+    {
+        _phaseTimings.Clear();
+        _phaseCurrentCode=null;
+        _phaseLastElapsedMs=0;
+        _phaseStopwatch.Restart();
+    }
+    // Closes the in-flight phase (if any) and opens a new one. Called on every progress-marker transition.
+    private void MarkPhase(string phase)
+    {
+        if(!_phaseStopwatch.IsRunning)return;
+        var now=_phaseStopwatch.ElapsedMilliseconds;
+        if(_phaseCurrentCode is{}current&&!string.Equals(current,phase,StringComparison.Ordinal))
+        {
+            var delta=now-_phaseLastElapsedMs;
+            if(delta>0)_phaseTimings.Add(new WideStageTimingDto(current,delta,0,0,null));
+            _phaseLastElapsedMs=now;
+        }
+        _phaseCurrentCode=phase;
+    }
+    // Closes the final in-flight phase so the last bucket (e.g. NARROWING→response build) is recorded.
+    private void FinalizePhaseTimings()
+    {
+        if(!_phaseStopwatch.IsRunning)return;
+        var now=_phaseStopwatch.ElapsedMilliseconds;
+        if(_phaseCurrentCode is{}current)
+        {
+            var delta=now-_phaseLastElapsedMs;
+            if(delta>0)_phaseTimings.Add(new WideStageTimingDto(current,delta,0,0,null));
+            _phaseLastElapsedMs=now;
+        }
+        _phaseStopwatch.Stop();
+    }
     private async Task PublishProgressAsync(string phase,string readiness,bool isProvisional,string? message,CancellationToken cancellationToken)
     {
+        MarkPhase(phase);
         if(string.IsNullOrEmpty(_progressCorrelationId))return;
         try
         {
@@ -766,6 +818,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         _progressAdmittedEvidence=0;
         _progressEligibleEvidenceTypes=0;
         _progressL3EvidenceTypes=0;
+        ResetPhaseTimings();
         await PublishProgressAsync("ANALYZING","Analyzing…",true,"Interpreting the question",cancellationToken);
         // 'POLOXI Engine' filter disabled: pure LLM answer, no hierarchy, grounding, or elimination.
         if(!request.UsePoloxiEngine)return await SearchLlmOnlyAsync(request,timer,cancellationToken);
@@ -1163,8 +1216,12 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
 
                 // Real-time cockpit feed: a narrower level was generated and grounded. Update the running
                 // factor count and admitted-evidence count so the console auto-increments while processing.
+                // Count DISTINCT admitted evidence (by entity identity) rather than per-branch occurrences:
+                // the same corpus passage/entity grounds under many branches/levels, so evidence.Count sums
+                // occurrences and inflates the cockpit chip. Deduping keeps the live value consistent with the
+                // final EnterpriseEvidenceCount reconciliation.
                 _progressIdentifiedFactors=allBranches.Count;
-                _progressAdmittedEvidence=evidence.Count;
+                _progressAdmittedEvidence=DistinctAdmittedEvidenceCount(evidence);
                 // Surface the actual factor name(s) just decomposed so users see the pipeline is pulling
                 // real content, not a generic spinner. Show the first new branch label, with a "+N more"
                 // suffix when several were produced at this level.
@@ -1187,6 +1244,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
 
             // Rank deduplicated evidence across surviving grounded paths only — evidence collected for
             // branches that were later eliminated must not surface as authorized evidence.
+            MarkPhase("EVIDENCE_RANKING");
             var survivingBranchIds=allBranches.Where(branch=>!branch.IsEliminated).Select(branch=>branch.WideBranchId).ToHashSet();
             var survivingEvidence=evidence.Where(item=>survivingBranchIds.Contains(item.HierarchyBranchId)).ToList();
             var ranked=RankEvidence(survivingEvidence,poloxiRequest,new(false,1,configuration.MinimumBranchConfidence,configuration.MaximumBranchesPerLevel*Math.Max(depth,1),request.MaximumResults,false));
@@ -1406,6 +1464,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             }
             var initialEntropy=ComputeUncertainty(configuration,survivorsFinal,candidateUniverse,evidence,externalKnowledgeAll,queryContract);
             var finalEntropy=initialEntropy;
+            MarkPhase("INFO_VALUE_ROUNDS");
             if(configuration.EnableInformationValue&&survivorsFinal.Length>0)
             {
                 var weakRounds=0;
@@ -1683,6 +1742,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             WideAnswerProposal answer;
             var answerStatus="COMPLETED";
             string? providerCodeUsed=null,modelCodeUsed=null;
+            MarkPhase("ANSWER_COMPOSE");
             try
             {
                 (answer,providerCodeUsed,modelCodeUsed)=await ComposeAnswerAsync(request,survivorsFinal,ranked,aggregateConfidence,externalKnowledge,queryContract,cancellationToken);
@@ -1865,6 +1925,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 }
             }
             _competitionBasis=competitionBasis;
+            MarkPhase("RANKING_COMPLETION");
             var completion=await CompleteRankingAsync(request,executionId,queryContract,survivorsFinal,interpretiveResults,competitionBasis,externalKnowledgeAll,configuration,llmCalls,rankingCompletionRequired,effectiveContractCount,cancellationToken);
             candidates=completion.Candidates;
             llmCalls=completion.LlmCalls;
@@ -1872,6 +1933,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             // Legal Authority, Human Intelligence, Investigation, Decision Contract, External Research, and
             // Media/Machine propositions) into the authoritative candidate ranking BEFORE readiness/status,
             // top-candidate derivation, and response assembly. Fully fail-soft and no-op off a legal matter.
+            MarkPhase("CHANNEL_CONTRIB");
             candidates=await ApplyChannelContributionsAsync(request,candidates,cancellationToken);
             // Canonical contract landscape fallback (migration 0451). When the Candidate x Branch competition
             // delivered no contract-coded candidate rows (hierarchy narrowed entirely into dispositions with no
@@ -2188,6 +2250,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             // cost. ABV issues exactly one taxonomy-bounded intent call, so it is folded into llmCalls
             // and the execution duration below. Fail-soft: any failure leaves AbvAction null.
             WideAbvActionDto? abvAction=null;
+            MarkPhase("SYNTHESIS");
             if(configuration.EnableAbv)
             {
                 // ABV runs on every responsibly-produced run, including clarification-required runs:
@@ -2232,8 +2295,11 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                         :BuildFallbackLandscapeCandidates(survivorsFinal);
                 if(landscapeCandidates.Count>0)
                 {
-                    llmCalls++;
-                    candidateLandscape=await ComposeCandidateLandscapeAsync(request,executionId.ToString(),landscapeCandidates,answerContext?.WinnerDisplayName,answerStatus,decisionConfidence,finalEntropy,relevantEvidence,externalKnowledge,interpretiveResults,cancellationToken);
+                    // One metered call per shard (migration 0462); 0 shard size = single call.
+                    llmCalls+=configuration.LandscapeShardSize>0&&landscapeCandidates.Count>configuration.LandscapeShardSize
+                        ?(landscapeCandidates.Count+configuration.LandscapeShardSize-1)/configuration.LandscapeShardSize
+                        :1;
+                    candidateLandscape=await ComposeCandidateLandscapeAsync(request,executionId.ToString(),landscapeCandidates,answerContext?.WinnerDisplayName,answerStatus,decisionConfidence,finalEntropy,relevantEvidence,externalKnowledge,interpretiveResults,configuration.LandscapeShardSize,cancellationToken);
                 }
             }
             timer.Stop();
@@ -2260,7 +2326,12 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 try{_factorInventoryChannelContributions=[..await channelContributionRepository.GetContributionsForMatterAsync(request.TenantId,factorChannelMatterId,cancellationToken)];}
                 catch(Exception ex){logger.LogWarning(ex,"Failed to load channel contributions for Factor Inventory (matter {MatterId}); channel chips omitted.",factorChannelMatterId);}
             }
+            // Close the phase-timing collector so the final bucket is recorded, then surface the coarse
+            // wall-clock phase breakdown on the response. Combined with AI.Legal_Execution LLM timings this
+            // makes the previously-invisible non-LLM retrieval/ranking/ARL time measurable per run.
+            FinalizePhaseTimings();
             var response=new WideSearchResponse(executionId,request.Query,answerStatus,terminationReason,depth,llmCalls,aggregateConfidence,answer.VerificationCode,finalAnswerText,allBranches.Select(ToDto).ToArray(),relevantEvidence,answer.SuggestedActions.Select(action=>new WideActionSuggestionDto(action.DisplayName,action.NavigationRoute,action.Rationale)).ToArray(),timer.ElapsedMilliseconds){ExternalReferences=MapExternalReferences(answer),InterpretiveResults=interpretiveResults,ExternalKnowledge=externalKnowledge,ProposedLegalAuthorities=MapProposedLegalAuthorities(proposedLegalAuthorities,externalKnowledge),QueryContract=queryContract,
+            StageTimings=[.._phaseTimings],
             Candidates=candidates,AmbiguityGroups=ambiguityGroups,EvidenceCoverage=evidenceCoverage,DecisionEvidenceCoverage=decisionEvidenceCoverage,ExternalEvidenceCount=externalKnowledge.Count,EnterpriseEvidenceCount=relevantEvidence.Length,
             InitialEntropy=initialEntropy.Entropy,FinalEntropy=finalEntropy.Entropy,InitialNormalizedEntropy=initialEntropy.NormalizedEntropy,FinalNormalizedEntropy=finalEntropy.NormalizedEntropy,TotalActualInformationGain=totalActualInformationGain,EntropyBasisCode=finalEntropy.EntropyBasisCode,InformationRounds=informationRounds,
             WinnerStability=winnerStability,TopKStability=topKStability,DecisionConfidence=decisionConfidence,ChallengeOutcome=challengeOutcome,
@@ -2847,7 +2918,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     // One LLM call turns the whole decided candidate competition into a coherent landscape plus an
     // individualized per-candidate narrative. It never re-runs reasoning, changes ranking/scores, or
     // introduces new facts; any failure returns null and the standard POLOXI candidate cards stand.
-    private async Task<WideCandidateLandscapeDto?> ComposeCandidateLandscapeAsync(WideSearchRequest request,string executionId,IReadOnlyCollection<WideCandidateDto> candidates,string? winnerDisplayName,string answerStatus,decimal? decisionConfidence,WideEntropyResult finalEntropy,IReadOnlyCollection<PoloxiEvidenceDto> relevantEvidence,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge,IReadOnlyCollection<WideInterpretiveResultDto> interpretiveResults,CancellationToken cancellationToken)
+    private async Task<WideCandidateLandscapeDto?> ComposeCandidateLandscapeAsync(WideSearchRequest request,string executionId,IReadOnlyCollection<WideCandidateDto> candidates,string? winnerDisplayName,string answerStatus,decimal? decisionConfidence,WideEntropyResult finalEntropy,IReadOnlyCollection<PoloxiEvidenceDto> relevantEvidence,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge,IReadOnlyCollection<WideInterpretiveResultDto> interpretiveResults,int landscapeShardSize,CancellationToken cancellationToken)
     {
         try
         {
@@ -2858,11 +2929,38 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 :"COMPETED";
             var userPrompt=BuildCandidateLandscapeContext(request,executionId,candidates,winnerDisplayName,presentationState,decisionConfidence,finalEntropy,relevantEvidence,externalKnowledge,interpretiveResults,BuildMatterContextSection());
             userPrompt=AppendCanonicalOutcomeMappingContext(userPrompt);
-            var result=await aiProviderRouter.GenerateAsync(request.TenantId,CandidateLandscapeFeatureCode(request),
-                await GetWideSystemPromptAsync(request,IntelligencePromptCodes.WideCandidateLandscape,cancellationToken),
-                userPrompt,
-                CandidateLandscapeSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_CANDIDATE_LANDSCAPE",null,request.CorrelationId,"Intelligent Search Wide"),SynthesisModel(request),cancellationToken);
-            var proposal=JsonSerializer.Deserialize<CandidateLandscapeProposal>(result.Content,JsonOptions);
+            var systemPrompt=await GetWideSystemPromptAsync(request,IntelligencePromptCodes.WideCandidateLandscape,cancellationToken);
+            var featureCode=CandidateLandscapeFeatureCode(request);
+            var synthesisModel=SynthesisModel(request);
+            // Sharded composition (migration 0462). The single composer call emits one narrative block per
+            // candidate (~20K+ output tokens for a full set) and output generation is linear in tokens, so that
+            // one call is the SYNTHESIS wall-clock floor. The per-candidate blocks are independent of each other
+            // (each reads only the already-scored candidate set), so the set is partitioned (rank order kept)
+            // into slices and every slice is composed CONCURRENTLY with the SAME model, system prompt, full-set
+            // context and schema; only the narrative OUTPUT is scoped to the slice. Shard results are joined into
+            // one proposal (landscape block from the first successful shard, which saw the whole set) and flow
+            // through the unchanged identity-guard map + deterministic merge. Content per candidate is identical
+            // to the single-call path; a failed shard contributes nothing and the merge fills its candidates.
+            var ordered=candidates.OrderBy(c=>c.RankNumber).ToArray();
+            CandidateLandscapeProposal? proposal;
+            if(landscapeShardSize>0&&ordered.Length>landscapeShardSize)
+            {
+                var shards=ordered.Chunk(landscapeShardSize).ToArray();
+                var shardTasks=shards.Select((shard,index)=>ComposeCandidateLandscapeShardAsync(request,executionId,featureCode,systemPrompt,userPrompt,shard,index,synthesisModel,cancellationToken)).ToArray();
+                var shardProposals=await Task.WhenAll(shardTasks);
+                var successful=shardProposals.Where(p=>p is not null).Select(p=>p!).ToArray();
+                logger.LogInformation("Candidate landscape composed in {ShardCount} shard(s) ({Succeeded} succeeded) for execution {ExecutionId}.",shards.Length,successful.Length,executionId);
+                proposal=successful.Length==0?null:new CandidateLandscapeProposal(
+                    successful[0].AnalysisRunId,
+                    successful.Select(p=>p.Landscape).FirstOrDefault(l=>l is not null),
+                    successful.SelectMany(p=>p.Candidates??[]).ToArray());
+            }
+            else
+            {
+                var result=await aiProviderRouter.GenerateAsync(request.TenantId,featureCode,systemPrompt,userPrompt,
+                    CandidateLandscapeSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_CANDIDATE_LANDSCAPE",null,request.CorrelationId,"Intelligent Search Wide"),synthesisModel,cancellationToken);
+                proposal=JsonSerializer.Deserialize<CandidateLandscapeProposal>(result.Content,JsonOptions);
+            }
             var mapped=MapCandidateLandscape(proposal,executionId,candidates,presentationState,ResolveCanonicalOutcomeMap());
             // Deterministic completeness guarantee: the LLM composer is advisory. Whether it returned null,
             // dropped candidates at the identity guard, or produced no fullAnalysis, EVERY authoritative
@@ -2889,6 +2987,33 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 logger.LogWarning(fallbackEx,"Deterministic landscape fallback also failed for execution {ExecutionId}. {Message}",executionId,fallbackEx.Message);
                 return null;
             }
+        }
+    }
+
+    // One Candidate Landscape shard (migration 0462). Receives the SAME system prompt and full-set user
+    // context as the single-call path, plus a scoping block that restricts the narrative OUTPUT to the
+    // slice's candidates (named by rank + display name, so the identity guard in MapCandidateLandscape still
+    // applies unchanged). Fail-soft per shard: any failure returns null and the caller's merge fills the gap.
+    private async Task<CandidateLandscapeProposal?> ComposeCandidateLandscapeShardAsync(WideSearchRequest request,string executionId,string featureCode,string systemPrompt,string fullUserPrompt,IReadOnlyCollection<WideCandidateDto> shard,int shardIndex,string? synthesisModel,CancellationToken cancellationToken)
+    {
+        try
+        {
+            // AI.Legal_Execution dedupes on (TenantId, CorrelationId, FeatureCode); give each shard its own
+            // correlation suffix so every concurrent composer call is metered/recorded, not just the first.
+            var shardCorrelationId=Truncate($"{request.CorrelationId}:ls{shardIndex}",120);
+            var scope=new StringBuilder();
+            scope.Append("\nOUTPUT SCOPE (sharded composition): the CANDIDATES list above is the complete authoritative set and MUST be used as the comparative context for every judgment. In THIS response, produce the per-candidate narrative entries ONLY for the following candidates (exact names; include each exactly once; do not add any other candidate entries):\n");
+            foreach(var candidate in shard.OrderBy(c=>c.RankNumber))
+                scope.Append("- #").Append(candidate.RankNumber).Append(' ').Append(Truncate(candidate.DisplayName,200)).Append('\n');
+            scope.Append("The top-level landscape block must still describe the WHOLE competition.\n");
+            var result=await aiProviderRouter.GenerateAsync(request.TenantId,featureCode,systemPrompt,fullUserPrompt+scope,
+                CandidateLandscapeSchema,shardCorrelationId,new("Intelligence",null,null,request.Query,"WIDE_CANDIDATE_LANDSCAPE",null,shardCorrelationId,"Intelligent Search Wide"),synthesisModel,cancellationToken);
+            return JsonSerializer.Deserialize<CandidateLandscapeProposal>(result.Content,JsonOptions);
+        }
+        catch(Exception ex)when(!cancellationToken.IsCancellationRequested)
+        {
+            logger.LogWarning(ex,"Candidate landscape shard ({Count} candidates) failed for execution {ExecutionId}; its candidates fall back to the deterministic narrative. {Message}",shard.Count,executionId,ex.Message);
+            return null;
         }
     }
 

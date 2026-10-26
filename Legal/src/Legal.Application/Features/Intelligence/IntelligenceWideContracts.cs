@@ -803,6 +803,25 @@ public sealed record WideCandidateFullAnalysisNarrativeDto(
     string? NextBestInformation,
     string? CurrentDecisionPosition);
 
+// On-demand, attorney-style decision memorandum composed by a DEDICATED metered LLM call (distinct from
+// the per-run Candidate Landscape pass). Built from the full persisted run context — matter, leading and
+// competing outcomes, admitted evidence, proposed authorities, readiness and dependencies. Advisory and
+// presentation only: it is a working assessment, never a filed legal conclusion. Every section is prose.
+public sealed record DecisionMemoDto(
+    string MatterTitle,
+    string LeadingOutcome,
+    string ReadinessLabel,
+    bool AttorneyReady,
+    string Issue,                                   // The decision question framed as a legal issue.
+    string ShortAnswer,                             // The provisional bottom line with its stated caveats.
+    string Analysis,                                // The reasoned analysis across competing outcomes.
+    string EvidenceAndAuthority,                    // What the admitted evidence and authorities establish / lack.
+    IReadOnlyCollection<string> Risks,              // The principal risks and counter-positions.
+    IReadOnlyCollection<string> OpenItems,          // Operative claims / motion evidence / authority / dependencies unresolved.
+    IReadOnlyCollection<string> RecommendedNextSteps,
+    string Disclaimer,                              // The honest "not a filed conclusion" framing.
+    string? ModelCodeUsed);
+
 // POLOXI ABV display projection. Every business value carries a provenance source code
 // (DERIVED / EVIDENCE / BUSINESS_POLICY / DOMAIN_CONFIG). Unsupported values (exposure, SLA, owner)
 // stay null by design rather than being fabricated. ExecutionAllowed is always false in phase 1
@@ -1327,6 +1346,9 @@ public sealed record WideConfiguration(decimal TargetConfidence,decimal MinimumB
     public decimal MatterScopeZeroScoreCeiling{get;init;}=0.05m;
     public decimal MatterScopeImmediateRelevance{get;init;}=0.60m;
     public bool EnableEvidenceAwareL3Routing{get;init;}=true;
+    // Migration 0462: Candidate Landscape composer sharding. Candidates per concurrent composer call
+    // (same model/prompt/context/schema per slice, merged afterwards). 0 or >= candidate count = single call.
+    public int LandscapeShardSize{get;init;}=6;
 }
 
 // V3.3 answer-kind definition row from POLOXI.AnswerKind. DepthCeiling 0 and MaxInformationRounds

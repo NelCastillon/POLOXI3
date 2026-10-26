@@ -612,6 +612,8 @@ public sealed record LegalEvidenceGraphItemDto(
     Guid LegalDocumentVersionId,
     Guid? LegalDocumentPassageId,
     string EvidenceTypeCode,
+    // Model-emitted code preserved when extraction governance rewrote EvidenceTypeCode (migration 0463).
+    string? RawEvidenceTypeCode,
     string DimensionCode,
     string Summary,
     string EvidenceStateCode,
@@ -967,7 +969,12 @@ public sealed record LegalEvidenceSemanticProposal(
     string Summary,
     decimal? Confidence,
     string? DomainConceptCode,
-    string? VerificationProfileCode);
+    string? VerificationProfileCode)
+{
+    // The evidence type code exactly as the model emitted it, preserved when governance rewrote
+    // EvidenceTypeCode to a canonical Domain Pack code or to UNCLASSIFIED. Null when unchanged.
+    public string? RawEvidenceTypeCode { get; init; }
+}
 
 public sealed record LegalFactSemanticProposal(
     string ProposalKey,

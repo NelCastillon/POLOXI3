@@ -35,6 +35,9 @@ public sealed class DomainPackResolver(ILegalDecisionRepository decisionReposito
             entityTypes,
             eventTypes,
             terms,
-            signalMap);
+            signalMap)
+        {
+            EvidenceTypes = pack.EvidenceTypes
+        };
     }
 }

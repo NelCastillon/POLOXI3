@@ -173,7 +173,13 @@ public partial class LegalPersonalInjuryDecision2
                         supporting.Add($"{b.BranchDisplayName} ({b.EvidenceScore:P0} scored support)");
                 }
 
-                // Opposing conditions: unresolved / contradicted required dependencies for THIS candidate.
+                // Opposing conditions: ALWAYS present. Every candidate scored in the Candidate × Branch
+                // competition carries per-dimension LLM judgments oriented to ITS OWN outcome, so a dimension
+                // the model scored below the decision threshold for this candidate IS a real condition that
+                // argues against THIS outcome (for a Plaintiff candidate: the dimensions favouring the defense;
+                // on the mirror candidate the same dimensions reverse meaning). We merge any title-joined
+                // required-dependency gaps on top so nothing authoritative is lost. There is always an
+                // opposing view — a settled matter would not have produced competing candidates.
                 var opposing = new List<string>();
                 var seenOppose = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 if (dep is not null)
@@ -189,6 +195,25 @@ public partial class LegalPersonalInjuryDecision2
                             opposing.Add(label);
                     }
                 }
+                foreach (var b in o.BranchScores
+                             .Where(b => b.EvidenceScore < 0.6m)
+                             .OrderBy(b => b.EvidenceScore))
+                {
+                    if (seenOppose.Add(b.BranchDisplayName))
+                        opposing.Add($"{b.BranchDisplayName} — weak support for this outcome ({b.EvidenceScore:P0})");
+                }
+                // Guarantee a contrary view even when every dimension scored strongly for the leader: the
+                // strongest-scored competing outcome is itself the standing opposition to THIS candidate.
+                if (opposing.Count == 0)
+                {
+                    var rival = outcomes
+                        .Where(x => x.Index != o.Index)
+                        .OrderByDescending(x => x.SupportPct)
+                        .FirstOrDefault();
+                    if (rival is not null)
+                        opposing.Add($"{rival.Title} — competing outcome holding {rival.SupportPct}% relative support");
+                }
+                opposing = opposing.Take(6).ToList();
 
                 // THIS candidate's own factor vocabulary — the required dependencies and scored branch
                 // dimensions that actually belong to this outcome. Used to scope the otherwise matter-global
@@ -247,10 +272,59 @@ public partial class LegalPersonalInjuryDecision2
                     if (seenFlip.Add(f.Name))
                         flipItems.Add($"{f.Name} — {f.StateLabel}");
                 }
+                // Always include the contested (mid-range) Candidate × Branch dimensions — these are the LLM-
+                // scored factors most able to flip THIS outcome (strongly-decided dimensions are settled, while
+                // dimensions near the decision threshold could reopen the result if new evidence shifts them).
+                // Oriented to this candidate: a dimension that could flip the Plaintiff outcome is, on the
+                // mirror candidate, the dimension that could flip the defense.
+                foreach (var b in o.BranchScores
+                             .Where(b => b.EvidenceScore >= 0.35m && b.EvidenceScore <= 0.75m)
+                             .OrderBy(b => Math.Abs(b.EvidenceScore - 0.5m)))
+                {
+                    if (seenFlip.Add(b.BranchDisplayName))
+                        flipItems.Add($"{b.BranchDisplayName} — contested at {b.EvidenceScore:P0}; new evidence here could reopen this outcome");
+                }
+                // Guarantee a flip path even when every dimension is decisively scored: closing the margin to
+                // the nearest competing outcome is itself the standing way this result could flip.
+                if (flipItems.Count == 0)
+                {
+                    var rival = outcomes
+                        .Where(x => x.Index != o.Index)
+                        .OrderByDescending(x => x.SupportPct)
+                        .FirstOrDefault();
+                    if (rival is not null)
+                        flipItems.Add($"New evidence closing the margin to {rival.Title} ({rival.SupportPct}% relative support) could flip this outcome");
+                }
                 flipItems = flipItems.Take(4).ToList();
 
-                var established = dep?.Established ?? o.KeySupportingFactors;
-                var totalDeps = dep?.Total ?? o.CriticalDependencies;
+                // Verification & Dependencies: the Candidate × Branch dimensions ARE this outcome's essential
+                // conditions. A dimension the LLM scored strongly for this outcome is an established dependency;
+                // a weakly scored one is still unverified. We prefer authoritative title-joined dependency rows
+                // when present and otherwise read the competition the model actually ran, so the cards always
+                // carry real values — never a bare "0 of 0".
+                var branchDeps = o.BranchScores;
+                var branchEstablished = branchDeps.Count(b => b.EvidenceScore >= 0.6m);
+                var branchUnverified = branchDeps.Count(b => b.EvidenceScore < 0.6m);
+                var branchCritical = branchDeps.Count(b => b.EvidenceScore < 0.4m);
+
+                var established = dep?.Established ?? branchEstablished;
+                var totalDeps = dep?.Total ?? (branchDeps.Count > 0 ? branchDeps.Count : o.CriticalDependencies);
+
+                // Dependency facet items: the actual per-outcome dependencies with their established/unverified
+                // state, so the card is itemized (not a bare count) and reflects THIS candidate's conditions.
+                var dependencyItems = new List<string>();
+                if (dep is not null)
+                {
+                    foreach (var d in dep.Required.Take(6))
+                        dependencyItems.Add($"{d.FactorName} — {d.State}");
+                }
+                else
+                {
+                    foreach (var b in branchDeps.OrderByDescending(b => b.EvidenceScore).Take(6))
+                        dependencyItems.Add($"{b.BranchDisplayName} — {(b.EvidenceScore >= 0.6m ? "established" : "unverified")} ({b.EvidenceScore:P0})");
+                }
+                var dependencyCritical = dep is not null ? o.CriticalDependencies : branchCritical;
+                var verificationMissing = dep is not null ? o.MissingEvidence : branchUnverified;
 
                 // Per-candidate evidence & factor references: the Factor Inventory rows mapped to THIS
                 // candidate plus the admitted document/authority sources, so the assessment card surfaces
@@ -297,10 +371,10 @@ public partial class LegalPersonalInjuryDecision2
                         opposing),
                     new("evidence", "bi-paperclip", "Evidence and sources", evidenceSummary, evidenceItems),
                     new("verification", "bi-patch-check", "Verification",
-                        $"{established} of {Math.Max(totalDeps, established)} required dependency(ies) established; {o.MissingEvidence} missing or unverified.", []),
+                        $"{established} of {Math.Max(totalDeps, established)} required dependency(ies) established; {verificationMissing} missing or unverified.", []),
                     new("dependencies", "bi-diagram-2", "Dependencies",
-                        totalDeps > 0 ? $"{totalDeps} essential dependency(ies), {o.CriticalDependencies} critical." : "No critical dependencies recorded.",
-                        []),
+                        totalDeps > 0 ? $"{totalDeps} essential dependency(ies), {dependencyCritical} critical." : "No critical dependencies recorded.",
+                        dependencyItems),
                     new("questions", "bi-question-circle", "Unresolved questions",
                         questions.Count > 0 ? $"{questions.Count} open question(s) to resolve." : "No outstanding decision-material questions.",
                         questions),

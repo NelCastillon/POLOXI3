@@ -80,5 +80,17 @@ public sealed class IntelligenceWide2Controller(IIntelligenceWide2Service servic
     [Authorize(Policy=IntelligencePolicies.Search)]
     public async Task<IActionResult> SavedResult(Guid analysisRunId,CancellationToken cancellationToken)
         =>await runResultRepository.GetByAnalysisRunAsync(TenantId,analysisRunId,cancellationToken)is{}response?Ok(response):NotFound();
+
+    // On-demand, metered attorney-style Decision Memorandum for a saved analysis run. Composed by a dedicated
+    // LLM call from the persisted WideSearchResponse (no fresh analysis). 404 when no saved result exists.
+    [HttpPost("memo/{analysisRunId:guid}")]
+    [Authorize(Policy=IntelligencePolicies.Search)]
+    public async Task<IActionResult> DecisionMemo(Guid analysisRunId,CancellationToken cancellationToken)
+    {
+        var saved=await runResultRepository.GetByAnalysisRunAsync(TenantId,analysisRunId,cancellationToken);
+        if(saved is null)return NotFound();
+        var memo=await service.ComposeDecisionMemoAsync(TenantId,analysisRunId,saved,ActorUserId,cancellationToken);
+        return memo is{}?Ok(memo):NotFound();
+    }
 }
 

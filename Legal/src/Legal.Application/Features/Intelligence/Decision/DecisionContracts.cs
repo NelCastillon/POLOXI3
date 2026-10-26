@@ -1019,6 +1019,10 @@ public sealed record ResolvedDomainPack(
     IReadOnlyCollection<DecisionDomainTermDto> Terms,
     IReadOnlyCollection<DecisionDomainSignalMapDto> SignalMap)
 {
+    // Canonical Evidence Type vocabulary (Legal_DecisionDomainPackEvidenceType) supplied to the semantic
+    // interpreter so extracted evidence binds to the same codes Wide2 scope/presence gating keys on.
+    public IReadOnlyCollection<DecisionDomainPackEvidenceTypeDto> EvidenceTypes { get; init; } = [];
+
     // Synonym surface-form → canonical code, used by the matcher to expand node/assertion text.
     public IReadOnlyDictionary<string, string> TermLookup { get; } =
         Terms.GroupBy(t => t.TermText, StringComparer.OrdinalIgnoreCase)

@@ -205,7 +205,7 @@ public sealed class LegalDocumentCorpusRepository(ISqlConnectionFactory connecti
             WHERE document.TenantId=@TenantId AND document.DecisionMatterId=@MatterId AND document.IsDeleted=0;
 
             SELECT evidence.LegalEvidenceItemId, evidence.DecisionMatterId AS MatterId, evidence.LegalDocumentVersionId,
-                   evidence.LegalDocumentPassageId, evidence.EvidenceTypeCode, evidence.DimensionCode, evidence.Summary,
+                   evidence.LegalDocumentPassageId, evidence.EvidenceTypeCode, evidence.RawEvidenceTypeCode, evidence.DimensionCode, evidence.Summary,
                    evidence.EvidenceStateCode, evidence.Confidence, evidence.GenerationOriginCode, evidence.DomainConceptCode,
                    evidence.VerificationProfileCode, document.LegalDocumentId, document.FileName AS DocumentFileName,
                    document.DocumentTypeCode, version.VersionNumber AS DocumentVersionNumber,
@@ -1504,8 +1504,8 @@ public sealed class LegalDocumentCorpusRepository(ISqlConnectionFactory connecti
                 if (!admitted)
                     nonAdmittedEvidenceKeys.Add(item.ProposalKey);
                 await connection.ExecuteAsync(new CommandDefinition(
-                    """INSERT POLOXI.Legal_MatterEvidenceItem (LegalEvidenceItemId,DecisionMatterId,LegalDocumentVersionId,LegalDocumentPassageId,EvidenceTypeCode,DimensionCode,Summary,EvidenceStateCode,Confidence,GenerationOriginCode,DomainConceptCode,VerificationProfileCode,TenantId,CreatedByUserId) VALUES (@Id,@MatterId,@VersionId,@PassageId,@EvidenceTypeCode,@DimensionCode,@Summary,@EvidenceStateCode,@Confidence,N'DYNAMIC_LLM',@DomainConceptCode,@VerificationProfileCode,@TenantId,@UserId);""",
-                    new { Id = evidenceIds[item.ProposalKey], MatterId = matterId, VersionId = documentVersionId, PassageId = item.PassageId, item.EvidenceTypeCode, item.DimensionCode, item.Summary, EvidenceStateCode = LegalEvidenceAdmissionPolicy.ResolveEvidenceStateCode(item.PassageId, spannedPassageIds), item.Confidence, item.DomainConceptCode, item.VerificationProfileCode, TenantId = tenantId, UserId = userId }, transaction, cancellationToken: cancellationToken));
+                    """INSERT POLOXI.Legal_MatterEvidenceItem (LegalEvidenceItemId,DecisionMatterId,LegalDocumentVersionId,LegalDocumentPassageId,EvidenceTypeCode,RawEvidenceTypeCode,DimensionCode,Summary,EvidenceStateCode,Confidence,GenerationOriginCode,DomainConceptCode,VerificationProfileCode,TenantId,CreatedByUserId) VALUES (@Id,@MatterId,@VersionId,@PassageId,@EvidenceTypeCode,@RawEvidenceTypeCode,@DimensionCode,@Summary,@EvidenceStateCode,@Confidence,N'DYNAMIC_LLM',@DomainConceptCode,@VerificationProfileCode,@TenantId,@UserId);""",
+                    new { Id = evidenceIds[item.ProposalKey], MatterId = matterId, VersionId = documentVersionId, PassageId = item.PassageId, item.EvidenceTypeCode, item.RawEvidenceTypeCode, item.DimensionCode, item.Summary, EvidenceStateCode = LegalEvidenceAdmissionPolicy.ResolveEvidenceStateCode(item.PassageId, spannedPassageIds), item.Confidence, item.DomainConceptCode, item.VerificationProfileCode, TenantId = tenantId, UserId = userId }, transaction, cancellationToken: cancellationToken));
             }
 
             // Intake-time proposition binding/matching (blueprint §5/§12.3/§14). Match each LLM-proposed fact
@@ -1569,6 +1569,7 @@ public sealed class LegalDocumentCorpusRepository(ISqlConnectionFactory connecti
                     "Confirm this is a genuine new issue for the matter, or merge it into an existing proposition if it is a duplicate.",
                     "NORMAL"));
             }
+            var insertedEdges = new HashSet<(Guid FactId, Guid EvidenceId, string RelationshipTypeCode)>();
             foreach (var relationship in proposal.Relationships)
             {
                 if (!factIds.TryGetValue(relationship.TargetProposalKey, out var factId) || !evidenceIds.TryGetValue(relationship.SourceProposalKey, out var evidenceId))
@@ -1583,6 +1584,10 @@ public sealed class LegalDocumentCorpusRepository(ISqlConnectionFactory connecti
                 // The span-admission downgrade is the outermost rule and takes precedence over the CONTRADICTS relabel.
                 var relationshipTypeCode = LegalEvidenceAdmissionPolicy.ResolveRelationshipTypeCode(!nonAdmitted, proposedRelationshipType);
                 var rationale = LegalEvidenceAdmissionPolicy.ResolveRelationshipRationale(!nonAdmitted, relationship.Rationale);
+                // Proposition reuse can map several proposed facts onto one canonical proposition; collapse duplicate
+                // edges so the UX_Legal_MatterPropositionSupport_Edge unique index is never violated.
+                if (!insertedEdges.Add((factId, evidenceId, relationshipTypeCode)))
+                    continue;
                 await connection.ExecuteAsync(new CommandDefinition(
                     """INSERT POLOXI.Legal_MatterPropositionSupport (LegalPropositionSupportId,LegalFactPropositionId,LegalEvidenceItemId,RelationshipTypeCode,AssessmentReason,TenantId,CreatedByUserId) VALUES (NEWID(),@FactId,@EvidenceId,@RelationshipTypeCode,@Rationale,@TenantId,@UserId);""",
                     new { FactId = factId, EvidenceId = evidenceId, RelationshipTypeCode = relationshipTypeCode, Rationale = rationale, TenantId = tenantId, UserId = userId }, transaction, cancellationToken: cancellationToken));

@@ -187,6 +187,7 @@ public sealed class LegalAuthorityOrchestrationServiceTests
             LegalDocumentVersionId: Guid.NewGuid(),
             LegalDocumentPassageId: null,
             EvidenceTypeCode: typeCode,
+            RawEvidenceTypeCode: null,
             DimensionCode: "LEGAL_AUTHORITY",
             Summary: summary,
             EvidenceStateCode: state,

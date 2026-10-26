@@ -23,6 +23,7 @@ public static class IntelligencePromptCodes
     public const string WideLegalAnswer="WIDE_LEGAL_ANSWER";
     public const string WideLegalAuthorityProposal="WIDE_LEGAL_AUTHORITY_PROPOSAL";
     public const string WideCandidateLandscape="WIDE_CANDIDATE_LANDSCAPE";
+    public const string WideDecisionMemo="WIDE_DECISION_MEMO";
     public const string SearchSummary="SEARCH_SUMMARY";
     public const string PoloxiExplanation="POLOXI_EXPLANATION";
     public const string PoloxiHierarchy="POLOXI_HIERARCHY";
@@ -155,6 +156,18 @@ ADVISORY SCORING AND OUTCOME EFFECTS: Use the existing advisory scoring fields a
 OUTPUT
 Return JSON ONLY matching the supplied schema: analysisRunId; landscape (presentationState one of INTERPRETIVE/COMPETED/BLOCKED/OTHER, executiveSynthesis, principalDiscriminators[], materialUnknowns[]); and candidates[] where each has candidateId, candidateName, presentationRole (LEADING_INTERPRETATION/COMPETING_INTERPRETATION/AUTHORITATIVE_LEADER/COMPETED_CANDIDATE/OTHER), overviewHeadline, overviewNarrative, keyDrivers[] (label + reason), primaryRiskLabel, primaryRiskReason, strongestAlternativeName, strongestAlternativeDiscriminator, and fullAnalysis with the sections above. Every material claim must trace to supplied context; if it cannot be grounded, remove it. Before returning, verify every candidate received a substantive narrative, positions are explained RELATIVE to one another, shared factors are distinguished from discriminators, the leader's lead and strongest case against it are explained, every competing candidate's viability and improvement conditions are explained, uncertainty is preserved, interpretive analysis is distinguished from authoritative competition, scores are not treated as probabilities, and evidence/authority verification state is preserved.";
     public const string SearchSummary="Summarize only the supplied authorized search evidence. Cite source numbers in brackets. Do not infer unsupported facts.";
+    public const string WideDecisionMemo=@"SYSTEM ROLE
+
+You are the Decision Memorandum Composer for Judz Legal Decision Intelligence. You write an attorney-style decision memorandum from an ALREADY-COMPLETED POLOXI analysis run. You do NOT perform a new legal analysis, you do NOT re-rank outcomes, and you do NOT determine the leading outcome. The supplied run context (matter, leading and competing outcomes, admitted evidence, proposed authorities, readiness, dependencies, unresolved items, and recommended actions) is authoritative.
+
+PRESENTATION ONLY
+Transform the supplied structured context into a coherent working memorandum in the voice of a senior attorney. Never introduce an authority, evidence item, claim, party, date, or holding that is not present in the supplied context. If something cannot be grounded in the supplied context, omit it rather than inventing it.
+
+HONESTY AND STATE INTEGRITY
+Preserve epistemic state exactly as supplied: Retrieved != Verified; Relevant != Supporting; Interpretive Support != Decision Score; Decision Score != Probability; Authority Retrieved != Authority Verified; a Potential Decision-Changing Factor != a Calculated Flip Point. When attorneyReady is false or readiness gates remain open, the memorandum MUST read as a provisional working assessment, must plainly state that operative claims, motion evidence, authoritative legal support, and candidate dependencies remain unresolved where that is true, and must NOT present itself as a filed or final legal conclusion.
+
+OUTPUT
+Return JSON ONLY matching the supplied schema: issue (the decision question framed as a single legal issue); shortAnswer (the provisional bottom line WITH its stated caveats); analysis (the reasoned analysis across the leading and competing outcomes, explaining why the leading outcome currently leads and what keeps competitors viable, drawn only from supplied context); evidenceAndAuthority (what the admitted evidence and the proposed/verified authorities establish and, importantly, what they do NOT yet establish, preserving verification state); risks[] (the principal risks and strongest honest counter-positions); openItems[] (the specific unresolved operative claims, missing motion evidence, unverified authorities, and candidate dependencies); recommendedNextSteps[] (concrete, grounded next actions); disclaimer (a clear statement that this is an AI-generated working memorandum, not an attorney-ready filed legal conclusion, when readiness is not met). Write in precise, confident, professional prose with no POLOXI telemetry (no branch IDs, candidate scores, entropy, or stage names). Every material statement must trace to the supplied context.";
     public const string PoloxiExplanation="Explain only the supplied authorized POLOXI evidence. Cite evidence numbers in brackets. Clearly state unsupported hierarchy branches and never invent facts.";
     public const string PoloxiHierarchy="Propose a concise enterprise progressive hierarchy at most two levels deep. Top-level branches are broad entry points; child branches must progressively narrow their parent toward a more specific subset (for example a status, lifecycle stage, or qualifier of the parent), and children must always have empty children arrays. A child narrows the same entity type as its parent and its results are intersected with the parent results, so only nest when top-down narrowing genuinely applies. You may invent reasoning branches, but map a branch to a capabilityCode only when the supplied catalog can ground it. Use null capabilityCode for unsupported branches. Never produce SQL or claim records exist.";
     public const string SearchIntent="Return only valid JSON matching the schema. Interpret the user's desired AMS entity/module/search text. Do not answer the question and do not include records.";
@@ -199,6 +212,7 @@ Return JSON ONLY matching the supplied schema: analysisRunId; landscape (present
         [IntelligencePromptCodes.WideLegalAnswer]=("Wide legal answer composer",WideLegalAnswer),
         [IntelligencePromptCodes.WideLegalAuthorityProposal]=("Wide legal authority proposal",WideLegalAuthorityProposal),
         [IntelligencePromptCodes.WideCandidateLandscape]=("Wide candidate landscape narrative",WideCandidateLandscape),
+        [IntelligencePromptCodes.WideDecisionMemo]=("Wide decision memorandum",WideDecisionMemo),
         [IntelligencePromptCodes.WidePoloxiHierarchy]=("Wide POLOXI hierarchy proposal",WidePoloxiHierarchy),
         [IntelligencePromptCodes.WideSemanticProposal]=("Wide semantic proposal engine",WideSemanticProposal),
         [IntelligencePromptCodes.WideSemanticGrounding]=("Wide semantic grounding",WideSemanticGrounding),

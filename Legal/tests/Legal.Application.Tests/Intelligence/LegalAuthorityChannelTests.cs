@@ -156,6 +156,7 @@ public sealed class LegalAuthorityChannelTests
         LegalDocumentVersionId: Guid.NewGuid(),
         LegalDocumentPassageId: Guid.NewGuid(),
         EvidenceTypeCode: evidenceTypeCode,
+        RawEvidenceTypeCode: null,
         DimensionCode: dimensionCode,
         Summary: summary,
         EvidenceStateCode: stateCode,

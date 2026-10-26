@@ -8,6 +8,9 @@ public interface IIntelligenceWide2Service
 {
     Task<PoloxiSearchResponse> SearchWithPoloxiWideAsync(PoloxiSearchRequest request,CancellationToken cancellationToken=default);
     Task<WideSearchResponse> SearchDynamicAsync(WideSearchRequest request,CancellationToken cancellationToken=default);
+    // On-demand, metered attorney-style decision memorandum composed by a dedicated LLM call from the full
+    // persisted run context. The caller supplies the reconstructed saved Wide result for the analysis run.
+    Task<DecisionMemoDto?> ComposeDecisionMemoAsync(Guid tenantId,Guid analysisRunId,WideSearchResponse savedResponse,Guid actorUserId,CancellationToken cancellationToken=default);
     // Database-backed model options for the wide-search Model dropdown (active CHAT deployments).
     Task<IReadOnlyCollection<WideModelOptionDto>> GetWideModelsAsync(Guid tenantId,CancellationToken cancellationToken=default);
     // Database-backed context options for the wide-search Context dropdown (POLOXI.Legal_SearchContext).

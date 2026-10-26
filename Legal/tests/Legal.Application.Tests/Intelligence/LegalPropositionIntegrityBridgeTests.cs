@@ -12,7 +12,7 @@ public sealed class LegalPropositionIntegrityBridgeTests
     private static LegalEvidenceGraphItemDto Evidence(Guid id, Guid docId, bool withSpan)
         => new(
             id, Guid.NewGuid(), Guid.NewGuid(), withSpan ? Guid.NewGuid() : null,
-            "FACT", "LIABILITY", "summary", "ADMITTED", 0.9m, "DYNAMIC_LLM", null, null,
+            "FACT", null, "LIABILITY", "summary", "ADMITTED", 0.9m, "DYNAMIC_LLM", null, null,
             docId, "file.pdf", "DEMAND", 1, withSpan ? 3 : null, null, withSpan ? "quoted passage" : null, 0.9m);
 
     private static LegalPropositionSupportDto Support(Guid propId, Guid evidenceId, string relation)

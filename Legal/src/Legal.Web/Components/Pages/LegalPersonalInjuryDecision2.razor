@@ -264,11 +264,25 @@
 
                                 @if (_documentActivationLog.Count > 0)
                                 {
-                                    <div class="dfi-doclog">
+                                    var docOk = _documentActivationLog.Count(d => d.Succeeded);
+                                    var docWarn = _documentActivationLog.Count - docOk;
+                                    <div class="dfi-doclog @(_showDocumentActivationLog ? "is-open" : "")">
                                         <button type="button" class="dfi-doclog-toggle" @onclick="() => _showDocumentActivationLog = !_showDocumentActivationLog" aria-expanded="@_showDocumentActivationLog">
-                                            <i class="bi @(_showDocumentActivationLog ? "bi-chevron-down" : "bi-chevron-right")" aria-hidden="true"></i>
-                                            <span class="dfi-doclog-toggle-txt">Document activation log</span>
-                                            <span class="dfi-doclog-count">@_documentActivationLog.Count</span>
+                                            <span class="dfi-doclog-toggle-main">
+                                                <span class="dfi-doclog-toggle-ico" aria-hidden="true"><i class="bi bi-file-earmark-text"></i></span>
+                                                <span class="dfi-doclog-toggle-txt">
+                                                    <span class="dfi-doclog-toggle-title">Document activation log</span>
+                                                    <span class="dfi-doclog-toggle-sub">@_documentActivationLog.Count of @_documentActivationLog.Count processed · @docOk activated@(docWarn > 0 ? $" · {docWarn} skipped" : "")</span>
+                                                </span>
+                                            </span>
+                                            <span class="dfi-doclog-toggle-side">
+                                                <span class="dfi-doclog-stat dfi-doclog-stat--ok" title="Activated"><i class="bi bi-check-circle-fill" aria-hidden="true"></i> @docOk</span>
+                                                @if (docWarn > 0)
+                                                {
+                                                    <span class="dfi-doclog-stat dfi-doclog-stat--warn" title="Skipped"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> @docWarn</span>
+                                                }
+                                                <i class="bi bi-chevron-down dfi-doclog-chevron" aria-hidden="true"></i>
+                                            </span>
                                         </button>
                                         @if (_showDocumentActivationLog)
                                         {
@@ -280,11 +294,14 @@
                                                             <i class="bi @(doc.Succeeded ? "bi-file-earmark-check" : "bi-file-earmark-x")"></i>
                                                         </span>
                                                         <span class="dfi-doclog-body">
-                                                            <span class="dfi-doclog-name" title="@doc.FileName">@doc.FileName</span>
+                                                            <span class="dfi-doclog-head">
+                                                                <span class="dfi-doclog-name" title="@doc.FileName">@doc.FileName</span>
+                                                                <span class="dfi-doclog-state">@(doc.Succeeded ? "Activated" : "Skipped")</span>
+                                                            </span>
                                                             <span class="dfi-doclog-action">@doc.ActionLabel</span>
                                                             <span class="dfi-doclog-meta">
-                                                                <span title="Passages read"><i class="bi bi-layout-text-window" aria-hidden="true"></i> @doc.PassagesRead</span>
-                                                                <span title="Evidence extracted"><i class="bi bi-chat-square-text" aria-hidden="true"></i> @doc.EvidenceExtracted</span>
+                                                                <span title="Passages read"><i class="bi bi-layout-text-window" aria-hidden="true"></i> @doc.PassagesRead passages</span>
+                                                                <span title="Evidence extracted"><i class="bi bi-chat-square-text" aria-hidden="true"></i> @doc.EvidenceExtracted evidence</span>
                                                                 @if (doc.ConceptBound)
                                                                 {
                                                                     <span class="dfi-doclog-tag dfi-doclog-tag--bound" title="Bound to an applicable domain concept"><i class="bi bi-diagram-3" aria-hidden="true"></i> @FormatDomainPack(doc.DomainPackCode)</span>
@@ -3751,6 +3768,104 @@
     internal int DiEvidenceCountFor(Guid documentId)
         => _evidenceGraph?.Evidence.Count(e => e.LegalDocumentId == documentId) ?? 0;
 
+    // Display-only focus string for the evidence snippet anchor. Combines the row's own Summary with the
+    // text of any proposition(s) this evidence is bound to, so DiPassageSnippet can center the quote on the
+    // page-specific content even when Summary is thin or generic. Pure/read-only — no grounding impact.
+    internal string DiEvidenceSnippetFocus(LegalEvidenceGraphItemDto ev)
+    {
+        var parts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(ev.Summary))
+            parts.Add(ev.Summary);
+
+        if (_evidenceGraph is not null)
+        {
+            foreach (var prop in _evidenceGraph.Propositions)
+            {
+                if (prop.Support.Any(s => s.LegalEvidenceItemId == ev.LegalEvidenceItemId)
+                    && !string.IsNullOrWhiteSpace(prop.PropositionText))
+                {
+                    parts.Add(prop.PropositionText);
+                }
+            }
+        }
+
+        return string.Join(" ", parts);
+    }
+
+    // Shared per-page boilerplate (letterhead/header) that repeats at the start of many passages. Computed
+    // once per visible evidence set and stripped for DISPLAY ONLY — the persisted PassageText, source spans,
+    // admission state, and the hover tooltip's full text are never changed, so grounding/provenance is intact.
+    private string? _diBoilerplatePrefix;
+    private int _diBoilerplateSignature;
+
+    internal string DiCleanedPassage(LegalEvidenceGraphItemDto ev)
+    {
+        var text = ev.PassageText;
+        if (string.IsNullOrWhiteSpace(text))
+            return string.Empty;
+
+        var prefix = DiSharedBoilerplatePrefix();
+        if (!string.IsNullOrWhiteSpace(prefix))
+        {
+            var normalized = System.Text.RegularExpressions.Regex.Replace(text.Trim(), @"\s+", " ");
+            if (normalized.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+                && normalized.Length > prefix.Length + 20) // keep the passage if stripping would leave almost nothing
+            {
+                return normalized[prefix.Length..].TrimStart(' ', '-', '–', '—', ':', '·', '|');
+            }
+            return normalized;
+        }
+
+        return text;
+    }
+
+    // Longest leading word-sequence shared by a majority of visible passages (the repeating header).
+    private string DiSharedBoilerplatePrefix()
+    {
+        var passages = DiVisibleEvidence
+            .Select(e => e.PassageText)
+            .Where(t => !string.IsNullOrWhiteSpace(t))
+            .Select(t => System.Text.RegularExpressions.Regex.Replace(t!.Trim(), @"\s+", " "))
+            .ToList();
+
+        // Cache per visible set; recompute only when the set changes.
+        var signature = passages.Count;
+        foreach (var p in passages)
+            signature = unchecked(signature * 31 + p.Length);
+        if (_diBoilerplatePrefix is not null && signature == _diBoilerplateSignature)
+            return _diBoilerplatePrefix;
+        _diBoilerplateSignature = signature;
+
+        _diBoilerplatePrefix = string.Empty;
+        if (passages.Count < 3)
+            return _diBoilerplatePrefix;
+
+        var tokenLists = passages.Select(p => p.Split(' ')).ToList();
+        var majority = (int)Math.Ceiling(passages.Count * 0.6);
+        var prefixWords = new List<string>();
+
+        for (var pos = 0; pos < 40; pos++) // cap header length to avoid eating real content
+        {
+            var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            foreach (var tokens in tokenLists)
+            {
+                if (pos >= tokens.Length) continue;
+                counts.TryGetValue(tokens[pos], out var c);
+                counts[tokens[pos]] = c + 1;
+            }
+            if (counts.Count == 0) break;
+            var top = counts.OrderByDescending(kv => kv.Value).First();
+            if (top.Value < majority) break; // position no longer shared by the majority → header ended
+            prefixWords.Add(top.Key);
+        }
+
+        // Only treat it as boilerplate if it's a meaningful shared run (avoid stripping a single common word).
+        if (prefixWords.Count >= 3)
+            _diBoilerplatePrefix = string.Join(' ', prefixWords);
+
+        return _diBoilerplatePrefix;
+    }
+
     // ── Enterprise Document Intelligence workbench helpers (native, DB-backed projections) ──
     internal static string DiSubTabIcon(string subTab) => subTab switch
     {
@@ -3910,6 +4025,48 @@
 
     internal static bool DiIsExcludedEvidence(string evidenceStateCode)
         => string.Equals(evidenceStateCode, "INVALIDATED", StringComparison.OrdinalIgnoreCase);
+
+    // Builds the quote snippet shown for an admitted passage. Many source documents repeat the same
+    // letterhead/boilerplate at the top of every page, so showing the leading characters makes distinct
+    // passages look identical. When the passage is longer than the display window, this centers the snippet
+    // on the page-specific content by anchoring on the most distinctive token of the row's focus text
+    // (its summary/proposition) — a date, number, or long word — rather than the shared header. Pure and
+    // deterministic; it never changes extraction, admission, or the stored passage text.
+    internal static string DiPassageSnippet(string? passageText, string? focus, int window = 240)
+    {
+        if (string.IsNullOrWhiteSpace(passageText)) return string.Empty;
+        var text = System.Text.RegularExpressions.Regex.Replace(passageText.Trim(), @"\s+", " ");
+        if (text.Length <= window) return text;
+
+        var anchor = -1;
+        if (!string.IsNullOrWhiteSpace(focus))
+        {
+            foreach (var token in DiFocusTokens(focus))
+            {
+                var idx = text.IndexOf(token, StringComparison.OrdinalIgnoreCase);
+                if (idx >= 0) { anchor = idx; break; }
+            }
+        }
+
+        if (anchor < 0)
+            return text[..window].TrimEnd() + " …";
+
+        var start = Math.Max(0, anchor - window / 3);
+        var length = Math.Min(window, text.Length - start);
+        var snippet = text.Substring(start, length).Trim();
+        if (start > 0) snippet = "… " + snippet;
+        if (start + length < text.Length) snippet += " …";
+        return snippet;
+    }
+
+    // Distinctive tokens from a focus string, most-identifying first: dates, then numbers, then longer words.
+    private static IEnumerable<string> DiFocusTokens(string focus)
+        => System.Text.RegularExpressions.Regex.Matches(focus, @"\d{1,2}/\d{1,2}/\d{2,4}|\d{2,4}|[A-Za-z]{5,}")
+            .Select(m => m.Value)
+            .OrderByDescending(v => v.Contains('/'))
+            .ThenByDescending(v => v.Length)
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+
     // impact/urgency/owner/action resolve deterministically from a database-backed Domain Pack, each with
     // provenance. Review-only in phase 1 (ExecutionAllowed=false, human approval required).
     private RenderFragment AbvActionPanel => __builder =>
@@ -8290,22 +8447,221 @@
         }
     }
 
-    // Executive / Analyst summary: a grounded decision brief, not generated prose.
+    // Executive / Analyst summary: an LLM-REASONED decision brief, grounded in the run. It leads with the
+    // Candidate Landscape composer's own prose (ExecutiveSynthesis, the leading candidate's narrative, its
+    // primary risk and strongest-alternative discriminator, and the landscape's MaterialUnknowns) — real
+    // legal reasoning produced during the live run, not a scoring recap. The deterministic scoring summary
+    // is kept ONLY as a graceful fallback when the LLM landscape is absent, and the quantitative grounding
+    // is appended as one short, clearly-labelled footer sentence so the prose stays attorney-oriented.
     internal string OvExecutiveSummary
     {
         get
         {
-            var leader = OvOutcomes.FirstOrDefault();
+            var outcomes = OvOutcomes;
+            var leader = outcomes.FirstOrDefault();
             if (leader is null) return "No decision outcome has been established yet. Run an analysis to generate the decision landscape.";
-            var conf = OvConfidenceValue > 0m ? $"{OvConfidenceValue:P0} confidence" : "provisional confidence";
-            var evidence = TotalEvidenceCount > 0
-                ? $"supported by {TotalEvidenceCount} admitted evidence item{(TotalEvidenceCount == 1 ? "" : "s")} at {DfiEvidenceCoveragePct:P0} decision coverage"
-                : "with no independently verified evidence admitted yet";
+
+            var landscape = _response?.CandidateLandscape;
+            var leaderNarrative = OvCandidateMatch(leader.Title);
+
+            // Preferred path: lead with the LLM-composed reasoning when the run produced it.
+            var hasLlmProse =
+                !string.IsNullOrWhiteSpace(landscape?.ExecutiveSynthesis)
+                || !string.IsNullOrWhiteSpace(leaderNarrative?.OverviewNarrative)
+                || !string.IsNullOrWhiteSpace(leaderNarrative?.OverviewHeadline);
+
+            var sb = new System.Text.StringBuilder();
+
+            if (hasLlmProse)
+            {
+                // 1) The composer's executive synthesis of the whole landscape.
+                if (!string.IsNullOrWhiteSpace(landscape?.ExecutiveSynthesis))
+                    sb.Append(landscape!.ExecutiveSynthesis!.Trim());
+
+                // 2) The leading candidate's own reasoned narrative (headline + overview).
+                var leaderProse = !string.IsNullOrWhiteSpace(leaderNarrative?.OverviewNarrative)
+                    ? leaderNarrative!.OverviewNarrative.Trim()
+                    : leaderNarrative?.OverviewHeadline?.Trim();
+                if (!string.IsNullOrWhiteSpace(leaderProse))
+                {
+                    if (sb.Length > 0) sb.Append(' ');
+                    sb.Append(leaderProse);
+                }
+
+                // 3) The composer's primary risk for the leader and the strongest competing reading.
+                if (leaderNarrative is not null)
+                {
+                    if (!string.IsNullOrWhiteSpace(leaderNarrative.PrimaryRiskReason))
+                    {
+                        if (sb.Length > 0) sb.Append(' ');
+                        var riskLabel = string.IsNullOrWhiteSpace(leaderNarrative.PrimaryRiskLabel) ? "Primary risk" : leaderNarrative.PrimaryRiskLabel!.Trim();
+                        sb.Append($"{riskLabel}: {leaderNarrative.PrimaryRiskReason!.Trim()}");
+                    }
+                    if (!string.IsNullOrWhiteSpace(leaderNarrative.StrongestAlternativeName)
+                        && !string.IsNullOrWhiteSpace(leaderNarrative.StrongestAlternativeDiscriminator))
+                    {
+                        if (sb.Length > 0) sb.Append(' ');
+                        sb.Append($"The strongest competing reading is \"{leaderNarrative.StrongestAlternativeName!.Trim()}\", distinguished by {leaderNarrative.StrongestAlternativeDiscriminator!.Trim()}");
+                        if (!sb.ToString().TrimEnd().EndsWith(".")) sb.Append('.');
+                    }
+                }
+
+                // 4) What the composer flagged as the decision-shaping unknowns.
+                var unknowns = landscape?.MaterialUnknowns?.Where(u => !string.IsNullOrWhiteSpace(u)).Take(3).ToList() ?? [];
+                if (unknowns.Count > 0)
+                {
+                    if (sb.Length > 0) sb.Append(' ');
+                    sb.Append($"Material unknowns that still shape the outcome: {string.Join("; ", unknowns.Select(u => u.Trim()))}.");
+                }
+
+                // 5) One short, labelled grounding footer so the prose stays honest about its provenance.
+                sb.Append($" [Grounding: {leader.SupportPct}% support · {(OvConfidenceValue > 0m ? $"{OvConfidenceValue:P0} {OvConfidenceLabel.ToLowerInvariant()} confidence" : "provisional confidence")} · "
+                    + $"{(TotalEvidenceCount > 0 ? $"{TotalEvidenceCount} evidence item{(TotalEvidenceCount == 1 ? "" : "s")} at {DfiEvidenceCoveragePct:P0} coverage" : "interpretive only, no admitted evidence")} · "
+                    + $"readiness {OvReadinessPct}%, {DfiReadinessLabel.ToLowerInvariant()} — a working assessment, not a filed conclusion.]");
+
+                return sb.ToString();
+            }
+
+            // ── Fallback: deterministic synthesis when no LLM landscape prose exists for this run ──────────
+            // 1) Matter context + leading pathway, framed as the most supportable CURRENT outcome.
+            var conf = OvConfidenceValue > 0m ? $"{OvConfidenceValue:P0} ({OvConfidenceLabel.ToLowerInvariant()}) confidence" : "provisional confidence";
+            sb.Append($"For {DfiMatterTitle}, the most supportable current pathway is \"{leader.Title}\" at {leader.SupportPct}% support and {conf}.");
+
+            // 2) Nearest competitor + the margin that defines how settled the ranking is.
+            var runnerUp = outcomes.Skip(1).FirstOrDefault();
+            if (runnerUp is not null)
+            {
+                var margin = leader.SupportPct - runnerUp.SupportPct;
+                var contest = margin <= 10 ? "a narrow, actively contested margin" : margin <= 25 ? "a moderate lead" : "a commanding lead";
+                sb.Append($" It holds {contest} over \"{runnerUp.Title}\" ({runnerUp.SupportPct}%), with {outcomes.Count} distinct outcome{(outcomes.Count == 1 ? "" : "s")} still on the board.");
+            }
+
+            // 3) Evidentiary grounding + authority support.
+            var verifiedAuthorities = _response?.ProposedLegalAuthorities.Count(a => a.VerificationStatus == "VERIFIED") ?? 0;
+            if (TotalEvidenceCount > 0)
+                sb.Append($" The ranking rests on {TotalEvidenceCount} admitted evidence item{(TotalEvidenceCount == 1 ? "" : "s")} at {DfiEvidenceCoveragePct:P0} decision coverage");
+            else
+                sb.Append(" The ranking rests on interpretive reasoning only — no independently verified evidence has been admitted");
+            sb.Append(verifiedAuthorities > 0
+                ? $" and {verifiedAuthorities} verified legal authorit{(verifiedAuthorities == 1 ? "y" : "ies")}."
+                : " and no legal authority has yet been verified.");
+
+            // 4) Open questions / readiness posture.
+            var openQuestions = DfiMissingFactorCount;
+            if (openQuestions > 0)
+                sb.Append($" {openQuestions} decision factor{(openQuestions == 1 ? "" : "s")} still lack{(openQuestions == 1 ? "s" : "")} a verified value.");
+            sb.Append($" Decision readiness is {OvReadinessPct}% and the determination is {DfiReadinessLabel.ToLowerInvariant()} — a working assessment, not a filed conclusion.");
+
+            // 5) Candidate-assessment layer: the leading outcome's standing and what could still flip it.
+            if (!string.IsNullOrWhiteSpace(leader.ViabilityLabel))
+                sb.Append($" The leading outcome's standing is assessed as {leader.ViabilityLabel.ToLowerInvariant()}");
+            var flipRisks = OvWhatCouldFlipIt;
+            if (flipRisks.Count > 0)
+            {
+                var topFlips = flipRisks.Take(2).Select(f => $"{f.Name} ({f.StateLabel.ToLowerInvariant()})");
+                sb.Append($", with {flipRisks.Count} factor{(flipRisks.Count == 1 ? "" : "s")} that could reopen it — notably {string.Join(" and ", topFlips)}.");
+            }
+            else if (!string.IsNullOrWhiteSpace(leader.ViabilityLabel))
+            {
+                sb.Append(".");
+            }
+
+            // 6) Highest-value next step.
             var nextAction = OvNextBestActions.FirstOrDefault();
-            var nextText = nextAction is not null
-                ? $" The highest-value next step is to resolve \"{nextAction.Title}\" (ADV {nextAction.Adv:0.00}), which could materially change the ranking."
-                : string.Empty;
-            return $"Based on current evidence, {leader.Title} remains the most supportable outcome with {leader.SupportPct}% support and {conf}, {evidence}. The decision is currently {DfiReadinessLabel.ToLowerInvariant()}.{nextText}";
+            if (nextAction is not null)
+                sb.Append($" The highest-value next step is to resolve \"{nextAction.Title}\" (ADV {nextAction.Adv:0.00}), which could materially change the ranking.");
+
+            return sb.ToString();
+        }
+    }
+
+    // True when the brief is rendering the live LLM-composed landscape reasoning (vs. the deterministic
+    // fallback). Lets the UI badge the brief as model-reasoned when real prose is present.
+    internal bool OvBriefIsLlmReasoned =>
+        !string.IsNullOrWhiteSpace(_response?.CandidateLandscape?.ExecutiveSynthesis)
+        || !string.IsNullOrWhiteSpace(OvCandidateMatch(OvOutcomes.FirstOrDefault()?.Title ?? string.Empty)?.OverviewNarrative);
+
+    // The LLM composer's principal discriminators — the few questions/dimensions that actually separate the
+    // competing outcomes. Rendered as reasoned chips beneath the brief. Empty when the landscape is absent.
+    internal IReadOnlyList<string> OvPrincipalDiscriminators =>
+        _response?.CandidateLandscape?.PrincipalDiscriminators?.Where(d => !string.IsNullOrWhiteSpace(d)).Take(5).ToList() ?? [];
+
+    // ── Attorney-ready decision disclosure ──────────────────────────────────────────────────────────
+    // An explicit, honest readiness gate rendered directly beneath the Decision Brief. It never presents
+    // the leading pathway as a filed legal conclusion. Each row reports one gating category the run can
+    // actually measure (operative claims, motion evidence, authoritative legal support, candidate
+    // dependencies) and whether it is Established or still Unresolved, with the grounding count.
+    internal sealed record OvBriefDisclosure(string Icon, string Title, string Status, string StatusTone, string Detail);
+
+    // True only when every gating category is satisfied; otherwise the section openly states the decision
+    // is not yet attorney-ready. Mirrors the authoritative DfiDecisionReady / DfiReviewRequired predicate.
+    internal bool OvAttorneyReady =>
+        DfiDecisionReady
+        && OvConfidenceValue >= 0.6m
+        && OvAttorneyReadyDisclosures.All(d => d.StatusTone == "ok");
+
+    internal string OvAttorneyReadyHeadline => OvAttorneyReady
+        ? "Attorney-ready: every gating condition is satisfied for this snapshot."
+        : "Not yet attorney-ready — this is a provisional working decision. Operative claims, motion evidence, authoritative legal support and candidate dependencies remain unresolved below.";
+
+    internal IReadOnlyList<OvBriefDisclosure> OvAttorneyReadyDisclosures
+    {
+        get
+        {
+            var leader = OvOutcomes.FirstOrDefault();
+
+            // 1) Operative claims — the decision factors that must each carry a verified value.
+            var totalFactors = DfiFactorCount;
+            var missingFactors = DfiMissingFactorCount;
+            var claimsResolved = totalFactors > 0 && missingFactors == 0;
+            var claimsDetail = totalFactors > 0
+                ? (claimsResolved
+                    ? $"All {totalFactors} decision factor(s) carry a verified value."
+                    : $"{missingFactors} of {totalFactors} decision factor(s) still lack a verified value and must be established before filing.")
+                : "No operative decision factors have been registered for this matter yet.";
+
+            // 2) Motion evidence — admitted, independently verified evidence at adequate coverage.
+            var coverage = DfiEvidenceCoveragePct;
+            var evidenceResolved = TotalEvidenceCount > 0 && coverage >= 0.5m;
+            var evidenceDetail = TotalEvidenceCount > 0
+                ? (evidenceResolved
+                    ? $"{TotalEvidenceCount} admitted evidence item(s) at {coverage:P0} decision coverage."
+                    : $"Only {TotalEvidenceCount} admitted evidence item(s) at {coverage:P0} coverage — below the threshold for a motion-ready record.")
+                : "No independently verified evidence has been admitted; the ranking is interpretive only.";
+
+            // 3) Authoritative legal support — verified statutes / case authorities.
+            var totalAuthorities = _response?.ProposedLegalAuthorities.Count ?? 0;
+            var verifiedAuthorities = _response?.ProposedLegalAuthorities.Count(a => a.VerificationStatus == "VERIFIED") ?? 0;
+            var authorityResolved = verifiedAuthorities > 0;
+            var authorityDetail = totalAuthorities > 0
+                ? (authorityResolved
+                    ? $"{verifiedAuthorities} of {totalAuthorities} proposed authorit(y/ies) verified."
+                    : $"{totalAuthorities} authorit(y/ies) proposed but none verified — citations require validation before reliance.")
+                : "No controlling authority has been proposed or verified for the leading pathway.";
+
+            // 4) Candidate dependencies — the required dependencies behind the leading outcome, plus any
+            //    readiness blockers and flip-risk factors the candidate assessment surfaced.
+            var blockers = OvReadinessBlockers;
+            var flips = OvWhatCouldFlipIt;
+            var criticalDeps = leader?.CriticalDependencies ?? 0;
+            var depsResolved = blockers.Count == 0 && criticalDeps == 0 && flips.Count == 0;
+            string depsDetail;
+            if (depsResolved)
+                depsDetail = "No unresolved dependencies, readiness blockers, or flip-risk factors for the leading outcome.";
+            else if (blockers.Count > 0)
+                depsDetail = $"{blockers.Count} readiness blocker(s): {string.Join("; ", blockers)}.";
+            else if (criticalDeps > 0)
+                depsDetail = $"The leading outcome carries {criticalDeps} critical dependenc(y/ies) that must be independently established.";
+            else
+                depsDetail = $"{flips.Count} factor(s) could still reopen the leading outcome: {string.Join("; ", flips.Take(3).Select(f => $"{f.Name} ({f.StateLabel.ToLowerInvariant()})"))}.";
+
+            return
+            [
+                new("bi-journal-text", "Operative claims", claimsResolved ? "Established" : "Unresolved", claimsResolved ? "ok" : "warn", claimsDetail),
+                new("bi-folder-check", "Motion evidence", evidenceResolved ? "Admitted" : "Unresolved", evidenceResolved ? "ok" : "warn", evidenceDetail),
+                new("bi-bank", "Authoritative legal support", authorityResolved ? "Verified" : "Unresolved", authorityResolved ? "ok" : "warn", authorityDetail),
+                new("bi-diagram-3", "Candidate dependencies", depsResolved ? "Satisfied" : "Unresolved", depsResolved ? "ok" : "warn", depsDetail),
+            ];
         }
     }
 

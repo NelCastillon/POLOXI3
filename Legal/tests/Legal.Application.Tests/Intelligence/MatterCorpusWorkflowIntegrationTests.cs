@@ -22,6 +22,7 @@ public sealed class MatterCorpusWorkflowIntegrationTests
         var service=new LegalDocumentIntakeService(
             binaryStore,new AcceptingValidator(),new CleanScanner(),new AccidentReportExtractor(),interpreter,
             corpus,new DomainPackResolver(DecisionRepositoryProxy.Create()),new NoOpMatterChangeProcessor(),
+            DecisionRepositoryProxy.Create(),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<LegalDocumentIntakeService>.Instance);
         var request=new LegalDocumentIntakeRequest(
             tenantId,userId,matterId,"synthetic-accident-report.txt","text/plain",bytes.Length,"matter-corpus-e2e")

@@ -99,6 +99,16 @@ public sealed class ApiClient(HttpClient httpClient)
         return await message.Content.ReadFromJsonAsync<WideSearchResponse>(cancellationToken:token);
     }
 
+    // On-demand, metered attorney-style Decision Memorandum for a saved analysis run. Posts to trigger the
+    // dedicated LLM composition; returns null when no saved result exists for the run.
+    public async Task<DecisionMemoDto?> ComposeDecisionMemoAsync(Guid analysisRunId,CancellationToken token=default)
+    {
+        using var response=await _httpClient.PostAsync($"api/intelligence_wide2/memo/{analysisRunId}",content:null,token);
+        if(response.StatusCode==System.Net.HttpStatusCode.NotFound)return null;
+        await EnsureSuccessWithDetailAsync(response,token);
+        return await response.Content.ReadFromJsonAsync<DecisionMemoDto>(cancellationToken:token);
+    }
+
     // POLOXI Legal Decision Intelligence (/legal/decision) — self-contained module.
     public async Task<Legal.Application.Features.Intelligence.Decision.DecisionSearchResponse?> LegalDecideAsync(Legal.Application.Features.Intelligence.Decision.DecisionSearchRequest request,CancellationToken token=default)
     {
