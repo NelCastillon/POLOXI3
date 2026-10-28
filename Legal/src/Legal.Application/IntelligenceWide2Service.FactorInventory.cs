@@ -247,6 +247,7 @@ public sealed partial class IntelligenceWide2Service
                         VerificationState: "ADMITTED")
                     {
                         DocumentId = ev.SearchDocumentId == Guid.Empty ? null : ev.SearchDocumentId,
+                        DocumentVersionId = ev.LegalDocumentVersionId is { } v && v != Guid.Empty ? v : null,
                         Excerpt = string.IsNullOrWhiteSpace(ev.Excerpt) ? null : ev.Excerpt,
                     });
                 }

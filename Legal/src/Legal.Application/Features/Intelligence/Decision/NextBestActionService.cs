@@ -76,6 +76,11 @@ public sealed class NextBestActionService(
     private static readonly HashSet<string> ResolvedFactStates =
         new(StringComparer.OrdinalIgnoreCase) { LegalFactStates.Established, LegalFactStates.Invalidated };
 
+    // Pin the LLM action-phrasing call to the same synthesis model the Overview candidate landscape uses
+    // (gpt-6-astra), so the cockpit's next-best-action prose is consistent with the Overview narrative
+    // instead of drifting onto whatever the base INTELLIGENCE_WIDE_ANSWER route happens to resolve to.
+    private const string SynthesisModelCode = IntelligenceWide2Service.AstraModelCode;
+
     // Generic, non-targeted action phrasing that is never admissible — an action must seek SPECIFIC
     // information tied to an unresolved decision-structure condition, not a catch-all like "do discovery".
     private static readonly string[] GenericActionMarkers =
@@ -139,11 +144,15 @@ public sealed class NextBestActionService(
             var actions = SelectEligibleActions(proposals, requirements);
             if (actions.Count == 0)
             {
-                // There IS an unresolved frontier (requirements > 0) but no action survived. Explain why instead
-                // of implying the matter is fully resolved, so the cockpit shows an honest, actionable state.
-                var reason = proposals.Count == 0
-                    ? $"{requirements.Count} unresolved decision-material proposition(s) remain, but no next best action could be generated for them right now."
-                    : $"{requirements.Count} unresolved decision-material proposition(s) remain; proposed actions were too generic or untargeted to admit.";
+                // The LLM phrasing layer produced nothing admissible (unavailable, too generic, or empty).
+                // There IS an unresolved frontier (requirements > 0), so degrade to DETERMINISTIC actions
+                // built directly from the authoritative requirements rather than implying the matter is
+                // resolved. Each fallback action stays traceable to an exact proposition and its ADV.
+                var fallback = BuildDeterministicActions(requirements);
+                if (fallback.Count > 0)
+                    return new NextBestActionResult(matterId, fallback);
+
+                var reason = $"{requirements.Count} unresolved decision-material proposition(s) remain, but no next best action could be generated for them right now.";
                 return new NextBestActionResult(matterId, actions, reason);
             }
             return new NextBestActionResult(matterId, actions);
@@ -325,17 +334,18 @@ public sealed class NextBestActionService(
                 BuildActionsSchema(requirements.Count),
                 Guid.NewGuid().ToString("N"),
                 new AiExecutionContext("Intelligence", "DecisionMatter", matter?.DecisionMatterId, null, "NEXT_BEST_ACTION", null, null, "Next Best Action"),
-                null,
+                SynthesisModelCode,
                 cancellationToken);
 
             var envelope = JsonSerializer.Deserialize<ActionProposalEnvelope>(result.Content, JsonOptions);
             return envelope?.Actions ?? [];
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            // Surface the real cause (route not configured, provider unavailable, invalid JSON, …) to the
-            // caller so the cockpit explains WHY no actions were produced instead of a generic empty state.
-            throw new InvalidOperationException($"action proposal failed: {ex.Message}", ex);
+            // The LLM phrasing layer is best-effort: route not configured, provider unavailable, invalid
+            // JSON, etc. Return no proposals so the caller can fall back to DETERMINISTIC actions built from
+            // the authoritative frontier rather than failing the whole cockpit overlay.
+            return [];
         }
     }
 
@@ -423,6 +433,39 @@ public sealed class NextBestActionService(
         }
 
         // Rank by ADV (LegalAdv frontier) descending; present the full eligible frontier.
+        return actions
+            .OrderByDescending(a => a.Adv)
+            .ToList();
+    }
+
+    // ── DETERMINISTIC fallback: turn the authoritative requirement frontier into actions directly ──────
+    // Used when the LLM phrasing layer is unavailable or produced nothing admissible. No scoring is
+    // introduced here — ADV, impact, hierarchy, and target proposition all come straight from the
+    // already-computed ResolutionRequirement, so every fallback action stays fully traceable.
+    private static IReadOnlyList<NextBestAction> BuildDeterministicActions(
+        IReadOnlyList<ResolutionRequirement> requirements)
+    {
+        var actions = new List<NextBestAction>();
+        foreach (var r in requirements)
+        {
+            var (impactLabel, impactTone) = ImpactBand(r.DecisionRelevance);
+            var informationSought = string.IsNullOrWhiteSpace(r.MissingInformation)
+                ? r.UnresolvedQuestion
+                : r.MissingInformation;
+            actions.Add(new NextBestAction(
+                r.PropositionId,
+                r.UnresolvedQuestion,
+                informationSought,
+                r.SupportingEvidence.Count > 0 || r.ContradictingEvidence.Count > 0
+                    ? $"On record: {r.SupportingEvidence.Count} supporting, {r.ContradictingEvidence.Count} contradicting item(s)."
+                    : null,
+                r.PropositionText,
+                r.HierarchyPath,
+                r.LegalAdv,
+                impactLabel,
+                impactTone));
+        }
+
         return actions
             .OrderByDescending(a => a.Adv)
             .ToList();

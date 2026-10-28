@@ -99,6 +99,17 @@ public sealed class ApiClient(HttpClient httpClient)
         return await message.Content.ReadFromJsonAsync<WideSearchResponse>(cancellationToken:token);
     }
 
+    // Analysis History read-only rehydration: fetch the Next Best Action panel captured ONCE at execution
+    // time for an analysis run, so reopening a saved run renders the full NBA panel without a fresh LLM call.
+    // Returns null for legacy runs recorded before NBA persistence (caller falls back to the empty state).
+    public async Task<Legal.Application.Features.Intelligence.Decision.NextBestActionResult?> GetSavedNextBestActionsAsync(Guid analysisRunId,CancellationToken token=default)
+    {
+        var message=await _httpClient.GetAsync($"api/intelligence_wide2/result/{analysisRunId}/next-best-actions",token);
+        if(message.StatusCode==System.Net.HttpStatusCode.NotFound)return null;
+        message.EnsureSuccessStatusCode();
+        return await message.Content.ReadFromJsonAsync<Legal.Application.Features.Intelligence.Decision.NextBestActionResult>(cancellationToken:token);
+    }
+
     // On-demand, metered attorney-style Decision Memorandum for a saved analysis run. Posts to trigger the
     // dedicated LLM composition; returns null when no saved result exists for the run.
     public async Task<DecisionMemoDto?> ComposeDecisionMemoAsync(Guid analysisRunId,CancellationToken token=default)
@@ -162,6 +173,12 @@ public sealed class ApiClient(HttpClient httpClient)
         { using var r=await _httpClient.PutAsJsonAsync("api/legal_decision/domainpacks",request,token); await EnsureSuccessWithDetailAsync(r,token); }
         public async Task DeleteLegalDecisionDomainPackAsync(string packCode,CancellationToken token=default)
         { using var r=await _httpClient.DeleteAsync($"api/legal_decision/domainpacks/{Uri.EscapeDataString(packCode)}",token); await EnsureSuccessWithDetailAsync(r,token); }
+        // Personal Injury Jurisdiction Rules (migration 0464; advisory reference catalog, tenant override).
+        public async Task<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.DecisionJurisdictionRuleDto>> GetLegalDecisionJurisdictionRulesAsync(string practiceAreaCode="PERSONAL_INJURY",CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.DecisionJurisdictionRuleDto>>($"api/legal_decision/jurisdictionrules?practiceAreaCode={Uri.EscapeDataString(practiceAreaCode)}",token)??[];
+        public async Task SaveLegalDecisionJurisdictionRuleAsync(Legal.Application.Features.Intelligence.Decision.SaveDecisionJurisdictionRuleRequest request,CancellationToken token=default)
+        { using var r=await _httpClient.PutAsJsonAsync("api/legal_decision/jurisdictionrules",request,token); await EnsureSuccessWithDetailAsync(r,token); }
+        public async Task DeleteLegalDecisionJurisdictionRuleAsync(string practiceAreaCode,string jurisdictionCode,CancellationToken token=default)
+        { using var r=await _httpClient.DeleteAsync($"api/legal_decision/jurisdictionrules/{Uri.EscapeDataString(practiceAreaCode)}/{Uri.EscapeDataString(jurisdictionCode)}",token); await EnsureSuccessWithDetailAsync(r,token); }
         public async Task SaveLegalDecisionDomainPackDimensionAsync(string packCode,Legal.Application.Features.Intelligence.Decision.SaveDomainPackDimensionRequest request,CancellationToken token=default)
         { using var r=await _httpClient.PutAsJsonAsync($"api/legal_decision/domainpacks/{Uri.EscapeDataString(packCode)}/dimensions",request,token); await EnsureSuccessWithDetailAsync(r,token); }
         public async Task DeleteLegalDecisionDomainPackDimensionAsync(string packCode,string dimensionCode,CancellationToken token=default)

@@ -336,6 +336,28 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
         return NoContent();
     }
 
+    // ── Personal Injury Jurisdiction Rules (migration 0464; advisory reference catalog) ──
+    [HttpGet("jurisdictionrules")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> JurisdictionRules([FromQuery] string? practiceAreaCode, CancellationToken cancellationToken)
+        => Ok(await service.GetJurisdictionRulesAsync(TenantId, string.IsNullOrWhiteSpace(practiceAreaCode) ? "PERSONAL_INJURY" : practiceAreaCode, cancellationToken));
+
+    [HttpPut("jurisdictionrules")]
+    [Authorize(Policy = IntelligencePolicies.Configure)]
+    public async Task<IActionResult> SaveJurisdictionRule([FromBody] SaveDecisionJurisdictionRuleRequest request, CancellationToken cancellationToken)
+    {
+        await service.SaveJurisdictionRuleAsync(TenantId, ActorUserId, request, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpDelete("jurisdictionrules/{practiceAreaCode}/{jurisdictionCode}")]
+    [Authorize(Policy = IntelligencePolicies.Configure)]
+    public async Task<IActionResult> DeleteJurisdictionRule(string practiceAreaCode, string jurisdictionCode, CancellationToken cancellationToken)
+    {
+        await service.DeleteJurisdictionRuleAsync(TenantId, ActorUserId, practiceAreaCode, jurisdictionCode, cancellationToken);
+        return NoContent();
+    }
+
     [HttpPut("domainpacks/{packCode}/dimensions")]
     [Authorize(Policy = IntelligencePolicies.Configure)]
     public async Task<IActionResult> SaveDomainPackDimension(string packCode, [FromBody] SaveDomainPackDimensionRequest request, CancellationToken cancellationToken)

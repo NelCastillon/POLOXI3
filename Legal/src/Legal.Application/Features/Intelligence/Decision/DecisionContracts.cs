@@ -828,6 +828,36 @@ public sealed record DecisionDomainPackVerificationProfileDto(string ProfileCode
 
 public sealed record DecisionDomainPackMatterTypeDto(string SubtypeCode, string Name, string? Description);
 
+// ── Personal Injury Jurisdiction Rule (migration 0464) ──────────────────────────────────────────
+// A commonly-cited, DB-backed reference row of state/DC personal-injury rules. ADVISORY ONLY and
+// NOT legal advice (accrual, tolling, exceptions, and caps vary and change over time). Global
+// (TenantId NULL) seed rows are immutable; tenant rows override. POLOXI Core reasoning is unchanged.
+public sealed record DecisionJurisdictionRuleDto(
+    Guid DecisionJurisdictionRuleId,
+    string PracticeAreaCode,
+    string JurisdictionCode,
+    string JurisdictionName,
+    decimal? PersonalInjuryLimitationYears,
+    decimal? MedicalMalpracticeLimitationYears,
+    decimal? WrongfulDeathLimitationYears,
+    string? DiscoveryRuleNote,
+    string? MinorsTollingNote,
+    string NegligenceRegimeCode,
+    string? NegligenceRegimeNote,
+    string? JointSeveralLiabilityNote,
+    string? DramShopNote,
+    string? GovernmentClaimNoticeNote,
+    string? NonEconomicDamagesCapNote,
+    string? PunitiveDamagesStandardNote,
+    string? MedicalMalpracticeNote,
+    string? SourceNote,
+    DateOnly? EffectiveDate,
+    bool IsAdvisoryOnly,
+    int SortOrder,
+    bool IsActive,
+    // True when this row is a tenant override (TenantId not null); false for the global seed row.
+    bool IsTenantOverride);
+
 // Canonical Decision Outcome candidate (migration 0396). RoleCode is PATHWAY (prospective resolution)
 // or ASSERTED_HISTORICAL (a possibly-completed historical status that must be verified first and must
 // never be auto-promoted to an established resolution). RequiresVerification signals the verify-first gate.

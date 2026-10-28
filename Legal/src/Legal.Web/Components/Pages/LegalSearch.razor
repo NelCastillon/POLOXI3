@@ -1165,8 +1165,8 @@
                                 <button type="button" class="poloxi-branch-chip poloxi-branch-chip--action" @onclick="() => OpenAmbiguityGroup(group)" title="View branches and result details">
                                     <i class="bi bi-diagram-3"></i>@group.Branches.Count branch@(group.Branches.Count == 1 ? "" : "es")<i class="bi bi-box-arrow-up-right poloxi-branch-chip-ext"></i>
                                 </button>
-                                <button type="button" class="poloxi-branch-chip poloxi-branch-chip--action" @onclick="() => OpenAmbiguityEvidence(group)" title="View evidence and external knowledge details">
-                                    <i class="bi bi-database-check"></i>@(group.Evidence.Count + group.ExternalKnowledge.Count) evidence<i class="bi bi-box-arrow-up-right poloxi-branch-chip-ext"></i>
+                                <button type="button" class="poloxi-branch-chip poloxi-branch-chip--action" @onclick="() => OpenAmbiguityEvidence(group)" title="Distinct evidence sources (documents and external references) backing this interpretation">
+                                    <i class="bi bi-database-check"></i>@AmbiguityGroupEvidenceCount(group) evidence<i class="bi bi-box-arrow-up-right poloxi-branch-chip-ext"></i>
                                 </button>
                             </div>
                             @if (group.InterpretiveResults.Count > 0)
@@ -1730,6 +1730,25 @@
     private WideAmbiguityGroupDto? _ambiguityEvidenceGroup;
     private void OpenAmbiguityEvidence(WideAmbiguityGroupDto group) => _ambiguityEvidenceGroup = group;
     private void CloseAmbiguityEvidence() => _ambiguityEvidenceGroup = null;
+
+    // Distinct evidence-SOURCE count for a group's badge. The raw Evidence/ExternalKnowledge collections
+    // hold one row per proposition/branch attribution, so the same document or URL can repeat thousands of
+    // times, producing absurd totals (e.g. 35K). Collapse to distinct real sources: enterprise evidence by
+    // backing entity, external knowledge by document version or URL.
+    private static int AmbiguityGroupEvidenceCount(WideAmbiguityGroupDto group)
+    {
+        var enterprise = group.Evidence
+            .Select(e => $"ENT:{e.EntityTypeCode}:{e.EntityId}")
+            .Where(key => !string.IsNullOrWhiteSpace(key));
+
+        var external = group.ExternalKnowledge
+            .Select(k => k.LegalDocumentVersionId is { } v
+                ? $"DOC:{v}"
+                : !string.IsNullOrWhiteSpace(k.Url) ? $"URL:{k.Url}" : $"TTL:{k.Title}")
+            .Where(key => !string.IsNullOrWhiteSpace(key));
+
+        return enterprise.Concat(external).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+    }
 
     private static readonly System.Text.RegularExpressions.Regex BranchLevelPrefixPattern = new(@"^L\d+\s*(?:·|-|:)?\s+", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
     private static readonly HashSet<string> ContractAssociationStopwords = new(StringComparer.OrdinalIgnoreCase)

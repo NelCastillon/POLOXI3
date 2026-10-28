@@ -770,6 +770,15 @@ public sealed partial class LegalDecisionService(
         => repository.SaveDomainPackAsync(tenantId, actorUserId, request, cancellationToken);
     public Task DeleteDomainPackAsync(Guid tenantId, Guid actorUserId, string packCode, CancellationToken cancellationToken = default)
         => repository.DeleteDomainPackAsync(tenantId, actorUserId, packCode, cancellationToken);
+
+    // ── Personal Injury Jurisdiction Rules passthroughs (migration 0464; advisory reference) ──
+    public Task<IReadOnlyCollection<DecisionJurisdictionRuleDto>> GetJurisdictionRulesAsync(Guid tenantId, string practiceAreaCode, CancellationToken cancellationToken = default)
+        => repository.GetJurisdictionRulesAsync(tenantId, practiceAreaCode, cancellationToken);
+    public Task SaveJurisdictionRuleAsync(Guid tenantId, Guid actorUserId, SaveDecisionJurisdictionRuleRequest request, CancellationToken cancellationToken = default)
+        => repository.SaveJurisdictionRuleAsync(tenantId, actorUserId, request, cancellationToken);
+    public Task DeleteJurisdictionRuleAsync(Guid tenantId, Guid actorUserId, string practiceAreaCode, string jurisdictionCode, CancellationToken cancellationToken = default)
+        => repository.DeleteJurisdictionRuleAsync(tenantId, actorUserId, practiceAreaCode, jurisdictionCode, cancellationToken);
+
     public Task SaveDomainPackDimensionAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackDimensionRequest request, CancellationToken cancellationToken = default)
         => repository.SaveDomainPackDimensionAsync(tenantId, actorUserId, packCode, request, cancellationToken);
     public Task DeleteDomainPackDimensionAsync(Guid tenantId, Guid actorUserId, string packCode, string dimensionCode, CancellationToken cancellationToken = default)
@@ -1032,7 +1041,112 @@ public sealed partial class LegalDecisionService(
         return sb.ToString();
     }
 
-    // Projects the database-backed PI Profile fields into an immutable structured snapshot that rides
+    // USPS two-letter codes keyed by lower-cased sovereign name, for matching a resolved governing-law
+    // value to a Legal_DecisionJurisdictionRule row (whose business key is the USPS JurisdictionCode).
+    private static readonly IReadOnlyDictionary<string, string> UspsByStateName =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Alabama"] = "AL", ["Alaska"] = "AK", ["Arizona"] = "AZ", ["Arkansas"] = "AR",
+            ["California"] = "CA", ["Colorado"] = "CO", ["Connecticut"] = "CT", ["Delaware"] = "DE",
+            ["District of Columbia"] = "DC", ["Florida"] = "FL", ["Georgia"] = "GA", ["Hawaii"] = "HI",
+            ["Idaho"] = "ID", ["Illinois"] = "IL", ["Indiana"] = "IN", ["Iowa"] = "IA", ["Kansas"] = "KS",
+            ["Kentucky"] = "KY", ["Louisiana"] = "LA", ["Maine"] = "ME", ["Maryland"] = "MD",
+            ["Massachusetts"] = "MA", ["Michigan"] = "MI", ["Minnesota"] = "MN", ["Mississippi"] = "MS",
+            ["Missouri"] = "MO", ["Montana"] = "MT", ["Nebraska"] = "NE", ["Nevada"] = "NV",
+            ["New Hampshire"] = "NH", ["New Jersey"] = "NJ", ["New Mexico"] = "NM", ["New York"] = "NY",
+            ["North Carolina"] = "NC", ["North Dakota"] = "ND", ["Ohio"] = "OH", ["Oklahoma"] = "OK",
+            ["Oregon"] = "OR", ["Pennsylvania"] = "PA", ["Rhode Island"] = "RI", ["South Carolina"] = "SC",
+            ["South Dakota"] = "SD", ["Tennessee"] = "TN", ["Texas"] = "TX", ["Utah"] = "UT",
+            ["Vermont"] = "VT", ["Virginia"] = "VA", ["Washington"] = "WA", ["West Virginia"] = "WV",
+            ["Wisconsin"] = "WI", ["Wyoming"] = "WY",
+        };
+
+    // Resolves a raw governing-law/state value to a USPS code the catalog can be keyed on. Accepts a
+    // bare two-letter code, a sovereign name, or a court caption (the enclosing sovereign is extracted).
+    private static string? ResolveJurisdictionCode(string? rawJurisdiction)
+    {
+        var value = NormalizeAuthorityContext(rawJurisdiction);
+        if (value is null) return null;
+
+        if (value.Length == 2 && UspsByStateName.Values.Contains(value.ToUpperInvariant()))
+            return value.ToUpperInvariant();
+
+        var sovereign = LegalJurisdictionScope.ResolveGoverningLaw(value) ?? value;
+        if (UspsByStateName.TryGetValue(sovereign, out var code)) return code;
+
+        var extracted = LegalJurisdictionScope.ExtractSovereign(value);
+        return extracted is not null && UspsByStateName.TryGetValue(extracted, out var extractedCode)
+            ? extractedCode
+            : null;
+    }
+
+    // Builds the advisory jurisdiction reference block for the resolved governing-law state. The block is
+    // clearly labeled NON-EVIDENCE / ADVISORY and carries each row's SourceNote caveat and EffectiveDate,
+    // so the model treats it as general background only, never as verified evidence or a scoring input.
+    // Returns an empty string when the jurisdiction cannot be resolved, no active rule exists, or the
+    // lookup fails (fail-soft: the decision proceeds unchanged).
+    private async Task<string> BuildJurisdictionAdvisoryNoteAsync(
+        Guid tenantId, string? rawJurisdiction, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var code = ResolveJurisdictionCode(rawJurisdiction);
+            if (code is null) return string.Empty;
+
+            var rules = await repository.GetJurisdictionRulesAsync(
+                tenantId, "PERSONAL_INJURY", cancellationToken);
+            var rule = rules.FirstOrDefault(r =>
+                r.IsActive && string.Equals(r.JurisdictionCode, code, StringComparison.OrdinalIgnoreCase));
+            if (rule is null) return string.Empty;
+
+            string? Line(string label, string? value) =>
+                string.IsNullOrWhiteSpace(value) ? null : $"- {label}: {value.Trim()}";
+            string? YearLine(string label, decimal? years) =>
+                years is { } y ? $"- {label}: {y:0.#} year(s)" : null;
+
+            var lines = new[]
+            {
+                YearLine("Personal injury statute of limitations", rule.PersonalInjuryLimitationYears),
+                YearLine("Medical malpractice statute of limitations", rule.MedicalMalpracticeLimitationYears),
+                YearLine("Wrongful death statute of limitations", rule.WrongfulDeathLimitationYears),
+                Line("Discovery rule / accrual", rule.DiscoveryRuleNote),
+                Line("Minors tolling", rule.MinorsTollingNote),
+                Line("Comparative-fault regime", $"{rule.NegligenceRegimeCode}{(string.IsNullOrWhiteSpace(rule.NegligenceRegimeNote) ? "" : $" — {rule.NegligenceRegimeNote.Trim()}")}"),
+                Line("Joint & several liability", rule.JointSeveralLiabilityNote),
+                Line("Dram shop", rule.DramShopNote),
+                Line("Government-claim notice", rule.GovernmentClaimNoticeNote),
+                Line("Non-economic damages cap", rule.NonEconomicDamagesCapNote),
+                Line("Punitive damages standard", rule.PunitiveDamagesStandardNote),
+                Line("Medical malpractice specifics", rule.MedicalMalpracticeNote),
+            }.Where(l => l is not null);
+
+            var body = string.Join("\n", lines);
+            if (string.IsNullOrWhiteSpace(body)) return string.Empty;
+
+            var sb = new System.Text.StringBuilder();
+            sb.Append("\n\n──────── JURISDICTION REFERENCE (database-backed, ADVISORY — NOT EVIDENCE, NOT LEGAL ADVICE) ────────\n");
+            sb.Append($"Governing law: {rule.JurisdictionName} ({rule.JurisdictionCode}).\n");
+            sb.Append(body);
+            sb.Append('\n');
+            if (!string.IsNullOrWhiteSpace(rule.SourceNote))
+                sb.Append($"Source: {rule.SourceNote.Trim()}\n");
+            if (rule.EffectiveDate is { } eff)
+                sb.Append($"Effective date: {eff:yyyy-MM-dd}.\n");
+            sb.Append(
+                "These are commonly-cited GENERAL rules and must be independently verified: accrual, tolling, " +
+                "exceptions, and inflation-adjusted caps vary by claim type and change over time. Treat this block " +
+                "as background context only. It is NOT verified evidence and must NOT be used as a scoring input or " +
+                "to decide candidate competition, the frontier, information value, or readiness — POLOXI Core owns those.");
+            return sb.ToString();
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "Advisory jurisdiction reference note skipped for tenant {TenantId}; decision unaffected.", tenantId);
+            return string.Empty;
+        }
+    }
+
     // on the Decision Contract. This is what makes the PI Profile a first-class proposal input instead
     // of free text: the same projected facts are available to every LLM stage. Supplied allegations,
     // NOT verified evidence. Returns null when there is no profile or no material PI field.
@@ -1317,6 +1431,14 @@ public sealed partial class LegalDecisionService(
             discoveryUser += BuildMatterContextProposalContext(matterContext);
         if (request.PersonalInjuryProfile is { } piProfile)
             discoveryUser += BuildPersonalInjuryProfileProposalContext(piProfile);
+        // Advisory, non-scoring jurisdiction reference note (migration 0464). Deterministically keyed off
+        // the already-resolved governing-law (request.Jurisdiction) and appended to the DISCOVERY PROPOSAL
+        // prompt only — never to request.Query — so it stays next to the resolved governing law without
+        // leaking into the raw LLM passthrough, hierarchy/branch generation, the persisted query, or the
+        // decision-memo title. Fail-soft: any lookup failure leaves the prompt unchanged. POLOXI Core still
+        // owns all candidate competition, frontier, information value, and readiness.
+        discoveryUser += await BuildJurisdictionAdvisoryNoteAsync(
+            request.TenantId, request.Jurisdiction, cancellationToken);
         if (request.DiscoveryMode == DecisionDiscoveryMode.DomainPack)
             domainPackConfigHash = ComputeDomainPackConfigHash(domainPack!, applicableDomainConcepts, applicableDomainRelations);
         var discovery = await aiProvider.GenerateAsync(

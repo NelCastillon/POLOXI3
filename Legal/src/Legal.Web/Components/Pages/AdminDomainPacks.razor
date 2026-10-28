@@ -12,10 +12,29 @@
             <p>Manage practice-area Domain Packs and their domain semantics — dimensions, evidence types, verification profiles, matter types, concepts, concept relations, and outcome candidates. Edits are tenant-scoped; global seed packs stay read-only.</p>
         </div>
         <div class="um-header-actions">
-            <button class="um-btn um-btn-primary" @onclick="OpenCreatePack"><i class="bi bi-box-seam"></i> Add pack</button>
-            <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+            @if (_view == "packs")
+            {
+                <button class="um-btn um-btn-primary" @onclick="OpenCreatePack"><i class="bi bi-box-seam"></i> Add pack</button>
+                <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+            }
+            else
+            {
+                <button class="um-btn um-btn-primary" @onclick="OpenCreateJurisdiction"><i class="bi bi-geo-alt"></i> Add jurisdiction override</button>
+                <button class="um-btn um-btn-ghost" @onclick="LoadJurisdictionRulesAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+            }
         </div>
     </header>
+
+    <nav class="intel-kpis" style="margin-bottom:1rem;">
+        <article class="intel-kpi-link @(_view == "packs" ? "intel-kpi-active" : null)" role="button" tabindex="0"
+                 title="Domain Packs" @onclick="@(() => SetView("packs"))">
+            <span>Domain Packs</span><strong>@_packs.Count</strong>
+        </article>
+        <article class="intel-kpi-link @(_view == "jurisdictions" ? "intel-kpi-active" : null)" role="button" tabindex="0"
+                 title="Personal Injury Jurisdiction Rules" @onclick="@(() => SetView("jurisdictions"))">
+            <span>Jurisdiction Rules</span><strong>@_jurisdictionRules.Count</strong>
+        </article>
+    </nav>
 
     @if (_loadError is not null)
     {
@@ -24,7 +43,36 @@
 
     @if (_loading)
     {
-        <div class="intel-state">Loading domain packs…</div>
+        <div class="intel-state">Loading…</div>
+    }
+    else if (_view == "jurisdictions")
+    {
+        <section class="intel-panel">
+            <p class="intel-note">Commonly-cited, DB-backed personal-injury rules per US state and DC — statute of limitations, comparative-fault regime, damages caps, and more. Rows are <strong>advisory only</strong> and not legal advice; verify independently. Global defaults are read-only; use <em>Add jurisdiction override</em> to create a tenant-specific override.</p>
+            <table class="um-table">
+                <thead><tr><th>Jurisdiction</th><th>PI SOL</th><th>MedMal SOL</th><th>WD SOL</th><th>Fault Regime</th><th>Non-Econ Cap</th><th>Scope</th><th></th></tr></thead>
+                <tbody>
+                    @foreach (var j in _jurisdictionRules)
+                    {
+                        <tr class="um-row-clickable" @onclick="() => OpenEditJurisdiction(j)">
+                            <td>@j.JurisdictionName (@j.JurisdictionCode)</td>
+                            <td>@(j.PersonalInjuryLimitationYears?.ToString("0.#") ?? "—")</td>
+                            <td>@(j.MedicalMalpracticeLimitationYears?.ToString("0.#") ?? "—")</td>
+                            <td>@(j.WrongfulDeathLimitationYears?.ToString("0.#") ?? "—")</td>
+                            <td>@j.NegligenceRegimeCode</td>
+                            <td title="@j.NonEconomicDamagesCapNote">@(string.IsNullOrWhiteSpace(j.NonEconomicDamagesCapNote) ? "—" : Truncate(j.NonEconomicDamagesCapNote, 40))</td>
+                            <td>@(j.IsTenantOverride ? "Tenant override" : "Global default")</td>
+                            <td>
+                                @if (j.IsTenantOverride)
+                                {
+                                    <button class="um-btn um-btn-ghost um-btn-sm" title="Delete override" @onclick="() => AskDeleteJurisdiction(j)" @onclick:stopPropagation="true"><i class="bi bi-trash"></i></button>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </section>
     }
     else
     {
@@ -383,6 +431,56 @@
     </div>
 }
 
+@* ── Jurisdiction rule create/edit modal ── *@
+@if (_showJurisdictionForm)
+{
+    <div class="um-modal-backdrop">
+        <EditForm Model="_jForm" OnValidSubmit="SaveJurisdictionAsync" class="um-modal">
+            <DataAnnotationsValidator />
+            <div class="um-modal-header">
+                <i class="bi bi-geo-alt"></i>
+                <span>@(_jForm.IsEdit ? "Edit Jurisdiction Override" : "Add Jurisdiction Override")</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showJurisdictionForm = false"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <div class="um-modal-body"><div class="um-form-grid">
+                <label>Jurisdiction Code (USPS)<InputText @bind-Value="_jForm.JurisdictionCode" class="um-input" disabled="@_jForm.IsEdit" /><ValidationMessage For="() => _jForm.JurisdictionCode" class="text-danger" /></label>
+                <label>Jurisdiction Name<InputText @bind-Value="_jForm.JurisdictionName" class="um-input" /><ValidationMessage For="() => _jForm.JurisdictionName" class="text-danger" /></label>
+                <label>Personal Injury SOL (years)<InputNumber @bind-Value="_jForm.PersonalInjuryLimitationYears" step="0.5" class="um-input" /><ValidationMessage For="() => _jForm.PersonalInjuryLimitationYears" class="text-danger" /></label>
+                <label>Medical Malpractice SOL (years)<InputNumber @bind-Value="_jForm.MedicalMalpracticeLimitationYears" step="0.5" class="um-input" /><ValidationMessage For="() => _jForm.MedicalMalpracticeLimitationYears" class="text-danger" /></label>
+                <label>Wrongful Death SOL (years)<InputNumber @bind-Value="_jForm.WrongfulDeathLimitationYears" step="0.5" class="um-input" /><ValidationMessage For="() => _jForm.WrongfulDeathLimitationYears" class="text-danger" /></label>
+                <label>Negligence Regime
+                    <InputSelect @bind-Value="_jForm.NegligenceRegimeCode" class="um-input">
+                        <option value="PURE_COMPARATIVE">PURE_COMPARATIVE</option>
+                        <option value="MODIFIED_50">MODIFIED_50</option>
+                        <option value="MODIFIED_51">MODIFIED_51</option>
+                        <option value="MODIFIED_SLIGHT">MODIFIED_SLIGHT</option>
+                        <option value="CONTRIBUTORY">CONTRIBUTORY</option>
+                    </InputSelect>
+                    <ValidationMessage For="() => _jForm.NegligenceRegimeCode" class="text-danger" />
+                </label>
+                <label>Negligence Regime Note<InputTextArea @bind-Value="_jForm.NegligenceRegimeNote" class="um-input" /><ValidationMessage For="() => _jForm.NegligenceRegimeNote" class="text-danger" /></label>
+                <label>Discovery Rule Note<InputTextArea @bind-Value="_jForm.DiscoveryRuleNote" class="um-input" /><ValidationMessage For="() => _jForm.DiscoveryRuleNote" class="text-danger" /></label>
+                <label>Minors Tolling Note<InputTextArea @bind-Value="_jForm.MinorsTollingNote" class="um-input" /><ValidationMessage For="() => _jForm.MinorsTollingNote" class="text-danger" /></label>
+                <label>Joint &amp; Several Liability Note<InputTextArea @bind-Value="_jForm.JointSeveralLiabilityNote" class="um-input" /><ValidationMessage For="() => _jForm.JointSeveralLiabilityNote" class="text-danger" /></label>
+                <label>Dram Shop Note<InputTextArea @bind-Value="_jForm.DramShopNote" class="um-input" /><ValidationMessage For="() => _jForm.DramShopNote" class="text-danger" /></label>
+                <label>Government Claim Notice Note<InputTextArea @bind-Value="_jForm.GovernmentClaimNoticeNote" class="um-input" /><ValidationMessage For="() => _jForm.GovernmentClaimNoticeNote" class="text-danger" /></label>
+                <label>Non-Economic Damages Cap Note<InputTextArea @bind-Value="_jForm.NonEconomicDamagesCapNote" class="um-input" /><ValidationMessage For="() => _jForm.NonEconomicDamagesCapNote" class="text-danger" /></label>
+                <label>Punitive Damages Standard Note<InputTextArea @bind-Value="_jForm.PunitiveDamagesStandardNote" class="um-input" /><ValidationMessage For="() => _jForm.PunitiveDamagesStandardNote" class="text-danger" /></label>
+                <label>Medical Malpractice Note<InputTextArea @bind-Value="_jForm.MedicalMalpracticeNote" class="um-input" /><ValidationMessage For="() => _jForm.MedicalMalpracticeNote" class="text-danger" /></label>
+                <label>Source Note<InputTextArea @bind-Value="_jForm.SourceNote" class="um-input" /><ValidationMessage For="() => _jForm.SourceNote" class="text-danger" /></label>
+                <label>Effective Date<InputDate @bind-Value="_jForm.EffectiveDate" class="um-input" /><ValidationMessage For="() => _jForm.EffectiveDate" class="text-danger" /></label>
+                <label>Sort Order<InputNumber @bind-Value="_jForm.SortOrder" class="um-input" /><ValidationMessage For="() => _jForm.SortOrder" class="text-danger" /></label>
+                <label class="um-check"><InputCheckbox @bind-Value="_jForm.IsAdvisoryOnly" /> Advisory only</label>
+                <label class="um-check"><InputCheckbox @bind-Value="_jForm.IsActive" /> Active</label>
+            </div></div>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showJurisdictionForm = false">Cancel</button>
+                <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@(_saving ? "Saving…" : "Save")</button>
+            </div>
+        </EditForm>
+    </div>
+}
+
 @* ── Delete confirm ── *@
 @if (_deletePrompt is not null)
 {
@@ -444,6 +542,13 @@
 
     private DeletePrompt? _deletePrompt;
 
+    // ── Jurisdiction Rules view (migration 0464; advisory reference catalog) ──
+    private string _view = "packs";
+    private IReadOnlyList<DecisionJurisdictionRuleDto> _jurisdictionRules = [];
+    private bool _jurisdictionsLoaded;
+    private readonly JurisdictionForm _jForm = new();
+    private bool _showJurisdictionForm;
+
     protected override Task OnInitializedAsync() => LoadAsync();
 
     private async Task LoadAsync()
@@ -500,6 +605,71 @@
         _toastError = isError;
         _ = Task.Delay(4000).ContinueWith(_ => InvokeAsync(() => { _toast = null; StateHasChanged(); }));
     }
+
+    // ── Jurisdiction Rules view ──
+    private static string Truncate(string? value, int max)
+        => string.IsNullOrEmpty(value) ? "" : value.Length <= max ? value : value[..max] + "…";
+
+    private async Task SetView(string view)
+    {
+        _view = view;
+        if (view == "jurisdictions" && !_jurisdictionsLoaded)
+            await LoadJurisdictionRulesAsync();
+    }
+
+    private async Task LoadJurisdictionRulesAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            _jurisdictionRules = (await Api.GetLegalDecisionJurisdictionRulesAsync()).ToList();
+            _jurisdictionsLoaded = true;
+        }
+        catch (Exception ex) { _loadError = $"Failed to load jurisdiction rules: {ex.Message}"; }
+        finally { _loading = false; }
+    }
+
+    private void OpenCreateJurisdiction()
+    {
+        _jForm.Reset(isEdit: false);
+        _showJurisdictionForm = true;
+    }
+
+    private void OpenEditJurisdiction(DecisionJurisdictionRuleDto j)
+    {
+        _jForm.Load(j);
+        _showJurisdictionForm = true;
+    }
+
+    private async Task SaveJurisdictionAsync()
+    {
+        _saving = true;
+        try
+        {
+            await Api.SaveLegalDecisionJurisdictionRuleAsync(new SaveDecisionJurisdictionRuleRequest(
+                _jForm.JurisdictionCode.Trim(), _jForm.JurisdictionName.Trim(),
+                _jForm.PersonalInjuryLimitationYears, _jForm.MedicalMalpracticeLimitationYears, _jForm.WrongfulDeathLimitationYears,
+                _jForm.DiscoveryRuleNote, _jForm.MinorsTollingNote, _jForm.NegligenceRegimeCode.Trim(), _jForm.NegligenceRegimeNote,
+                _jForm.JointSeveralLiabilityNote, _jForm.DramShopNote, _jForm.GovernmentClaimNoticeNote,
+                _jForm.NonEconomicDamagesCapNote, _jForm.PunitiveDamagesStandardNote, _jForm.MedicalMalpracticeNote,
+                _jForm.SourceNote, _jForm.EffectiveDate, _jForm.IsAdvisoryOnly, _jForm.SortOrder, _jForm.IsActive));
+            _showJurisdictionForm = false;
+            await LoadJurisdictionRulesAsync();
+            ShowToast("Jurisdiction override saved.", false);
+        }
+        catch (Exception ex) { ShowToast($"Save failed: {ex.Message}", true); }
+        finally { _saving = false; }
+    }
+
+    private void AskDeleteJurisdiction(DecisionJurisdictionRuleDto j) => _deletePrompt = new DeletePrompt(
+        "Delete Jurisdiction Override",
+        $"Delete tenant override for '{j.JurisdictionName}' ({j.JurisdictionCode})? Global default rules cannot be deleted. This action cannot be undone.",
+        async () =>
+        {
+            await Api.DeleteLegalDecisionJurisdictionRuleAsync(j.PracticeAreaCode, j.JurisdictionCode);
+            await LoadJurisdictionRulesAsync();
+        });
 
     // ── Pack CRUD ──
     private void OpenCreatePack()
@@ -694,6 +864,58 @@
         [Range(0, 100000)] public int SortOrder { get; set; }
         public bool IsActive { get; set; } = true;
         public void Reset(bool isEdit) { IsEdit = isEdit; PackCode = ""; PracticeAreaCode = ""; Name = ""; Description = null; SortOrder = 0; IsActive = true; }
+    }
+
+    private sealed class JurisdictionForm
+    {
+        public bool IsEdit { get; set; }
+        [Required, StringLength(10)] public string JurisdictionCode { get; set; } = "";
+        [Required, StringLength(120)] public string JurisdictionName { get; set; } = "";
+        [Range(0, 100)] public decimal? PersonalInjuryLimitationYears { get; set; }
+        [Range(0, 100)] public decimal? MedicalMalpracticeLimitationYears { get; set; }
+        [Range(0, 100)] public decimal? WrongfulDeathLimitationYears { get; set; }
+        [StringLength(600)] public string? DiscoveryRuleNote { get; set; }
+        [StringLength(600)] public string? MinorsTollingNote { get; set; }
+        [Required, StringLength(40)] public string NegligenceRegimeCode { get; set; } = "MODIFIED_51";
+        [StringLength(600)] public string? NegligenceRegimeNote { get; set; }
+        [StringLength(600)] public string? JointSeveralLiabilityNote { get; set; }
+        [StringLength(600)] public string? DramShopNote { get; set; }
+        [StringLength(600)] public string? GovernmentClaimNoticeNote { get; set; }
+        [StringLength(800)] public string? NonEconomicDamagesCapNote { get; set; }
+        [StringLength(800)] public string? PunitiveDamagesStandardNote { get; set; }
+        [StringLength(800)] public string? MedicalMalpracticeNote { get; set; }
+        [StringLength(1000)] public string? SourceNote { get; set; }
+        public DateOnly? EffectiveDate { get; set; }
+        public bool IsAdvisoryOnly { get; set; } = true;
+        [Range(0, 100000)] public int SortOrder { get; set; }
+        public bool IsActive { get; set; } = true;
+
+        public void Reset(bool isEdit)
+        {
+            IsEdit = isEdit;
+            JurisdictionCode = ""; JurisdictionName = "";
+            PersonalInjuryLimitationYears = null; MedicalMalpracticeLimitationYears = null; WrongfulDeathLimitationYears = null;
+            DiscoveryRuleNote = null; MinorsTollingNote = null; NegligenceRegimeCode = "MODIFIED_51"; NegligenceRegimeNote = null;
+            JointSeveralLiabilityNote = null; DramShopNote = null; GovernmentClaimNoticeNote = null;
+            NonEconomicDamagesCapNote = null; PunitiveDamagesStandardNote = null; MedicalMalpracticeNote = null;
+            SourceNote = null; EffectiveDate = null; IsAdvisoryOnly = true; SortOrder = 0; IsActive = true;
+        }
+
+        public void Load(DecisionJurisdictionRuleDto j)
+        {
+            IsEdit = true;
+            JurisdictionCode = j.JurisdictionCode; JurisdictionName = j.JurisdictionName;
+            PersonalInjuryLimitationYears = j.PersonalInjuryLimitationYears;
+            MedicalMalpracticeLimitationYears = j.MedicalMalpracticeLimitationYears;
+            WrongfulDeathLimitationYears = j.WrongfulDeathLimitationYears;
+            DiscoveryRuleNote = j.DiscoveryRuleNote; MinorsTollingNote = j.MinorsTollingNote;
+            NegligenceRegimeCode = j.NegligenceRegimeCode; NegligenceRegimeNote = j.NegligenceRegimeNote;
+            JointSeveralLiabilityNote = j.JointSeveralLiabilityNote; DramShopNote = j.DramShopNote;
+            GovernmentClaimNoticeNote = j.GovernmentClaimNoticeNote; NonEconomicDamagesCapNote = j.NonEconomicDamagesCapNote;
+            PunitiveDamagesStandardNote = j.PunitiveDamagesStandardNote; MedicalMalpracticeNote = j.MedicalMalpracticeNote;
+            SourceNote = j.SourceNote; EffectiveDate = j.EffectiveDate; IsAdvisoryOnly = j.IsAdvisoryOnly;
+            SortOrder = j.SortOrder; IsActive = j.IsActive;
+        }
     }
 
     private sealed class DimensionForm

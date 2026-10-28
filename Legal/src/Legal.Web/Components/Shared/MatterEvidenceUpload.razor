@@ -1,0 +1,224 @@
+@namespace Legal.Web.Components.Shared
+@using Microsoft.AspNetCore.Components.Forms
+@using Legal.Application.Features.Intelligence.Decision
+@using Legal.Web.Components.Pages
+@inject ApiClient Api
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+@* ──────────────────────────────────────────────────────────────────────────────
+   Reusable drag-and-drop multi-document evidence uploader.
+
+   Reuses the established secure intake contract end-to-end:
+     StartLegalUploadBatchAsync (one batch per attach action, optional provenance)
+       → per-file UploadLegalMatterDocumentAsync (idempotency key + batch id + source)
+         → backend IngestAsync (Blob + SHA-256 + malware scan + Azure Document
+            Intelligence extraction + passages + Stage-1 enrichment), physical bytes
+            deduplicated while every provenance occurrence is preserved
+       → CloseLegalUploadBatchAsync.
+
+   Upload is prepare-only: no metered LLM is invoked here. New documents merge into
+   the matter's existing evidence and are (re)scored against propositions on the next
+   decision run. OnUploaded reports how many files were accepted so the host can
+   surface the "evidence added — re-run decision to re-score" hint.
+   ────────────────────────────────────────────────────────────────────────────── *@
+
+<div class="mev-root @(_dragActive ? "mev-root--drag" : null)" @ref="_zone">
+    <div class="mev-drop"
+         @ondragenter:preventDefault="true" @ondragover:preventDefault="true" @ondrop:preventDefault="true">
+        <div class="mev-drop-icon"><i class="bi @(_uploading ? "bi-hourglass-split mev-spin" : "bi-cloud-arrow-up")"></i></div>
+        <div class="mev-drop-copy">
+            @if (_uploading)
+            {
+                <span class="mev-drop-title">@(_total > 1 ? $"Uploading {_index}/{_total}…" : "Uploading…")</span>
+                <span class="mev-drop-sub">Documents are scanned, hashed and extracted automatically.</span>
+            }
+            else
+            {
+                <span class="mev-drop-title">Drag &amp; drop documents here</span>
+                <span class="mev-drop-sub">or <span class="mev-browse">browse</span> — PDF, DOCX, TXT, images · up to 50 files</span>
+            }
+        </div>
+        <label class="mev-input-wrap">
+            <InputFile OnChange="OnFilesSelectedAsync" @ref="_input" disabled="@_uploading"
+                       multiple accept=".pdf,.docx,.txt,.png,.jpg,.jpeg,.tif,.tiff" />
+        </label>
+    </div>
+
+    <details class="mev-context">
+        <summary><i class="bi bi-fingerprint"></i> Evidence context (optional) — applied as legal provenance to this upload</summary>
+        <div class="mev-context-grid">
+            <div class="mev-field">
+                <label>Source type</label>
+                <select class="form-select form-select-sm" @bind="_sourceType" disabled="@_uploading">
+                    @foreach (var st in LegalPersonalInjuryDecision2.EvidenceSourceTypes)
+                    {
+                        <option value="@st">@st</option>
+                    }
+                </select>
+            </div>
+            <div class="mev-field"><label>Custodian</label><input class="form-control form-control-sm" @bind="_custodian" placeholder="e.g. Jane Smith" disabled="@_uploading" /></div>
+            <div class="mev-field"><label>Produced by</label><input class="form-control form-control-sm" @bind="_producedBy" placeholder="e.g. Plaintiff" disabled="@_uploading" /></div>
+            <div class="mev-field"><label>Production ID</label><input class="form-control form-control-sm" @bind="_productionId" placeholder="e.g. PROD-001" disabled="@_uploading" /></div>
+            <div class="mev-field"><label>Bates start</label><input class="form-control form-control-sm" @bind="_batesStart" placeholder="e.g. P000123" disabled="@_uploading" /></div>
+            <div class="mev-field"><label>Bates end</label><input class="form-control form-control-sm" @bind="_batesEnd" placeholder="e.g. P000140" disabled="@_uploading" /></div>
+        </div>
+        <p class="mev-context-note">Physical bytes are deduplicated; this provenance is preserved as a distinct evidence occurrence.</p>
+    </details>
+
+    @if (_error is not null)
+    {
+        <div class="alert alert-danger mev-alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_error</div>
+    }
+
+    @if (_results.Count > 0)
+    {
+        <ul class="mev-results">
+            @foreach (var r in _results)
+            {
+                <li class="mev-result mev-result--@r.Kind">
+                    <i class="bi @(r.Kind == "ok" ? "bi-check-circle-fill" : r.Kind == "dup" ? "bi-files" : "bi-exclamation-triangle-fill")"></i>
+                    <span class="mev-result-name" title="@r.Name">@r.Name</span>
+                    <span class="mev-result-msg">@r.Message</span>
+                </li>
+            }
+        </ul>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public Guid MatterId { get; set; }
+    [Parameter] public string? DomainPackCode { get; set; } = DecisionDomainPackCodes.PersonalInjury;
+    [Parameter] public string? ModelCode { get; set; }
+    // Reports (accepted, duplicates) back to the host after a batch completes.
+    [Parameter] public EventCallback<EvidenceUploadResult> OnUploaded { get; set; }
+
+    private ElementReference _zone;
+    private InputFile? _input;
+    private IJSObjectReference? _module;
+
+    private bool _uploading, _dragActive;
+    private int _index, _total;
+    private string? _error;
+
+    private string _sourceType = LegalPersonalInjuryDecision2.EvidenceSourceTypes[0];
+    private string? _custodian, _producedBy, _productionId, _batesStart, _batesEnd;
+
+    private readonly List<FileResult> _results = [];
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            try
+            {
+                _module = await JS.InvokeAsync<IJSObjectReference>("import", "./Components/Shared/MatterEvidenceUpload.razor.js");
+                await _module.InvokeVoidAsync("init", _zone, DotNetObjectReference.Create(this));
+            }
+            catch { /* interop unavailable (prerender) — browse still works */ }
+        }
+    }
+
+    [JSInvokable] public void SetDragActive(bool active) { _dragActive = active; StateHasChanged(); }
+
+    private async Task OnFilesSelectedAsync(InputFileChangeEventArgs args)
+    {
+        if (MatterId == Guid.Empty || _uploading) return;
+
+        _error = null;
+        _results.Clear();
+        _uploading = true;
+        _index = 0;
+
+        IReadOnlyList<IBrowserFile> files;
+        try { files = args.GetMultipleFiles(maximumFileCount: 50); }
+        catch (Exception ex) { _error = ex.Message; _uploading = false; return; }
+
+        _total = files.Count;
+        if (_total == 0) { _uploading = false; return; }
+
+        var accepted = 0;
+        var duplicates = 0;
+        Guid? batchId = null;
+
+        try
+        {
+            batchId = await Api.StartLegalUploadBatchAsync(MatterId, new StartUploadBatchCommand
+            {
+                SourceTypeCode = _sourceType,
+                Custodian = string.IsNullOrWhiteSpace(_custodian) ? null : _custodian.Trim(),
+                ProducedBy = string.IsNullOrWhiteSpace(_producedBy) ? null : _producedBy.Trim(),
+                ProductionId = string.IsNullOrWhiteSpace(_productionId) ? null : _productionId.Trim(),
+                ReceivedDateUtc = DateTime.UtcNow
+            });
+            await Api.SetLegalUploadBatchDiscoveredAsync(MatterId, batchId.Value, _total);
+        }
+        catch (Exception ex) { _error = $"Could not open upload batch: {ex.Message}"; }
+
+        var source = new EvidenceSourceDescriptor
+        {
+            SourceTypeCode = _sourceType,
+            Custodian = string.IsNullOrWhiteSpace(_custodian) ? null : _custodian.Trim(),
+            ProducedBy = string.IsNullOrWhiteSpace(_producedBy) ? null : _producedBy.Trim(),
+            ProductionId = string.IsNullOrWhiteSpace(_productionId) ? null : _productionId.Trim(),
+            BatesStart = string.IsNullOrWhiteSpace(_batesStart) ? null : _batesStart.Trim(),
+            BatesEnd = string.IsNullOrWhiteSpace(_batesEnd) ? null : _batesEnd.Trim(),
+            OriginalPath = null
+        };
+
+        foreach (var file in files)
+        {
+            _index++;
+            StateHasChanged();
+            try
+            {
+                var idempotencyKey = $"{MatterId:N}:{file.Name}:{file.Size}:{file.LastModified.UtcTicks}";
+                var dto = await Api.UploadLegalMatterDocumentAsync(
+                    MatterId, file, documentTypeCode: null, domainPackCode: DomainPackCode,
+                    modelCode: ModelCode, token: default, idempotencyKey: idempotencyKey,
+                    uploadBatchId: batchId, source: source);
+
+                if (dto is null)
+                {
+                    duplicates++;
+                    _results.Add(new FileResult(file.Name, "dup", "Already present — linked as evidence occurrence"));
+                }
+                else
+                {
+                    accepted++;
+                    _results.Add(new FileResult(file.Name, "ok", "Uploaded, scanned and extracted"));
+                }
+            }
+            catch (Exception ex)
+            {
+                _results.Add(new FileResult(file.Name, "fail", ex.Message));
+            }
+            StateHasChanged();
+        }
+
+        if (batchId is { } id)
+        {
+            try { await Api.CloseLegalUploadBatchAsync(MatterId, id); } catch { /* non-fatal */ }
+        }
+
+        _uploading = false;
+        _index = 0; _total = 0;
+
+        if (accepted > 0 || duplicates > 0)
+        {
+            await OnUploaded.InvokeAsync(new EvidenceUploadResult(accepted, duplicates, batchId));
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_module is not null)
+        {
+            try { await _module.DisposeAsync(); } catch { /* ignore */ }
+        }
+    }
+
+    private sealed record FileResult(string Name, string Kind, string Message);
+
+    public sealed record EvidenceUploadResult(int Accepted, int Duplicates, Guid? BatchId);
+}

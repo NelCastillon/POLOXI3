@@ -95,6 +95,12 @@ public interface ILegalDecisionRepository
     Task SaveDomainPackAsync(Guid tenantId, Guid actorUserId, SaveDomainPackRequest request, CancellationToken cancellationToken = default);
     Task DeleteDomainPackAsync(Guid tenantId, Guid actorUserId, string packCode, CancellationToken cancellationToken = default);
 
+    // Personal Injury Jurisdiction Rules (migration 0464). Advisory reference catalog; global (TenantId NULL)
+    // seed rows are immutable and tenant rows override by JurisdictionCode within PracticeAreaCode.
+    Task<IReadOnlyCollection<DecisionJurisdictionRuleDto>> GetJurisdictionRulesAsync(Guid tenantId, string practiceAreaCode, CancellationToken cancellationToken = default);
+    Task SaveJurisdictionRuleAsync(Guid tenantId, Guid actorUserId, SaveDecisionJurisdictionRuleRequest request, CancellationToken cancellationToken = default);
+    Task DeleteJurisdictionRuleAsync(Guid tenantId, Guid actorUserId, string practiceAreaCode, string jurisdictionCode, CancellationToken cancellationToken = default);
+
     // ── Personal Injury (Domain Pack: PERSONAL_INJURY) profile + child aggregates + options ──
     Task<PersonalInjuryOptionsDto> GetPersonalInjuryOptionsAsync(Guid tenantId, CancellationToken cancellationToken = default);
     Task<PersonalInjuryProfileDto?> GetPersonalInjuryProfileAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default);

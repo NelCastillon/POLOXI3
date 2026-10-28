@@ -222,8 +222,16 @@ public sealed partial class IntelligenceWide2Service
     }
 
     // Whether a branch DisplayName is (or materially restates) one of the competing outcomes. A branch
-    // is treated as an outcome when it shares ALL of its significant tokens with an outcome, or the
-    // outcome shares all of its significant tokens with the branch (subset either direction).
+    // is treated as an outcome ONLY when it is a genuine restatement, not merely a sub-issue that shares
+    // vocabulary with a disposition. Two guarded cases survive:
+    //   (a) branch tokens are a subset of the outcome (branch ⊆ outcome): the branch merely names the
+    //       outcome with no independent terms of its own.
+    //   (b) the branch is near-equal to the outcome (outcome ⊆ branch AND the branch adds no significant
+    //       independent token): a superset that only pads the same disposition.
+    // A minimum shared-token floor (≥ 2) prevents a single coincidental term from wiping a real sub-issue
+    // branch (e.g. "Settlement amount adequacy" vs "Below-limits settlement"). Previously the raw
+    // `shared == outcome.Count` test let a short outcome swallow any richer branch that happened to
+    // contain its words, collapsing the entire shared-dependency forest on disposition-only matters.
     private static bool MatchesCompetingOutcome(string? displayName, IReadOnlyCollection<IReadOnlyCollection<string>> outcomeTokenSets)
     {
         if (string.IsNullOrWhiteSpace(displayName) || outcomeTokenSets.Count == 0)
@@ -234,13 +242,26 @@ public sealed partial class IntelligenceWide2Service
         foreach (var outcome in outcomeTokenSets)
         {
             var shared = branchTokens.Intersect(outcome, StringComparer.OrdinalIgnoreCase).Count();
-            if (shared == 0)
-                continue;
-            // Subset in either direction => the branch names the outcome, not a distinct sub-issue.
-            if (shared == branchTokens.Count || shared == outcome.Count)
+            if (shared < 2)
+                continue; // A single shared term is coincidental, not a restatement.
+            // (a) branch ⊆ outcome: the branch carries no term the outcome lacks — it names the outcome.
+            if (shared == branchTokens.Count)
+                return true;
+            // (b) outcome ⊆ branch, and the branch adds no independent significant term — near-equal.
+            if (shared == outcome.Count && branchTokens.Count == outcome.Count)
                 return true;
         }
         return false;
+    }
+
+    // ── Test seam: run the outcome-restatement guard directly over raw display names. ──────────────
+    internal static bool MatchesCompetingOutcomeForTest(string? displayName, IEnumerable<string> competingOutcomeNames)
+    {
+        var outcomeTokenSets = competingOutcomeNames
+            .Select(NormalizationTokens)
+            .Where(t => t.Count > 0)
+            .ToArray();
+        return MatchesCompetingOutcome(displayName, outcomeTokenSets);
     }
 
     private static readonly HashSet<string> NormalizationStopWords = new(StringComparer.OrdinalIgnoreCase)

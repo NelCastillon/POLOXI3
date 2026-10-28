@@ -81,6 +81,15 @@ public sealed class IntelligenceWide2Controller(IIntelligenceWide2Service servic
     public async Task<IActionResult> SavedResult(Guid analysisRunId,CancellationToken cancellationToken)
         =>await runResultRepository.GetByAnalysisRunAsync(TenantId,analysisRunId,cancellationToken)is{}response?Ok(response):NotFound();
 
+    // Read-only rehydration for Analysis History: returns the Next Best Action panel captured ONCE at
+    // execution time for a given analysis run, so reopening a saved run renders the full NBA panel from the
+    // database with NO fresh LLM (INTELLIGENCE_WIDE_ANSWER / gpt-6-astra) call. 404 for legacy runs recorded
+    // before NBA persistence existed; the caller then falls back to the empty advisory state.
+    [HttpGet("result/{analysisRunId:guid}/next-best-actions")]
+    [Authorize(Policy=IntelligencePolicies.Search)]
+    public async Task<IActionResult> SavedNextBestActions(Guid analysisRunId,CancellationToken cancellationToken)
+        =>await runResultRepository.GetNextBestActionByAnalysisRunAsync(TenantId,analysisRunId,cancellationToken)is{}nba?Ok(nba):NotFound();
+
     // On-demand, metered attorney-style Decision Memorandum for a saved analysis run. Composed by a dedicated
     // LLM call from the persisted WideSearchResponse (no fresh analysis). 404 when no saved result exists.
     [HttpPost("memo/{analysisRunId:guid}")]

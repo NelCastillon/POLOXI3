@@ -135,21 +135,61 @@ else
         <div class="um-modal-header"><i class="bi bi-funnel"></i><span>@(_editing is null ? "Add evidence target" : "Edit evidence scope")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg"></i></button></div>
         <EditForm Model="_form" OnValidSubmit="SaveAsync">
             <DataAnnotationsValidator />
-            <div class="um-modal-body">
+            <div class="um-modal-body" @onclick="CloseTargetPicker">
                 <div class="um-form-grid">
                     @if (_editing is null)
                     {
                         <label class="um-field mes-span-2">
                             <span class="um-field-label">Catalog target</span>
-                            <InputSelect class="form-select" @bind-Value="_form.TargetKey">
-                                <option value="">Select an evidence type or concept…</option>
-                                @foreach (var g in _availableTargets.GroupBy(t => t.DimensionCode))
+                            <div class="mes-combo @(_targetPickerOpen ? "mes-combo--open" : null)" @onclick:stopPropagation="true">
+                                <button type="button" class="mes-combo-control" @onclick="ToggleTargetPicker">
+                                    @if (SelectedTarget is { } sel)
+                                    {
+                                        <span class="mes-kind mes-kind--@(sel.TargetKindCode == "CONCEPT" ? "concept" : "evidence_type")">@(sel.TargetKindCode == "CONCEPT" ? "CPT" : "EVD")</span>
+                                        <span class="mes-combo-value">@sel.DisplayName</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="mes-combo-placeholder">Select an evidence type or concept…</span>
+                                    }
+                                    <i class="bi bi-chevron-down mes-combo-caret"></i>
+                                </button>
+                                @if (_targetPickerOpen)
                                 {
-                                    <optgroup label="@g.Key">
-                                        @foreach (var t in g) { <option value="@($"{t.TargetKindCode}|{t.TargetCode}")">@(t.TargetKindCode == "CONCEPT" ? "CPT" : "EVD") · @t.DisplayName</option> }
-                                    </optgroup>
+                                    <div class="mes-combo-panel">
+                                        <div class="mes-combo-search">
+                                            <i class="bi bi-search"></i>
+                                            <input class="form-control" placeholder="Search evidence types or concepts…" value="@_targetSearch" @oninput="OnTargetSearchChanged" @ref="_targetSearchInput" autocomplete="off" />
+                                        </div>
+                                        <div class="mes-combo-list">
+                                            @{ var groups = FilteredTargets(); }
+                                            @if (groups.Count == 0)
+                                            {
+                                                <div class="mes-combo-empty"><i class="bi bi-search"></i> No evidence types or concepts match “@_targetSearch”.</div>
+                                            }
+                                            else
+                                            {
+                                                @foreach (var g in groups)
+                                                {
+                                                    <div class="mes-combo-group">@g.Key</div>
+                                                    @foreach (var t in g)
+                                                    {
+                                                        var key = $"{t.TargetKindCode}|{t.TargetCode}";
+                                                        <button type="button" class="mes-combo-option @(key == _form.TargetKey ? "is-selected" : null)" @onclick="() => SelectTarget(key)">
+                                                            <span class="mes-kind mes-kind--@(t.TargetKindCode == "CONCEPT" ? "concept" : "evidence_type")">@(t.TargetKindCode == "CONCEPT" ? "CPT" : "EVD")</span>
+                                                            <span class="mes-combo-option-text">
+                                                                <span class="mes-combo-option-name">@t.DisplayName</span>
+                                                                @if (!string.IsNullOrWhiteSpace(t.Description)) { <span class="mes-combo-option-desc">@t.Description</span> }
+                                                            </span>
+                                                            @if (key == _form.TargetKey) { <i class="bi bi-check-lg mes-combo-check"></i> }
+                                                        </button>
+                                                    }
+                                                }
+                                            }
+                                        </div>
+                                    </div>
                                 }
-                            </InputSelect>
+                            </div>
                             <ValidationMessage For="() => _form.TargetKey" class="text-danger" />
                         </label>
                         @if (SelectedTarget is { } st && !string.IsNullOrWhiteSpace(st.Description))
@@ -230,6 +270,11 @@ else
     private MatterEvidenceScopeDto? _editing, _deleting;
     private ScopeForm _form = new();
     private List<MatterEvidenceScopeTargetOptionDto> _availableTargets = [];
+
+    private bool _targetPickerOpen;
+    private string _targetSearch = string.Empty;
+    private ElementReference _targetSearchInput;
+    private bool _focusTargetSearch;
 
     protected override Task OnInitializedAsync() => LoadAsync();
 
@@ -316,6 +361,45 @@ else
     }
 
     private void CloseForm() { _showForm = false; _editing = null; }
+
+    private void ToggleTargetPicker()
+    {
+        _targetPickerOpen = !_targetPickerOpen;
+        if (_targetPickerOpen) { _targetSearch = string.Empty; _focusTargetSearch = true; }
+    }
+
+    private void CloseTargetPicker() => _targetPickerOpen = false;
+
+    private void OnTargetSearchChanged(ChangeEventArgs e) => _targetSearch = e.Value?.ToString() ?? string.Empty;
+
+    private void SelectTarget(string key)
+    {
+        _form.TargetKey = key;
+        _targetPickerOpen = false;
+    }
+
+    private List<IGrouping<string, MatterEvidenceScopeTargetOptionDto>> FilteredTargets()
+    {
+        var q = _targetSearch?.Trim();
+        IEnumerable<MatterEvidenceScopeTargetOptionDto> items = _availableTargets;
+        if (!string.IsNullOrWhiteSpace(q))
+        {
+            items = items.Where(t =>
+                (t.DisplayName?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false)
+                || (t.TargetCode?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false)
+                || (t.Description?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false));
+        }
+        return items.GroupBy(t => t.DimensionCode).ToList();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_focusTargetSearch)
+        {
+            _focusTargetSearch = false;
+            try { await _targetSearchInput.FocusAsync(); } catch { }
+        }
+    }
 
     private MatterEvidenceScopeTargetOptionDto? SelectedTarget
     {

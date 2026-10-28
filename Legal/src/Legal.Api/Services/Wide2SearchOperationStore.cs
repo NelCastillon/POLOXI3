@@ -3,6 +3,7 @@ using Legal.Api.Security;
 using Legal.Application.Abstractions.Intelligence;
 using Legal.Application.Abstractions.Services;
 using Legal.Application.Features.Intelligence;
+using Legal.Application.Features.Intelligence.Decision;
 
 namespace Legal.Api.Services;
 
@@ -45,7 +46,26 @@ public sealed class Wide2SearchOperationStore(IServiceScopeFactory scopeFactory,
                 try
                 {
                     var ledgerWriter=scope.ServiceProvider.GetRequiredService<IAnalysisRunLedgerWriter>();
-                    await ledgerWriter.RecordWideRunAsync(request,response,CancellationToken.None);
+                    var recordedRunId=await ledgerWriter.RecordWideRunAsync(request,response,CancellationToken.None);
+
+                    // Persist the Next Best Action panel ONCE at execution time, keyed by the recorded run,
+                    // so reopening a saved run is LLM-free: the read-only history view serves the full NBA
+                    // panel from the DB instead of re-invoking gpt-6-astra (INTELLIGENCE_WIDE_ANSWER). Fully
+                    // fail-soft and only for matter-scoped runs that were actually recorded.
+                    if(recordedRunId is {} runId && (request.MatterId ?? request.DecisionMatterId) is {} matterId && matterId!=Guid.Empty)
+                    {
+                        try
+                        {
+                            var nbaService=scope.ServiceProvider.GetRequiredService<INextBestActionService>();
+                            var nba=await nbaService.GenerateAsync(request.TenantId,matterId,matterId,request.UserId==Guid.Empty?null:request.UserId,CancellationToken.None);
+                            var resultRepository=scope.ServiceProvider.GetRequiredService<IWideRunResultRepository>();
+                            await resultRepository.SaveNextBestActionAsync(request.TenantId,runId,nba,CancellationToken.None);
+                        }
+                        catch(Exception nbaEx)
+                        {
+                            logger.LogWarning(nbaEx,"Next Best Action capture failed for Wide operation {OperationId}; result unaffected.",operationId);
+                        }
+                    }
                 }
                 catch(Exception ledgerEx)
                 {

@@ -249,6 +249,32 @@ public sealed record SaveDomainPackRequest(
     int SortOrder,
     bool IsActive);
 
+// ── Personal Injury Jurisdiction Rule upsert (migration 0464) ───────────────────────────────────
+// Tenant-scoped create/update only; the repository never modifies global (TenantId NULL) seed rows.
+// Upserted by JurisdictionCode within PracticeAreaCode for the tenant. ADVISORY reference data only.
+public sealed record SaveDecisionJurisdictionRuleRequest(
+    [Required, StringLength(10)] string JurisdictionCode,
+    [Required, StringLength(120)] string JurisdictionName,
+    [Range(0, 100)] decimal? PersonalInjuryLimitationYears,
+    [Range(0, 100)] decimal? MedicalMalpracticeLimitationYears,
+    [Range(0, 100)] decimal? WrongfulDeathLimitationYears,
+    [StringLength(600)] string? DiscoveryRuleNote,
+    [StringLength(600)] string? MinorsTollingNote,
+    [Required, StringLength(40)] string NegligenceRegimeCode,
+    [StringLength(600)] string? NegligenceRegimeNote,
+    [StringLength(600)] string? JointSeveralLiabilityNote,
+    [StringLength(600)] string? DramShopNote,
+    [StringLength(600)] string? GovernmentClaimNoticeNote,
+    [StringLength(800)] string? NonEconomicDamagesCapNote,
+    [StringLength(800)] string? PunitiveDamagesStandardNote,
+    [StringLength(800)] string? MedicalMalpracticeNote,
+    [StringLength(1000)] string? SourceNote,
+    DateOnly? EffectiveDate,
+    bool IsAdvisoryOnly,
+    int SortOrder,
+    bool IsActive,
+    [StringLength(60)] string PracticeAreaCode = "PERSONAL_INJURY");
+
 // A single editable row of POLOXI.Legal_DecisionSetting (the runtime decision-tuning table).
 // Surfaced in the Legal Configuration UI so operators can toggle/tune settings such as the
 // clarification preflight gate (Decision.Preflight.*) without editing the database by hand.

@@ -75,6 +75,9 @@ internal abstract class StubDecisionRepository : ILegalDecisionRepository
     public Task DeleteDomainPackOutcomeCandidateAsync(Guid tenantId, Guid actorUserId, string packCode, string outcomeCode, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     public Task SaveDomainPackAsync(Guid tenantId, Guid actorUserId, SaveDomainPackRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     public Task DeleteDomainPackAsync(Guid tenantId, Guid actorUserId, string packCode, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<IReadOnlyCollection<DecisionJurisdictionRuleDto>> GetJurisdictionRulesAsync(Guid tenantId, string practiceAreaCode, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task SaveJurisdictionRuleAsync(Guid tenantId, Guid actorUserId, SaveDecisionJurisdictionRuleRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task DeleteJurisdictionRuleAsync(Guid tenantId, Guid actorUserId, string practiceAreaCode, string jurisdictionCode, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     public Task<PersonalInjuryOptionsDto> GetPersonalInjuryOptionsAsync(Guid tenantId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     public Task<PersonalInjuryProfileDto?> GetPersonalInjuryProfileAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     public Task<IReadOnlyCollection<MatterEvidenceScopeDto>> GetMatterEvidenceScopesAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default) => throw new NotSupportedException();

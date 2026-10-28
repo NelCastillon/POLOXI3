@@ -1283,13 +1283,15 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             // SEPARATE data plane and never reached scoring. Project those propositions into attributed
             // snippets and merge them so BOTH sources vote through the SAME scoring chain below. URL de-dup
             // prevents double-counting an authority already present in the external pool. Matter-scoped only.
+            // Document-backed corpus evidence (carrying real LegalDocumentVersionId) captured so the
+            // Factor Inventory can attach clickable PDF reference chips, not only matter-fact chips.
+            IReadOnlyList<PoloxiEvidenceDto> corpusDocumentEvidence=[];
             if(request.MatterId is {} corpusMatterId)
             {
                 try
                 {
                     var evidenceGraph=await documentCorpusRepository.GetMatterEvidenceGraphAsync(request.TenantId,corpusMatterId,cancellationToken);
                     var corpusSnippets=WideCorpusEvidenceProjection.Project(evidenceGraph,survivorsFinal,DateTime.UtcNow);
-                    if(corpusSnippets.Count>0)
                     {
                         var existingUrls=externalKnowledge.Select(snippet=>snippet.Url).ToHashSet(StringComparer.OrdinalIgnoreCase);
                         var freshCorpus=corpusSnippets.Where(snippet=>!existingUrls.Contains(snippet.Url)).ToArray();
@@ -1308,6 +1310,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                     if(corpusEvidence.Count>0)
                     {
                         evidence.AddRange(corpusEvidence);
+                        corpusDocumentEvidence=corpusEvidence;
                         foreach(var branch in survivorsFinal)
                         {
                             var branchCorpusCount=corpusEvidence.Count(item=>item.HierarchyBranchId==branch.WideBranchId);
@@ -2313,7 +2316,9 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             // Capture the ACTUAL run artifacts the Factor Inventory links to (admitted matter-fact evidence
             // and proposed legal authorities). Both already cleared their own admission/identity gates upstream,
             // so the inventory only references them — it never re-admits or fabricates them.
-            _factorInventoryAdmittedEvidence=matterFactEvidenceAdmitted;
+            _factorInventoryAdmittedEvidence=corpusDocumentEvidence.Count>0
+                ? corpusDocumentEvidence.Concat(matterFactEvidenceAdmitted).ToArray()
+                : matterFactEvidenceAdmitted;
             _factorInventoryProposedAuthorities=MapProposedLegalAuthorities(proposedLegalAuthorities,externalKnowledge);
             // Load PREVIOUSLY-persisted Decision Channel contributions (all channels incl. Human Intelligence)
             // for this matter so the Factor Inventory can attach ACTUAL CHANNEL reference chips. Fail-soft and
@@ -8292,8 +8297,15 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             // competition runs over the real decision factors. Not fabricated: every axis is a validated
             // plan dependency with a deterministic id/label. Evidence coverage stays 0 so the determinacy
             // gate keeps the run UNVERIFIED. Strictly gated to a legal EVALUATE run with a VALID plan.
+            // Synthetic scoring-axis recovery: when no scoreable hierarchy branch survived (a matter that
+            // narrowed entirely into competing dispositions), fall back to the normalization plan's shared
+            // dependencies. This only requires the plan to CARRY dependencies — NOT that the whole plan be
+            // IsValid — because an otherwise-invalid plan (e.g. no explicit candidate→dependency edges)
+            // can still expose legitimate shared scoring axes. Gating on Plan.IsValid here left
+            // disposition-only matters with zero axes, so competition returned [] and the overview showed
+            // "0% support" with dashed metrics.
             if(branches.Length==0&&IsLegalDecisionEvaluationRun
-                &&_legalNormalization is{Plan.IsValid:true} planForAxes
+                &&_legalNormalization is{} planForAxes
                 &&planForAxes.Plan.Dependencies.Count>0)
             {
                 branches=planForAxes.Plan.Dependencies

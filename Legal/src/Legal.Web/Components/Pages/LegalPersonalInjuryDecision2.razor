@@ -550,7 +550,7 @@
             <div class="poloxi-blended-dial">
                 <div class="poloxi-blended-dial-head">
                     <i class="bi bi-sliders" aria-hidden="true"></i>
-                    <strong>Blended Score threshold</strong>
+                    <strong>Evidence Relevance Cutoff</strong>
                     <span class="poloxi-blended-dial-value">@_blendedScoreThreshold.ToString("0.00")</span>
                     <span class="poloxi-blended-dial-eta" title="Rough estimate only — actual time depends on corpus size, model latency, and carrier/source responses.">
                         <i class="bi bi-clock-history" aria-hidden="true"></i> Est. @EstimatedExecutionTimeLabel
@@ -559,7 +559,7 @@
                 <input type="range" class="poloxi-blended-range" min="0" max="1" step="0.01"
                        value="@_blendedScoreThreshold.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)"
                        @oninput="OnBlendedScoreChanged" disabled="@_loading"
-                       aria-label="Blended Score out-of-scope threshold" />
+                       aria-label="Evidence Relevance Cutoff threshold" />
                 <p class="poloxi-blended-dial-hint">
                     Evidence Types whose blended (deterministic + LLM) relevance falls below this value are auto-marked OUT_OF_SCOPE for this run. Required-coverage, document-present, PRIORITIZE and attorney (USER) decisions are never affected.
                     <br />
@@ -2037,7 +2037,7 @@
         </div>
     }
 
-    @if (_documentPreviewUrl is not null)
+    @if (_documentPreviewUrl is not null && _ambiguityEvidenceGroup is null)
     {
         <div class="um-modal-backdrop" @onclick="CloseDocumentPreview">
             <div class="um-modal doc-preview-modal" @onclick:stopPropagation="true">
@@ -2045,7 +2045,7 @@
                     <i class="bi bi-file-earmark-pdf"></i>
                     <span>@_documentPreviewTitle</span>
                     <a class="um-btn um-btn-ghost um-btn-sm ms-auto" href="@_documentPreviewUrl" target="_blank" rel="noopener" title="Open in new tab"><i class="bi bi-box-arrow-up-right"></i></a>
-                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="CloseDocumentPreview"><i class="bi bi-x-lg"></i></button>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" title="Close" @onclick="CloseDocumentPreview"><i class="bi bi-x-lg"></i></button>
                 </div>
                 <div class="um-modal-body doc-preview-body">
                     <object data="@_documentPreviewUrl" type="application/pdf" class="doc-preview-frame">
@@ -2193,13 +2193,14 @@
         var internalEvidence = eg.Evidence.OrderByDescending(e => e.RelevanceScore).ToList();
         var externalEvidence = eg.ExternalKnowledge.OrderByDescending(e => e.Score).ToList();
         <div class="um-modal-backdrop" @onclick="CloseAmbiguityEvidence">
-            <div class="um-modal um-modal--lg abg-popup" @onclick:stopPropagation="true">
+            <div class="um-modal um-modal--lg abg-popup @(_documentPreviewUrl is not null ? "abg-popup--split" : "")" @onclick:stopPropagation="true">
                 <div class="um-modal-header">
                     <i class="bi bi-database-check"></i>
                     <span>@eg.DisplayName &mdash; Evidence &amp; Sources</span>
                     <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseAmbiguityEvidence"><i class="bi bi-x-lg"></i></button>
                 </div>
-                <div class="um-modal-body">
+                <div class="abg-popup-split">
+                <div class="um-modal-body abg-popup-content">
                     <div class="abg-popup-top">
                         <span class="abg-popup-code">@eg.GroupCode</span>
                         <span class="abg-popup-conf">@(internalEvidence.Count + externalEvidence.Count) source@((internalEvidence.Count + externalEvidence.Count) == 1 ? "" : "s")</span>
@@ -2220,7 +2221,11 @@
                                 @foreach (var ev in internalEvidence)
                                 {
                                     var relPct = (int)Math.Round((double)ev.RelevanceScore * 100);
-                                    <li class="abg-popup-branch">
+                                    var evDocId = ev.LegalDocumentVersionId;
+                                    <li class="abg-popup-branch @(evDocId is { } evClickVid && evClickVid != Guid.Empty ? "abg-popup-branch--clickable" : "")"
+                                        role="@(evDocId is { } evRoleVid && evRoleVid != Guid.Empty ? "button" : null)"
+                                        title="@(evDocId is { } && !string.IsNullOrWhiteSpace(ev.LegalDocumentFileName) ? $"View {ev.LegalDocumentFileName}" : null)"
+                                        @onclick="@(evDocId is { } evCardVid && evCardVid != Guid.Empty ? () => OpenDocumentPreview(evCardVid, string.IsNullOrWhiteSpace(ev.LegalDocumentFileName) ? ev.Title : ev.LegalDocumentFileName) : (Action)(() => { }))">
                                         <div class="abg-popup-branch-head">
                                             <span class="abg-popup-branch-code">#@ev.RankNumber</span>
                                             <strong class="abg-popup-branch-name">@ev.Title</strong>
@@ -2254,7 +2259,7 @@
                                         </div>
                                         @if (!string.IsNullOrWhiteSpace(ev.NavigationRoute))
                                         {
-                                            <p class="abg-popup-branch-note"><a href="@ev.NavigationRoute" target="_blank" rel="noopener"><i class="bi bi-box-arrow-up-right"></i> Open source</a></p>
+                                            <p class="abg-popup-branch-note"><a href="@ev.NavigationRoute" target="_blank" rel="noopener" @onclick:stopPropagation="true"><i class="bi bi-box-arrow-up-right"></i> Open source</a></p>
                                         }
                                     </li>
                                 }
@@ -2270,7 +2275,11 @@
                                 @foreach (var ex in externalEvidence)
                                 {
                                     var exPct = (int)Math.Round((double)ex.Score * 100);
-                                    <li class="abg-popup-branch">
+                                    var exDocId = ex.LegalDocumentVersionId;
+                                    <li class="abg-popup-branch @(exDocId is { } exClickVid && exClickVid != Guid.Empty ? "abg-popup-branch--clickable" : "")"
+                                        role="@(exDocId is { } exRoleVid && exRoleVid != Guid.Empty ? "button" : null)"
+                                        title="@(exDocId is { } exTitleVid && exTitleVid != Guid.Empty ? (string.IsNullOrWhiteSpace(ex.LegalDocumentFileName) ? "View document" : $"View {ex.LegalDocumentFileName}") : null)"
+                                        @onclick="@(exDocId is { } exCardVid && exCardVid != Guid.Empty ? () => OpenDocumentPreview(exCardVid, string.IsNullOrWhiteSpace(ex.LegalDocumentFileName) ? ex.Title : ex.LegalDocumentFileName) : (Action)(() => { }))">
                                         <div class="abg-popup-branch-head">
                                             <span class="abg-popup-branch-code"><i class="bi bi-globe2"></i> WEB</span>
                                             <strong class="abg-popup-branch-name">@ex.Title</strong>
@@ -2301,7 +2310,7 @@
                                         </div>
                                         @if (!string.IsNullOrWhiteSpace(ex.Url) && (ex.Url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || ex.Url.StartsWith("https://", StringComparison.OrdinalIgnoreCase)))
                                         {
-                                            <p class="abg-popup-branch-note"><a href="@ex.Url" target="_blank" rel="noopener"><i class="bi bi-box-arrow-up-right"></i> @ex.Url</a></p>
+                                            <p class="abg-popup-branch-note"><a href="@ex.Url" target="_blank" rel="noopener" @onclick:stopPropagation="true"><i class="bi bi-box-arrow-up-right"></i> @ex.Url</a></p>
                                         }
                                     </li>
                                 }
@@ -2313,6 +2322,24 @@
                     {
                         <p class="abg-popup-detail">No evidence or external knowledge was attached to this group.</p>
                     }
+                </div>
+                @if (_documentPreviewUrl is not null)
+                {
+                    <div class="abg-popup-pdf">
+                        <div class="abg-popup-pdf-head">
+                            <i class="bi bi-file-earmark-pdf"></i>
+                            <span class="abg-popup-pdf-title">@_documentPreviewTitle</span>
+                            <a class="um-btn um-btn-ghost um-btn-sm ms-auto" href="@_documentPreviewUrl" target="_blank" rel="noopener" title="Open in new tab"><i class="bi bi-box-arrow-up-right"></i></a>
+                            <button type="button" class="um-btn um-btn-ghost um-btn-sm" title="Close preview" @onclick="CloseDocumentPreview"><i class="bi bi-x-lg"></i></button>
+                        </div>
+                        <object data="@_documentPreviewUrl" type="application/pdf" class="abg-popup-pdf-frame">
+                            <div class="doc-preview-fallback">
+                                <p>The document preview could not be displayed inline.</p>
+                                <a class="um-btn um-btn-primary" href="@_documentPreviewUrl" target="_blank" rel="noopener">Open document</a>
+                            </div>
+                        </object>
+                    </div>
+                }
                 </div>
                 <div class="um-modal-footer">
                     <button type="button" class="um-btn um-btn-primary" @onclick="CloseAmbiguityEvidence">Close</button>
@@ -2341,6 +2368,19 @@
     // points such as the matter-detail "Media & Machine Evidence" action open directly on that tab.
     [Parameter, SupplyParameterFromQuery(Name = "tab")]
     public string? InitialTab { get; set; }
+
+    // Deep-link set by the matter workbench after new atomic propositions / evidence are added
+    // (?autoRun=1). On load it re-runs the full Wide pipeline once, so the combined result —
+    // short & long narratives, decision brief, candidate assessments and Next Best Actions —
+    // is regenerated from the updated matter state (new proposition + new document evidence)
+    // in a single consistent synthesis rather than piecemeal.
+    [Parameter, SupplyParameterFromQuery(Name = "autoRun")]
+    public string? AutoRunFlag { get; set; }
+
+    private bool AutoRunRequested => string.Equals(AutoRunFlag, "1", StringComparison.Ordinal)
+        || string.Equals(AutoRunFlag, "true", StringComparison.OrdinalIgnoreCase);
+
+    private bool _autoRunTriggered;
 
     // True only when Analysis History opened this page to view a saved run's complete results read-only.
     private bool IsSavedRunView => RunId is { } rid && rid != Guid.Empty
@@ -2471,13 +2511,13 @@
     private string? _documentPreviewUrl;
     private string _documentPreviewTitle = "Document preview";
 
-    private void OpenDocumentPreview(Guid documentVersionId, string fileName)
+    internal void OpenDocumentPreview(Guid documentVersionId, string fileName)
     {
         _documentPreviewTitle = string.IsNullOrWhiteSpace(fileName) ? "Document preview" : fileName;
         _documentPreviewUrl = Api.LegalDocumentVersionContentUrl(documentVersionId);
     }
 
-    private void CloseDocumentPreview()
+    internal void CloseDocumentPreview()
     {
         _documentPreviewUrl = null;
         _documentPreviewTitle = "Document preview";
@@ -2497,7 +2537,11 @@
 
     private void OpenAmbiguityEvidence(WideAmbiguityGroupDto group) => _ambiguityEvidenceGroup = group;
 
-    private void CloseAmbiguityEvidence() => _ambiguityEvidenceGroup = null;
+    private void CloseAmbiguityEvidence()
+    {
+        _ambiguityEvidenceGroup = null;
+        CloseDocumentPreview();
+    }
 
     // Distinct evidence-SOURCE count for a group's badge. The raw Evidence/ExternalKnowledge collections
     // hold one row per proposition/branch attribution, so the same underlying document or URL can appear
@@ -6853,7 +6897,51 @@
             return;
         }
 
+        // Matter-fact evidence chips (e.g. "Medical Bill 1") carry no document identity, but their label
+        // is the stored document's file name. Resolve by name against the matter's documents so the chip
+        // still opens the ACTUAL PDF. Never fabricated: only opens when a real matching version exists.
+        if (await ResolveDocumentVersionByNameAsync(reference.Label) is { } named)
+        {
+            OpenDocumentPreview(named.VersionId, string.IsNullOrWhiteSpace(named.FileName) ? reference.Label : named.FileName);
+            return;
+        }
+
         _referenceDetail = reference;
+    }
+
+    // Resolve a document version by matching a display label against the matter's stored document file
+    // names (exact, then file-name-without-extension, then prefix). Returns null when no confident match
+    // exists so nothing is fabricated.
+    private async Task<(Guid VersionId, string FileName)?> ResolveDocumentVersionByNameAsync(string? label)
+    {
+        if (string.IsNullOrWhiteSpace(label) || EffectiveMatterId is not { } matterId || matterId == Guid.Empty)
+            return null;
+        try
+        {
+            var target = label.Trim();
+            var documents = await Api.GetLegalMatterDocumentsAsync(matterId);
+            static string Stem(string name)
+            {
+                var slash = name.LastIndexOfAny(['/', '\\']);
+                var trimmed = slash >= 0 ? name[(slash + 1)..] : name;
+                var dot = trimmed.LastIndexOf('.');
+                return (dot > 0 ? trimmed[..dot] : trimmed).Trim();
+            }
+            var match = documents.FirstOrDefault(d => string.Equals(d.FileName, target, StringComparison.OrdinalIgnoreCase))
+                ?? documents.FirstOrDefault(d => string.Equals(Stem(d.FileName), target, StringComparison.OrdinalIgnoreCase))
+                ?? documents.FirstOrDefault(d => Stem(d.FileName).StartsWith(target, StringComparison.OrdinalIgnoreCase)
+                    || target.StartsWith(Stem(d.FileName), StringComparison.OrdinalIgnoreCase));
+            var latest = match?.Versions?
+                .OrderByDescending(v => v.VersionNumber)
+                .FirstOrDefault();
+            if (latest is null)
+                return null;
+            return (latest.LegalDocumentVersionId, match!.FileName);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     // Resolve a LegalDocumentId to the LegalDocumentVersionId of its latest stored version (+ file name)
@@ -7885,14 +7973,36 @@
                 .First();
             _propositionInfoValue = await Api.GetLegalMatterPropositionInformationValueAsync(matterId, correlationId);
             // Decision-directed Next Best Actions for the same correlation id (server composes requirements +
-            // domain-pack actions + deterministic eligibility). Fails soft independently of proposition IV.
-            try
+            // domain-pack actions + deterministic eligibility). The NBA phrasing layer makes a live
+            // INTELLIGENCE_WIDE_ANSWER (gpt-6-astra) LLM call, so SKIP it when the page is opened read-only to
+            // view a captured historical run — reopening saved results must not trigger fresh LLM work.
+            if (IsSavedRunView)
             {
-                _nextBestActions = await Api.GetLegalMatterNextBestActionsAsync(matterId, correlationId);
+                // Reopening a captured historical run must never trigger fresh LLM work. The full NBA panel
+                // was persisted ONCE at execution time keyed by the analysis run, so load it DB-only here.
+                // Legacy runs recorded before NBA persistence return null -> fall back to the empty state.
+                try
+                {
+                    _nextBestActions = RunId is { } savedRunId && savedRunId != Guid.Empty
+                        ? await Api.GetSavedNextBestActionsAsync(savedRunId)
+                        : null;
+                    _nextBestActions ??= new Legal.Application.Features.Intelligence.Decision.NextBestActionResult(matterId, [], "Next best actions were not captured for this saved run.");
+                }
+                catch (Exception ex)
+                {
+                    _nextBestActions = new Legal.Application.Features.Intelligence.Decision.NextBestActionResult(matterId, [], $"Next best actions could not be loaded: {ex.Message}");
+                }
             }
-            catch (Exception ex)
+            else
             {
-                _nextBestActions = new Legal.Application.Features.Intelligence.Decision.NextBestActionResult(matterId, [], $"Next best actions could not be loaded: {ex.Message}");
+                try
+                {
+                    _nextBestActions = await Api.GetLegalMatterNextBestActionsAsync(matterId, correlationId);
+                }
+                catch (Exception ex)
+                {
+                    _nextBestActions = new Legal.Application.Features.Intelligence.Decision.NextBestActionResult(matterId, [], $"Next best actions could not be loaded: {ex.Message}");
+                }
             }
             // What To Resolve Next: a thin projection over the SAME proposition VIV / LegalADV frontier.
             // Loaded independently of NBA so the resolution-priority panel reflects POLOXI decision state,
@@ -10249,12 +10359,17 @@
                 ActiveMatter.Set(_matter?.DecisionMatterId ?? matterId);
                 if (_matter is not null && string.IsNullOrWhiteSpace(_query))
                 {
-                    // Seed only a readable default question from the matter title. The full structured
-                    // Matter context (distinct legal scope, PI profile, facts, evidence, provenance) is
-                    // projected server-side from the immutable Matter Context Snapshot via MatterId — it is
-                    // NOT concatenated into the free-text question here, so distinct legal fields never
-                    // collapse and the user can freely edit the question without losing matter context.
-                    _query = _matter.Title ?? string.Empty;
+                    // Seed a readable default question. Prefer the matter's previously captured Additional
+                    // Narrative so a re-run (e.g. ?autoRun=1 after adding a proposition/evidence) regenerates
+                    // from the SAME prompt context instead of overwriting it with only the title — SearchAsync
+                    // persists _query back as the matter Additional Narrative. Fall back to the title when no
+                    // narrative exists. The full structured Matter context (distinct legal scope, PI profile,
+                    // facts, evidence, provenance) is projected server-side from the immutable Matter Context
+                    // Snapshot via MatterId — it is NOT concatenated into the free-text question here, so
+                    // distinct legal fields never collapse and the user can freely edit without losing context.
+                    _query = !string.IsNullOrWhiteSpace(_matter.AdditionalNarrative)
+                        ? _matter.AdditionalNarrative!
+                        : (_matter.Title ?? string.Empty);
                 }
             }
             catch { _matter = null; }
@@ -10411,6 +10526,24 @@
         if (!_initializing && !_overviewRestoreAttempted)
         {
             await TryRestorePersistedOverviewAsync();
+        }
+
+        // Matter workbench deep-link (?autoRun=1): after the attorney adds a new atomic proposition and/or
+        // new document evidence, re-run the full Wide pipeline ONCE so the entire combined result — short and
+        // long narratives, decision brief, candidate assessments, and Next Best Actions — is regenerated from
+        // the updated matter state in a single consistent synthesis. Never fires for read-only saved-run views.
+        if (!_initializing && _overviewRestoreAttempted && AutoRunRequested && !_autoRunTriggered
+            && !IsSavedRunView && !_loading
+            && MatterId is { } autoMatterId && autoMatterId != Guid.Empty
+            && !string.IsNullOrWhiteSpace(_query))
+        {
+            _autoRunTriggered = true;
+            // Strip ?autoRun=1 from the address bar BEFORE running so a browser refresh (which resets
+            // _autoRunTriggered) cannot re-fire a fresh — and costly — Wide synthesis. replace:true keeps
+            // this out of history. The intended re-run still proceeds even if a prior overview was restored
+            // from sessionStorage, because this is an explicit regenerate-from-updated-inputs request.
+            Navigation.NavigateTo(Navigation.GetUriWithQueryParameter("autoRun", (string?)null), replace: true);
+            await SearchAsync();
         }
     }
 

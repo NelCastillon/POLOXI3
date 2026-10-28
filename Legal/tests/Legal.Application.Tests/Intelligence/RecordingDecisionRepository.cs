@@ -518,4 +518,13 @@ internal sealed class RecordingDecisionRepository : ILegalDecisionRepository
 
     public Task DeleteDomainPackAsync(Guid tenantId, Guid actorUserId, string packCode, CancellationToken cancellationToken = default)
         => Task.CompletedTask;
+
+    public Task<IReadOnlyCollection<DecisionJurisdictionRuleDto>> GetJurisdictionRulesAsync(Guid tenantId, string practiceAreaCode, CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyCollection<DecisionJurisdictionRuleDto>>([]);
+
+    public Task SaveJurisdictionRuleAsync(Guid tenantId, Guid actorUserId, SaveDecisionJurisdictionRuleRequest request, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
+
+    public Task DeleteJurisdictionRuleAsync(Guid tenantId, Guid actorUserId, string practiceAreaCode, string jurisdictionCode, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
 }

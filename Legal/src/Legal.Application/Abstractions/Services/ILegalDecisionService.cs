@@ -60,6 +60,12 @@ public interface ILegalDecisionService
     // Domain Pack CRUD (tenant-scoped; global TenantId NULL seed rows are immutable).
     Task SaveDomainPackAsync(Guid tenantId, Guid actorUserId, SaveDomainPackRequest request, CancellationToken cancellationToken = default);
     Task DeleteDomainPackAsync(Guid tenantId, Guid actorUserId, string packCode, CancellationToken cancellationToken = default);
+
+    // Personal Injury Jurisdiction Rules (migration 0464; advisory reference catalog, tenant override).
+    Task<IReadOnlyCollection<DecisionJurisdictionRuleDto>> GetJurisdictionRulesAsync(Guid tenantId, string practiceAreaCode, CancellationToken cancellationToken = default);
+    Task SaveJurisdictionRuleAsync(Guid tenantId, Guid actorUserId, SaveDecisionJurisdictionRuleRequest request, CancellationToken cancellationToken = default);
+    Task DeleteJurisdictionRuleAsync(Guid tenantId, Guid actorUserId, string practiceAreaCode, string jurisdictionCode, CancellationToken cancellationToken = default);
+
     Task SaveDomainPackDimensionAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackDimensionRequest request, CancellationToken cancellationToken = default);
     Task DeleteDomainPackDimensionAsync(Guid tenantId, Guid actorUserId, string packCode, string dimensionCode, CancellationToken cancellationToken = default);
     Task SaveDomainPackEvidenceTypeAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackEvidenceTypeRequest request, CancellationToken cancellationToken = default);

@@ -60,6 +60,11 @@ internal static class WideCorpusEvidenceProjection
             }
         }
 
+        // Source assertions pin a real document version directly onto an evidence item AND/OR a
+        // proposition-support edge, so they resolve the backing document for propositions whose SUPPORTS
+        // edge doesn't map through graph.Evidence (the exact gap behind "View matter data"-only rows).
+        var (documentBySupportId, assertionDocumentByItemId) = BuildAssertionDocumentIndex(graph);
+
         var branchTokens = branches
             .Select(branch => (branch, tokens: Tokenize($"{branch.DisplayName} {branch.Interpretation}")))
             .ToArray();
@@ -90,6 +95,10 @@ internal static class WideCorpusEvidenceProjection
                         break;
                 }
             }
+
+            // Fallback: resolve the backing document through source assertions (pinned to a support edge
+            // or to the evidence item) when the SUPPORTS edge didn't map through graph.Evidence.
+            sourceDocument ??= ResolveFromAssertions(support, documentBySupportId, assertionDocumentByItemId);
 
             var propositionTokens = Tokenize(proposition.PropositionText);
             var matched = false;
@@ -174,6 +183,8 @@ internal static class WideCorpusEvidenceProjection
             }
         }
 
+        var (documentBySupportId, assertionDocumentByItemId) = BuildAssertionDocumentIndex(graph);
+
         var branchTokens = branches
             .Select(branch => (branch, tokens: Tokenize($"{branch.DisplayName} {branch.Interpretation}")))
             .ToArray();
@@ -211,6 +222,10 @@ internal static class WideCorpusEvidenceProjection
                     break;
             }
 
+            // Fallback: resolve the backing document through source assertions when no SUPPORTS edge
+            // mapped through graph.Evidence.
+            sourceDocument ??= ResolveFromAssertions(support, documentBySupportId, assertionDocumentByItemId);
+
             var propositionTokens = Tokenize(proposition.PropositionText);
             foreach (var (branch, tokens) in branchTokens)
             {
@@ -236,6 +251,72 @@ internal static class WideCorpusEvidenceProjection
         }
 
         return result;
+    }
+
+    // Build two lookups from the graph's immutable source assertions: one keyed by the pinned
+    // proposition-support edge id, one keyed by the pinned evidence item id. Each resolves to the
+    // real uploaded document version (+ file name) so a proposition can deep-link to its source even
+    // when its SUPPORTS edge doesn't map through graph.Evidence. Empty when the graph has no assertions.
+    private static (Dictionary<Guid, (Guid VersionId, string FileName)> BySupportId,
+                    Dictionary<Guid, (Guid VersionId, string FileName)> ByItemId)
+        BuildAssertionDocumentIndex(LegalMatterEvidenceGraphDto graph)
+    {
+        var bySupportId = new Dictionary<Guid, (Guid VersionId, string FileName)>();
+        var byItemId = new Dictionary<Guid, (Guid VersionId, string FileName)>();
+        if (graph.SourceAssertions is null || graph.SourceAssertions.Count == 0)
+            return (bySupportId, byItemId);
+
+        // File names are not carried on the assertion row; recover them from the matching evidence item
+        // (same document version) so the UI can label and title the PDF. Falls back to empty when unknown.
+        var fileByVersionId = new Dictionary<Guid, string>();
+        if (graph.Evidence is not null)
+        {
+            foreach (var item in graph.Evidence)
+            {
+                if (item.LegalDocumentVersionId != Guid.Empty && !fileByVersionId.ContainsKey(item.LegalDocumentVersionId))
+                    fileByVersionId[item.LegalDocumentVersionId] = item.DocumentFileName;
+            }
+        }
+
+        foreach (var assertion in graph.SourceAssertions)
+        {
+            if (assertion.LegalDocumentVersionId == Guid.Empty)
+                continue;
+            if (assertion.VerificationStateCode == LegalSourceAssertionStates.Invalidated)
+                continue;
+
+            var fileName = fileByVersionId.TryGetValue(assertion.LegalDocumentVersionId, out var f) ? f : string.Empty;
+            var doc = (assertion.LegalDocumentVersionId, fileName);
+
+            if (assertion.LegalPropositionSupportId is { } supportId && supportId != Guid.Empty)
+                bySupportId.TryAdd(supportId, doc);
+            if (assertion.LegalEvidenceItemId is { } itemId && itemId != Guid.Empty)
+                byItemId.TryAdd(itemId, doc);
+        }
+
+        return (bySupportId, byItemId);
+    }
+
+    // Resolve a proposition's backing document from its support edges using the source-assertion
+    // indexes (support-edge id first, then evidence item id). Returns null when no assertion pins any
+    // of the proposition's edges to a document version.
+    private static (Guid VersionId, string FileName)? ResolveFromAssertions(
+        IReadOnlyCollection<LegalPropositionSupportDto> support,
+        Dictionary<Guid, (Guid VersionId, string FileName)> documentBySupportId,
+        Dictionary<Guid, (Guid VersionId, string FileName)> assertionDocumentByItemId)
+    {
+        if (documentBySupportId.Count == 0 && assertionDocumentByItemId.Count == 0)
+            return null;
+
+        foreach (var edge in support)
+        {
+            if (documentBySupportId.TryGetValue(edge.LegalPropositionSupportId, out var byEdge))
+                return byEdge;
+            if (assertionDocumentByItemId.TryGetValue(edge.LegalEvidenceItemId, out var byItem))
+                return byItem;
+        }
+
+        return null;
     }
 
     private static WideExternalKnowledgeSnippet BuildSnippet(

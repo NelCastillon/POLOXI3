@@ -1918,6 +1918,131 @@ public sealed partial class LegalDecisionRepository(ISqlConnectionFactory connec
             """, new { PackId = packId.Value, TenantId = tenantId }, cancellationToken: cancellationToken))).ToArray();
     }
 
+    // ── Personal Injury Jurisdiction Rules (migration 0464; advisory reference catalog) ───────────
+    // Tenant override first, then global default row per JurisdictionCode. Global seed rows immutable.
+    public async Task<IReadOnlyCollection<DecisionJurisdictionRuleDto>> GetJurisdictionRulesAsync(Guid tenantId, string practiceAreaCode, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return (await connection.QueryAsync<DecisionJurisdictionRuleDto>(new CommandDefinition(
+            """
+            WITH Ranked AS
+            (
+                SELECT DecisionJurisdictionRuleId, PracticeAreaCode, JurisdictionCode, JurisdictionName,
+                       PersonalInjuryLimitationYears, MedicalMalpracticeLimitationYears, WrongfulDeathLimitationYears,
+                       DiscoveryRuleNote, MinorsTollingNote, NegligenceRegimeCode, NegligenceRegimeNote,
+                       JointSeveralLiabilityNote, DramShopNote, GovernmentClaimNoticeNote,
+                       NonEconomicDamagesCapNote, PunitiveDamagesStandardNote, MedicalMalpracticeNote,
+                       SourceNote, EffectiveDate, IsAdvisoryOnly, SortOrder, IsActive,
+                       CAST(CASE WHEN TenantId IS NOT NULL THEN 1 ELSE 0 END AS BIT) AS IsTenantOverride,
+                       ROW_NUMBER() OVER (PARTITION BY JurisdictionCode
+                           ORDER BY CASE WHEN TenantId = @TenantId THEN 0 ELSE 1 END, SortOrder) AS ScopeRank
+                FROM POLOXI.Legal_DecisionJurisdictionRule
+                WHERE IsDeleted = 0 AND PracticeAreaCode = @PracticeAreaCode
+                  AND (TenantId = @TenantId OR TenantId IS NULL)
+            )
+            SELECT DecisionJurisdictionRuleId, PracticeAreaCode, JurisdictionCode, JurisdictionName,
+                   PersonalInjuryLimitationYears, MedicalMalpracticeLimitationYears, WrongfulDeathLimitationYears,
+                   DiscoveryRuleNote, MinorsTollingNote, NegligenceRegimeCode, NegligenceRegimeNote,
+                   JointSeveralLiabilityNote, DramShopNote, GovernmentClaimNoticeNote,
+                   NonEconomicDamagesCapNote, PunitiveDamagesStandardNote, MedicalMalpracticeNote,
+                   SourceNote, EffectiveDate, IsAdvisoryOnly, SortOrder, IsActive, IsTenantOverride
+            FROM Ranked WHERE ScopeRank = 1 ORDER BY JurisdictionName;
+            """,
+            new { TenantId = tenantId, PracticeAreaCode = practiceAreaCode },
+            cancellationToken: cancellationToken))).ToArray();
+    }
+
+    public async Task SaveJurisdictionRuleAsync(Guid tenantId, Guid actorUserId, SaveDecisionJurisdictionRuleRequest request, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(
+            """
+            MERGE POLOXI.Legal_DecisionJurisdictionRule AS target
+            USING (SELECT @PracticeAreaCode AS PracticeAreaCode, @JurisdictionCode AS JurisdictionCode) AS source
+            ON target.PracticeAreaCode = source.PracticeAreaCode AND target.JurisdictionCode = source.JurisdictionCode
+               AND target.TenantId = @TenantId AND target.IsDeleted = 0
+            WHEN MATCHED THEN
+                UPDATE SET JurisdictionName = @JurisdictionName,
+                           PersonalInjuryLimitationYears = @PersonalInjuryLimitationYears,
+                           MedicalMalpracticeLimitationYears = @MedicalMalpracticeLimitationYears,
+                           WrongfulDeathLimitationYears = @WrongfulDeathLimitationYears,
+                           DiscoveryRuleNote = @DiscoveryRuleNote, MinorsTollingNote = @MinorsTollingNote,
+                           NegligenceRegimeCode = @NegligenceRegimeCode, NegligenceRegimeNote = @NegligenceRegimeNote,
+                           JointSeveralLiabilityNote = @JointSeveralLiabilityNote, DramShopNote = @DramShopNote,
+                           GovernmentClaimNoticeNote = @GovernmentClaimNoticeNote,
+                           NonEconomicDamagesCapNote = @NonEconomicDamagesCapNote,
+                           PunitiveDamagesStandardNote = @PunitiveDamagesStandardNote,
+                           MedicalMalpracticeNote = @MedicalMalpracticeNote,
+                           SourceNote = @SourceNote, EffectiveDate = @EffectiveDate, IsAdvisoryOnly = @IsAdvisoryOnly,
+                           SortOrder = @SortOrder, IsActive = @IsActive,
+                           ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @ActorUserId
+            WHEN NOT MATCHED THEN
+                INSERT (PracticeAreaCode, JurisdictionCode, JurisdictionName,
+                        PersonalInjuryLimitationYears, MedicalMalpracticeLimitationYears, WrongfulDeathLimitationYears,
+                        DiscoveryRuleNote, MinorsTollingNote, NegligenceRegimeCode, NegligenceRegimeNote,
+                        JointSeveralLiabilityNote, DramShopNote, GovernmentClaimNoticeNote,
+                        NonEconomicDamagesCapNote, PunitiveDamagesStandardNote, MedicalMalpracticeNote,
+                        SourceNote, EffectiveDate, IsAdvisoryOnly, SortOrder, IsActive, TenantId, CreatedByUserId)
+                VALUES (@PracticeAreaCode, @JurisdictionCode, @JurisdictionName,
+                        @PersonalInjuryLimitationYears, @MedicalMalpracticeLimitationYears, @WrongfulDeathLimitationYears,
+                        @DiscoveryRuleNote, @MinorsTollingNote, @NegligenceRegimeCode, @NegligenceRegimeNote,
+                        @JointSeveralLiabilityNote, @DramShopNote, @GovernmentClaimNoticeNote,
+                        @NonEconomicDamagesCapNote, @PunitiveDamagesStandardNote, @MedicalMalpracticeNote,
+                        @SourceNote, @EffectiveDate, @IsAdvisoryOnly, @SortOrder, @IsActive, @TenantId, @ActorUserId);
+            """,
+            new
+            {
+                PracticeAreaCode = string.IsNullOrWhiteSpace(request.PracticeAreaCode) ? "PERSONAL_INJURY" : request.PracticeAreaCode.Trim(),
+                JurisdictionCode = request.JurisdictionCode.Trim().ToUpperInvariant(),
+                JurisdictionName = request.JurisdictionName.Trim(),
+                request.PersonalInjuryLimitationYears,
+                request.MedicalMalpracticeLimitationYears,
+                request.WrongfulDeathLimitationYears,
+                DiscoveryRuleNote = Trimmed(request.DiscoveryRuleNote),
+                MinorsTollingNote = Trimmed(request.MinorsTollingNote),
+                NegligenceRegimeCode = request.NegligenceRegimeCode.Trim(),
+                NegligenceRegimeNote = Trimmed(request.NegligenceRegimeNote),
+                JointSeveralLiabilityNote = Trimmed(request.JointSeveralLiabilityNote),
+                DramShopNote = Trimmed(request.DramShopNote),
+                GovernmentClaimNoticeNote = Trimmed(request.GovernmentClaimNoticeNote),
+                NonEconomicDamagesCapNote = Trimmed(request.NonEconomicDamagesCapNote),
+                PunitiveDamagesStandardNote = Trimmed(request.PunitiveDamagesStandardNote),
+                MedicalMalpracticeNote = Trimmed(request.MedicalMalpracticeNote),
+                SourceNote = Trimmed(request.SourceNote),
+                request.EffectiveDate,
+                request.IsAdvisoryOnly,
+                request.SortOrder,
+                request.IsActive,
+                TenantId = tenantId == Guid.Empty ? (Guid?)null : tenantId,
+                ActorUserId = actorUserId == Guid.Empty ? (Guid?)null : actorUserId,
+            },
+            cancellationToken: cancellationToken));
+
+        static string? Trimmed(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    }
+
+    public async Task DeleteJurisdictionRuleAsync(Guid tenantId, Guid actorUserId, string practiceAreaCode, string jurisdictionCode, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var affected = await connection.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE POLOXI.Legal_DecisionJurisdictionRule
+            SET IsDeleted = 1, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @ActorUserId
+            WHERE PracticeAreaCode = @PracticeAreaCode AND JurisdictionCode = @JurisdictionCode
+              AND TenantId = @TenantId AND IsDeleted = 0;
+            """,
+            new
+            {
+                PracticeAreaCode = practiceAreaCode.Trim(),
+                JurisdictionCode = jurisdictionCode.Trim().ToUpperInvariant(),
+                ActorUserId = actorUserId,
+                TenantId = tenantId == Guid.Empty ? (Guid?)null : tenantId,
+            },
+            cancellationToken: cancellationToken));
+        if (affected == 0)
+            throw new InvalidOperationException($"Jurisdiction rule '{jurisdictionCode}' was not found for this tenant. Global seed rows cannot be deleted.");
+    }
+
     // ── Domain Pack child CRUD (advisory configuration; upsert by business code, soft-delete) ─────
     // Resolves the effective pack id for a tenant (tenant override first, then global default row).
     private static async Task<Guid?> ResolveDomainPackIdOrNullAsync(System.Data.IDbConnection connection, Guid tenantId, string packCode, CancellationToken cancellationToken)

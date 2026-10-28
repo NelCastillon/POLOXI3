@@ -1,6 +1,8 @@
 @using System.ComponentModel.DataAnnotations
 @using Legal.Application.Features.Intelligence.Decision
+@implements IDisposable
 @inject ApiClient Api
+@inject NavigationManager Navigation
 
 @* ── Per-matter Atomic Propositions (migration 0442). ──
    One row per LLM-generated L3+ proposition under a Domain Pack L2 target (Evidence Type / Concept), with
@@ -16,6 +18,19 @@ else
     @if (_loadError is not null)
     {
         <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_loadError</div>
+    }
+
+    @if (_pendingRescore)
+    {
+        <div class="map-rescore">
+            <i class="bi bi-arrow-repeat"></i>
+            <div class="map-rescore-copy">
+                <strong>Decision inputs changed.</strong>
+                <span>A new atomic proposition@(_rescoreEvidenceCount > 0 ? $" and {_rescoreEvidenceCount} new document{(_rescoreEvidenceCount == 1 ? "" : "s")} of evidence were" : " was") added. Re-run the decision to regenerate the combined result — short &amp; long narratives, decision brief, candidate assessments and Next Best Actions — from the updated matter.</span>
+            </div>
+            <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="ReRunDecisionAsync"><i class="bi bi-lightning-charge"></i> Re-run decision to re-score</button>
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _pendingRescore = false" title="Dismiss"><i class="bi bi-x-lg"></i></button>
+        </div>
     }
 
     <div class="pc-kpi-strip">
@@ -48,7 +63,7 @@ else
     <div class="map-toolbar">
         <div class="map-search">
             <i class="bi bi-search"></i>
-            <input class="form-control" placeholder="Search proposition, statement, evidence type, worker, model…" value="@_search" @oninput="OnSearchChanged" />
+            <input class="form-control" placeholder="Search proposition, statement, evidence type, worker, model…" @bind="_search" @bind:event="oninput" @bind:after="OnSearchChanged" />
         </div>
         <select class="form-select map-filter" value="@_parentFilter" @onchange="OnParentChanged">
             <option value="">All evidence types / concepts</option>
@@ -150,21 +165,58 @@ else
         <div class="um-modal-header"><i class="bi bi-diagram-3"></i><span>@(_editing is null ? "Add atomic proposition" : "Edit atomic proposition")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg"></i></button></div>
         <EditForm Model="_form" OnValidSubmit="SaveAsync">
             <DataAnnotationsValidator />
-            <div class="um-modal-body">
+            <div class="um-modal-body" @onclick="CloseParentPicker">
                 <div class="um-form-grid">
                     @if (_editing is null)
                     {
                         <label class="um-field map-span-2">
                             <span class="um-field-label">Evidence type / concept (parent)</span>
-                            <InputSelect class="form-select" @bind-Value="_form.ParentKey">
-                                <option value="">Select the parent evidence type or concept…</option>
-                                @foreach (var g in _options.Parents.GroupBy(t => t.DimensionCode))
+                            <div class="map-combo @(_parentPickerOpen ? "map-combo--open" : null)" @onclick:stopPropagation="true">
+                                <button type="button" class="map-combo-control" @onclick="ToggleParentPicker">
+                                    @if (SelectedParentLabel is { } lbl)
+                                    {
+                                        <span class="map-kind map-kind--@(SelectedParentKind == "CONCEPT" ? "concept" : "evidence_type")">@(SelectedParentKind == "CONCEPT" ? "CPT" : "EVD")</span>
+                                        <span class="map-combo-value">@lbl</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="map-combo-placeholder">Select the parent evidence type or concept…</span>
+                                    }
+                                    <i class="bi bi-chevron-down map-combo-caret"></i>
+                                </button>
+                                @if (_parentPickerOpen)
                                 {
-                                    <optgroup label="@g.Key">
-                                        @foreach (var t in g) { <option value="@($"{t.TargetKindCode}|{t.TargetCode}")">@(t.TargetKindCode == "CONCEPT" ? "CPT" : "EVD") · @t.DisplayName</option> }
-                                    </optgroup>
+                                    <div class="map-combo-panel" @onclick:stopPropagation="true">
+                                        <div class="map-combo-search">
+                                            <i class="bi bi-search"></i>
+                                            <input class="form-control" placeholder="Search evidence types or concepts…" value="@_parentSearch" @oninput="OnParentSearchChanged" @ref="_parentSearchInput" autocomplete="off" />
+                                        </div>
+                                        <div class="map-combo-list">
+                                            @{ var groups = FilteredParents(); }
+                                            @if (groups.Count == 0)
+                                            {
+                                                <div class="map-combo-empty"><i class="bi bi-search"></i> No evidence types or concepts match “@_parentSearch”.</div>
+                                            }
+                                            else
+                                            {
+                                                @foreach (var g in groups)
+                                                {
+                                                    <div class="map-combo-group">@g.Key</div>
+                                                    @foreach (var t in g)
+                                                    {
+                                                        var key = $"{t.TargetKindCode}|{t.TargetCode}";
+                                                        <button type="button" class="map-combo-option @(key == _form.ParentKey ? "is-selected" : null)" @onclick="() => SelectParent(key)">
+                                                            <span class="map-kind map-kind--@(t.TargetKindCode == "CONCEPT" ? "concept" : "evidence_type")">@(t.TargetKindCode == "CONCEPT" ? "CPT" : "EVD")</span>
+                                                            <span class="map-combo-option-name">@t.DisplayName</span>
+                                                            @if (key == _form.ParentKey) { <i class="bi bi-check-lg map-combo-check"></i> }
+                                                        </button>
+                                                    }
+                                                }
+                                            }
+                                        </div>
+                                    </div>
                                 }
-                            </InputSelect>
+                            </div>
                             <ValidationMessage For="() => _form.ParentKey" class="text-danger" />
                         </label>
                         <label class="um-field">
@@ -172,6 +224,25 @@ else
                             <InputText class="form-control" @bind-Value="_form.PropositionCode" placeholder="e.g. DUTY_OF_CARE_BREACH" />
                             <ValidationMessage For="() => _form.PropositionCode" class="text-danger" />
                         </label>
+                        <div class="um-field map-span-2 map-evidence">
+                            <span class="um-field-label">Supporting evidence</span>
+                            <div class="map-evidence-inline" @onclick:stopPropagation="true">
+                                <MatterEvidenceUpload MatterId="MatterId" OnUploaded="OnEvidenceUploaded" />
+                                @if (_attachedEvidenceCount > 0)
+                                {
+                                    <span class="map-evidence-chip" title="Documents added to this matter's evidence in this session">
+                                        <i class="bi bi-check-circle-fill"></i> @_attachedEvidenceCount document@(_attachedEvidenceCount == 1 ? "" : "s") attached
+                                    </span>
+                                }
+                            </div>
+                            @if (_attachedEvidenceCount > 0)
+                            {
+                                <p class="map-evidence-hint">
+                                    <i class="bi bi-info-circle"></i>
+                                    New evidence is uploaded, scanned and extracted now. It is auto-scored against this proposition and may change the decision outcome on the next <strong>Disambiguate &amp; Answer</strong> run.
+                                </p>
+                            }
+                        </div>
                     }
                     else
                     {
@@ -263,10 +334,68 @@ else
     private List<string> _workers = [];
     private List<int> _levels = [];
     private string _activeFilter = "ALL", _search = string.Empty, _parentFilter = string.Empty, _workerFilter = string.Empty, _levelFilter = string.Empty;
+    private Timer? _searchDebounce;
     private readonly HashSet<Guid> _selected = [];
     private string _bulkStatus = MatterAtomicPropositionStatusCodes.OutOfScope;
     private MatterAtomicPropositionDto? _editing, _deleting;
     private PropositionForm _form = new();
+
+    // Inline drag/drop multi-document evidence upload hosted directly inside the Add dialog.
+    private int _attachedEvidenceCount;
+
+    // After an Add that introduced a new proposition (and optionally new evidence), prompt the
+    // attorney to re-run the full Wide pipeline so the combined result is regenerated consistently.
+    private bool _pendingRescore;
+    private int _rescoreEvidenceCount;
+
+    // Searchable parent combobox state.
+    private bool _parentPickerOpen;
+    private string _parentSearch = string.Empty;
+    private ElementReference _parentSearchInput;
+    private bool _focusParentSearch;
+
+    private string? SelectedParentLabel => _options.Parents
+        .FirstOrDefault(t => $"{t.TargetKindCode}|{t.TargetCode}" == _form.ParentKey)?.DisplayName;
+    private string? SelectedParentKind => _options.Parents
+        .FirstOrDefault(t => $"{t.TargetKindCode}|{t.TargetCode}" == _form.ParentKey)?.TargetKindCode;
+
+    private List<IGrouping<string, MatterEvidenceScopeTargetOptionDto>> FilteredParents()
+    {
+        IEnumerable<MatterEvidenceScopeTargetOptionDto> q = _options.Parents;
+        if (!string.IsNullOrWhiteSpace(_parentSearch))
+        {
+            var s = _parentSearch.Trim();
+            q = q.Where(t => t.DisplayName.Contains(s, StringComparison.OrdinalIgnoreCase)
+                          || t.TargetCode.Contains(s, StringComparison.OrdinalIgnoreCase)
+                          || t.DimensionCode.Contains(s, StringComparison.OrdinalIgnoreCase));
+        }
+        return q.GroupBy(t => t.DimensionCode).ToList();
+    }
+
+    private void ToggleParentPicker()
+    {
+        _parentPickerOpen = !_parentPickerOpen;
+        if (_parentPickerOpen) { _parentSearch = string.Empty; _focusParentSearch = true; }
+    }
+
+    private void OnParentSearchChanged(ChangeEventArgs e) => _parentSearch = e.Value?.ToString() ?? string.Empty;
+
+    private void CloseParentPicker() { if (_parentPickerOpen) _parentPickerOpen = false; }
+
+    private void SelectParent(string key)
+    {
+        _form.ParentKey = key;
+        _parentPickerOpen = false;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_focusParentSearch)
+        {
+            _focusParentSearch = false;
+            try { await _parentSearchInput.FocusAsync(); } catch { /* element gone */ }
+        }
+    }
 
     protected override Task OnInitializedAsync() => LoadAsync();
 
@@ -295,7 +424,18 @@ else
     private static string Pct(decimal v) => $"{v * 100:0}%";
 
     private void SetFilter(string filter) { _activeFilter = filter; ApplyFilter(); }
-    private void OnSearchChanged(ChangeEventArgs e) { _search = e.Value?.ToString() ?? string.Empty; ApplyFilter(); }
+    private void OnSearchChanged()
+    {
+        // Debounce: with 3k+ rows a full filter+re-render on every keystroke makes the box feel like
+        // it's "fighting" the typing. Re-filter only after the attorney pauses (~300ms). _search is
+        // already bound to the input, so typing stays instant regardless of the pending filter pass.
+        _searchDebounce?.Dispose();
+        _searchDebounce = new Timer(static state =>
+        {
+            var self = (MatterAtomicPropositionEditor)state!;
+            self.InvokeAsync(() => { self.ApplyFilter(); self.StateHasChanged(); });
+        }, this, 300, Timeout.Infinite);
+    }
     private void OnParentChanged(ChangeEventArgs e) { _parentFilter = e.Value?.ToString() ?? string.Empty; ApplyFilter(); }
     private void OnWorkerChanged(ChangeEventArgs e) { _workerFilter = e.Value?.ToString() ?? string.Empty; ApplyFilter(); }
     private void OnLevelChanged(ChangeEventArgs e) { _levelFilter = e.Value?.ToString() ?? string.Empty; ApplyFilter(); }
@@ -350,8 +490,14 @@ else
     private void OpenAdd()
     {
         _editing = null; _saveError = null;
+        _attachedEvidenceCount = 0;
         _form = new PropositionForm { ScopeStatusCode = MatterAtomicPropositionStatusCodes.InScope, Confidence = 0.80m, ParentKey = _parentFilter };
         _showForm = true;
+    }
+
+    private void OnEvidenceUploaded(MatterEvidenceUpload.EvidenceUploadResult result)
+    {
+        _attachedEvidenceCount += result.Accepted + result.Duplicates;
     }
 
     private void OpenEdit(MatterAtomicPropositionDto row)
@@ -385,11 +531,29 @@ else
                 parts[0], parts[1], _form.PropositionCode ?? string.Empty, _form.DisplayName?.Trim() ?? string.Empty, _form.Statement?.Trim() ?? string.Empty,
                 _form.Confidence, _form.SemanticTypeCode, _form.BranchRoleCode, _form.ScopeStatusCode,
                 string.IsNullOrWhiteSpace(_form.UserNote) ? null : _form.UserNote.Trim()));
+            var wasAdd = _editing is null;
             _showForm = false; _editing = null;
+            // A new proposition, OR freshly attached document evidence on an edit, changes the decision
+            // inputs. Surface the re-score prompt so the attorney regenerates the combined Wide result on
+            // demand (single pipeline run = narratives + brief + candidate assessments + NBA).
+            if (wasAdd || _attachedEvidenceCount > 0)
+            {
+                _pendingRescore = true;
+                _rescoreEvidenceCount = _attachedEvidenceCount;
+            }
             await LoadAsync();
         }
         catch (Exception ex) { _saveError = $"Save failed: {ex.Message}"; }
         finally { _saving = false; }
+    }
+
+    // Navigate to the Decision2 cockpit for this matter and re-run the full Wide pipeline (?autoRun=1).
+    // The single pipeline run regenerates every surface combined — short & long narratives, decision brief,
+    // candidate assessments and Next Best Actions — from the updated matter state (new proposition + evidence).
+    private void ReRunDecisionAsync()
+    {
+        _pendingRescore = false;
+        Navigation.NavigateTo($"/legal/personalinjury_decision2?matterId={MatterId}&autoRun=1");
     }
 
     private void ConfirmDelete(MatterAtomicPropositionDto row) { _deleting = row; _saveError = null; }
@@ -420,4 +584,6 @@ else
         [Required, StringLength(40)] public string ScopeStatusCode { get; set; } = MatterAtomicPropositionStatusCodes.InScope;
         [StringLength(1000)] public string? UserNote { get; set; }
     }
+
+    public void Dispose() => _searchDebounce?.Dispose();
 }
