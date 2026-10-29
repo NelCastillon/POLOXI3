@@ -106,15 +106,15 @@ else
                 <thead>
                     <tr>
                         <th class="map-col-check"><input type="checkbox" checked="@(_filtered.Count > 0 && _filtered.All(f => _selected.Contains(f.MatterAtomicPropositionId)))" @onchange="ToggleAll" /></th>
-                        <th>Proposition</th>
-                        <th>Evidence type / concept</th>
-                        <th class="map-num">Level</th>
-                        <th>Status</th>
-                        <th>Decided by</th>
-                        <th>Worker</th>
-                        <th>Model</th>
-                        <th class="map-num" title="Confidence · Anchors · Tokens in/out · Duration">Conf · Anchors · Tokens · ms</th>
-                        <th>Type · Role</th>
+                        <th class="map-sortable" @onclick='() => SortBy("proposition")'>Proposition <i class="bi @SortIndicator("proposition") map-sort-ind"></i></th>
+                        <th class="map-sortable" @onclick='() => SortBy("parent")'>Evidence type / concept <i class="bi @SortIndicator("parent") map-sort-ind"></i></th>
+                        <th class="map-num map-sortable" @onclick='() => SortBy("level")'>Level <i class="bi @SortIndicator("level") map-sort-ind"></i></th>
+                        <th class="map-sortable" @onclick='() => SortBy("status")'>Status <i class="bi @SortIndicator("status") map-sort-ind"></i></th>
+                        <th class="map-sortable" @onclick='() => SortBy("decider")'>Decided by <i class="bi @SortIndicator("decider") map-sort-ind"></i></th>
+                        <th class="map-sortable" @onclick='() => SortBy("worker")'>Worker <i class="bi @SortIndicator("worker") map-sort-ind"></i></th>
+                        <th class="map-sortable" @onclick='() => SortBy("model")'>Model <i class="bi @SortIndicator("model") map-sort-ind"></i></th>
+                        <th class="map-num map-sortable" title="Confidence · Anchors · Tokens in/out · Duration" @onclick='() => SortBy("metrics")'>Conf · Anchors · Tokens · ms <i class="bi @SortIndicator("metrics") map-sort-ind"></i></th>
+                        <th class="map-sortable" @onclick='() => SortBy("typerole")'>Type · Role <i class="bi @SortIndicator("typerole") map-sort-ind"></i></th>
                         <th class="map-col-actions"></th>
                     </tr>
                 </thead>
@@ -330,6 +330,8 @@ else
     private MatterAtomicPropositionOptionsDto _options = new();
     private List<MatterAtomicPropositionDto> _items = [];
     private List<MatterAtomicPropositionDto> _filtered = [];
+    private string? _sortColumn;
+    private bool _sortDescending;
     private List<KeyValuePair<string, string>> _parents = [];
     private List<string> _workers = [];
     private List<int> _levels = [];
@@ -463,8 +465,48 @@ else
                           || (i.SearchText?.Contains(s, StringComparison.OrdinalIgnoreCase) ?? false)
                           || (i.UserNote?.Contains(s, StringComparison.OrdinalIgnoreCase) ?? false));
         }
-        _filtered = q.OrderBy(i => i.DimensionCode).ThenBy(i => i.ParentDisplayName).ThenBy(i => i.LevelNumber).ThenByDescending(i => i.Confidence).ThenBy(i => i.SortOrder).ThenBy(i => i.DisplayName).ToList();
+        _filtered = ApplySort(q).ToList();
     }
+
+    private IEnumerable<MatterAtomicPropositionDto> ApplySort(IEnumerable<MatterAtomicPropositionDto> q)
+    {
+        if (_sortColumn is null)
+            return q.OrderBy(i => i.DimensionCode).ThenBy(i => i.ParentDisplayName).ThenBy(i => i.LevelNumber).ThenByDescending(i => i.Confidence).ThenBy(i => i.SortOrder).ThenBy(i => i.DisplayName);
+
+        Func<MatterAtomicPropositionDto, object?> key = _sortColumn switch
+        {
+            "proposition" => i => i.DisplayName,
+            "parent" => i => i.ParentDisplayName,
+            "level" => i => i.LevelNumber,
+            "status" => i => i.ScopeStatusCode,
+            "decider" => i => i.DecidedByCode,
+            "worker" => i => i.WorkerName,
+            "model" => i => i.ModelCode,
+            "metrics" => i => i.Confidence,
+            "typerole" => i => i.SemanticTypeCode,
+            _ => i => i.DisplayName
+        };
+        return _sortDescending
+            ? q.OrderByDescending(key).ThenBy(i => i.DisplayName)
+            : q.OrderBy(key).ThenBy(i => i.DisplayName);
+    }
+
+    private void SortBy(string column)
+    {
+        if (string.Equals(_sortColumn, column, StringComparison.Ordinal))
+        {
+            _sortDescending = !_sortDescending;
+        }
+        else
+        {
+            _sortColumn = column;
+            _sortDescending = false;
+        }
+        ApplyFilter();
+    }
+
+    private string SortIndicator(string column)
+        => string.Equals(_sortColumn, column, StringComparison.Ordinal) ? (_sortDescending ? "bi-caret-down-fill" : "bi-caret-up-fill") : "bi-arrow-down-up";
 
     private void ToggleAll(ChangeEventArgs e)
     {

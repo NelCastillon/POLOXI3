@@ -84,14 +84,14 @@ else
                 <thead>
                     <tr>
                         <th class="mes-col-check"><input type="checkbox" checked="@(_filtered.Count > 0 && _filtered.All(f => _selected.Contains(f.MatterEvidenceScopeId)))" @onchange="ToggleAll" /></th>
-                        <th>Target</th>
-                        <th>Dimension</th>
-                        <th>Status</th>
-                        <th>Decided by</th>
-                        <th class="mes-num" title="Deterministic / LLM / Blended">Det · LLM · Blend</th>
-                        <th>Tier</th>
-                        <th>Signals</th>
-                        <th>Reason</th>
+                        <th class="mes-sortable" @onclick='() => SortBy("target")'>Target <i class="bi @SortIndicator("target") mes-sort-ind"></i></th>
+                        <th class="mes-sortable" @onclick='() => SortBy("dimension")'>Dimension <i class="bi @SortIndicator("dimension") mes-sort-ind"></i></th>
+                        <th class="mes-sortable" @onclick='() => SortBy("status")'>Status <i class="bi @SortIndicator("status") mes-sort-ind"></i></th>
+                        <th class="mes-sortable" @onclick='() => SortBy("decider")'>Decided by <i class="bi @SortIndicator("decider") mes-sort-ind"></i></th>
+                        <th class="mes-num mes-sortable" title="Deterministic / LLM / Blended" @onclick='() => SortBy("scores")'>Det · LLM · Blend <i class="bi @SortIndicator("scores") mes-sort-ind"></i></th>
+                        <th class="mes-sortable" @onclick='() => SortBy("tier")'>Tier <i class="bi @SortIndicator("tier") mes-sort-ind"></i></th>
+                        <th class="mes-sortable" @onclick='() => SortBy("signals")'>Signals <i class="bi @SortIndicator("signals") mes-sort-ind"></i></th>
+                        <th class="mes-sortable" @onclick='() => SortBy("reason")'>Reason <i class="bi @SortIndicator("reason") mes-sort-ind"></i></th>
                         <th class="mes-col-actions"></th>
                     </tr>
                 </thead>
@@ -112,7 +112,7 @@ else
                             <td class="mes-signals">
                                 @if (row.IsRequiredCoverage) { <span title="Required coverage" class="mes-sig"><i class="bi bi-shield-check"></i></span> }
                                 @if (row.IsPrioritized) { <span title="Prioritized by rule" class="mes-sig"><i class="bi bi-star-fill"></i></span> }
-                                @if (row.DocumentPresent) { <span title="Evidence present in uploaded documents" class="mes-sig"><i class="bi bi-file-earmark-check"></i></span> }
+                                @if (row.DocumentPresent) { <button type="button" title="View matter documents" class="mes-sig mes-sig-btn" @onclick="OpenDocumentsPreview" @onclick:stopPropagation="true"><i class="bi bi-file-earmark-check"></i></button> }
                                 @if (row.MappedPassageCount > 0) { <span title="Mapped passages" class="mes-sig">@row.MappedPassageCount <i class="bi bi-text-paragraph"></i></span> }
                             </td>
                             <td class="mes-reason" title="@(row.LlmReason ?? row.RelevanceReasons)">@(row.UserNote ?? row.LlmReason ?? row.RelevanceReasons)</td>
@@ -255,13 +255,18 @@ else
     </div></div>
 }
 
+<MatterDocumentsPreviewDialog MatterId="MatterId" @bind-Visible="_showDocumentsPreview" Title="Evidence documents" />
+
 @code {
     [Parameter, EditorRequired] public Guid MatterId { get; set; }
 
+    private bool _showDocumentsPreview;
     private bool _loading = true, _saving, _showForm;
     private string? _loadError, _saveError;
     private List<MatterEvidenceScopeDto> _items = [];
     private List<MatterEvidenceScopeDto> _filtered = [];
+    private string? _sortColumn;
+    private bool _sortDescending;
     private MatterEvidenceScopeOptionsDto _options = new();
     private List<string> _dimensions = [];
     private string _activeFilter = "ALL", _search = string.Empty, _dimensionFilter = string.Empty, _kindFilter = string.Empty;
@@ -299,6 +304,7 @@ else
     private static string Pct(decimal? v) => v is null ? "—" : $"{v.Value * 100:0}%";
 
     private void SetFilter(string filter) { _activeFilter = filter; ApplyFilter(); }
+    private void OpenDocumentsPreview() => _showDocumentsPreview = true;
     private void OnSearchChanged(ChangeEventArgs e) { _search = e.Value?.ToString() ?? string.Empty; ApplyFilter(); }
     private void OnDimensionChanged(ChangeEventArgs e) { _dimensionFilter = e.Value?.ToString() ?? string.Empty; ApplyFilter(); }
     private void OnKindChanged(ChangeEventArgs e) { _kindFilter = e.Value?.ToString() ?? string.Empty; ApplyFilter(); }
@@ -320,8 +326,47 @@ else
                           || (i.LlmReason?.Contains(s, StringComparison.OrdinalIgnoreCase) ?? false)
                           || (i.UserNote?.Contains(s, StringComparison.OrdinalIgnoreCase) ?? false));
         }
-        _filtered = q.OrderBy(i => i.DimensionCode).ThenByDescending(i => i.BlendedScore ?? -1).ThenBy(i => i.DisplayName).ToList();
+        _filtered = ApplySort(q).ToList();
     }
+
+    private IEnumerable<MatterEvidenceScopeDto> ApplySort(IEnumerable<MatterEvidenceScopeDto> q)
+    {
+        if (_sortColumn is null)
+            return q.OrderBy(i => i.DimensionCode).ThenByDescending(i => i.BlendedScore ?? -1).ThenBy(i => i.DisplayName);
+
+        Func<MatterEvidenceScopeDto, object?> key = _sortColumn switch
+        {
+            "target" => i => i.DisplayName,
+            "dimension" => i => i.DimensionCode,
+            "status" => i => i.ScopeStatusCode,
+            "decider" => i => i.DecidedByCode,
+            "scores" => i => i.BlendedScore ?? -1,
+            "tier" => i => i.TierCode,
+            "signals" => i => i.MappedPassageCount,
+            "reason" => i => i.UserNote ?? i.LlmReason ?? i.RelevanceReasons,
+            _ => i => i.DisplayName
+        };
+        return _sortDescending
+            ? q.OrderByDescending(key).ThenBy(i => i.DisplayName)
+            : q.OrderBy(key).ThenBy(i => i.DisplayName);
+    }
+
+    private void SortBy(string column)
+    {
+        if (string.Equals(_sortColumn, column, StringComparison.Ordinal))
+        {
+            _sortDescending = !_sortDescending;
+        }
+        else
+        {
+            _sortColumn = column;
+            _sortDescending = false;
+        }
+        ApplyFilter();
+    }
+
+    private string SortIndicator(string column)
+        => string.Equals(_sortColumn, column, StringComparison.Ordinal) ? (_sortDescending ? "bi-caret-down-fill" : "bi-caret-up-fill") : "bi-arrow-down-up";
 
     private void ToggleAll(ChangeEventArgs e)
     {

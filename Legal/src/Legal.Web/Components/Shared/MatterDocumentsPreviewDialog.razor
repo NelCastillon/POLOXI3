@@ -1,0 +1,163 @@
+@using Legal.Application.Features.Intelligence.Decision
+@inject ApiClient Api
+
+@* Reusable matter-documents preview popup. Given a matter, it lists every uploaded document and lets the
+   attorney preview any of them inline as a PDF (via the authenticated document-version content endpoint) or
+   open it in a new tab. Modeled on the FactorReferencePopup preview pattern so the viewer feels consistent
+   across the app. Never fabricates a document: it only renders what the matter actually carries. *@
+
+@if (Visible)
+{
+    <div class="mdp-backdrop" @onclick="OnClose">
+        <div class="mdp-modal @(_previewVersionId is not null ? "mdp-modal--split" : null)" @onclick:stopPropagation="true" role="dialog" aria-modal="true">
+            <div class="mdp-header">
+                <span class="mdp-header-icon"><i class="bi bi-folder2-open"></i></span>
+                <div class="mdp-header-text">
+                    <span class="mdp-eyebrow">Matter evidence</span>
+                    <h3 class="mdp-title">@(string.IsNullOrWhiteSpace(Title) ? "Documents" : Title)</h3>
+                </div>
+                <button type="button" class="mdp-close" title="Close" @onclick="OnClose"><i class="bi bi-x-lg"></i></button>
+            </div>
+
+            <div class="mdp-split">
+                <div class="mdp-body">
+                    @if (_loading)
+                    {
+                        <div class="mdp-state"><i class="bi bi-hourglass-split"></i> Loading documents…</div>
+                    }
+                    else if (_loadError is not null)
+                    {
+                        <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_loadError</div>
+                    }
+                    else if (_documents.Count == 0)
+                    {
+                        <p class="mdp-empty"><i class="bi bi-inbox"></i> No documents have been uploaded to this matter yet.</p>
+                    }
+                    else
+                    {
+                        <ul class="mdp-list">
+                            @foreach (var doc in _documents)
+                            {
+                                var vid = LatestVersionId(doc);
+                                <li class="mdp-item @(_previewVersionId == vid && vid is not null ? "mdp-item--active" : null)">
+                                    <span class="mdp-item-icon"><i class="bi @FileIcon(doc.ContentType)"></i></span>
+                                    <div class="mdp-item-main">
+                                        <div class="mdp-item-name" title="@doc.FileName">@doc.FileName</div>
+                                        <div class="mdp-item-meta">
+                                            @if (!string.IsNullOrWhiteSpace(doc.DocumentTypeCode)) { <span class="mdp-chip">@doc.DocumentTypeCode</span> }
+                                            <span class="mdp-chip mdp-chip--muted">@doc.StatusCode</span>
+                                            <span class="mdp-item-date">@doc.CreatedDateUtc.ToLocalTime().ToString("g")</span>
+                                        </div>
+                                    </div>
+                                    <div class="mdp-item-actions">
+                                        @if (vid is { } previewVid)
+                                        {
+                                            <button type="button" class="mdp-action" title="Preview" @onclick="() => Preview(previewVid)">
+                                                <i class="bi @(_previewVersionId == previewVid ? "bi-eye-slash" : "bi-file-earmark-pdf")"></i>
+                                            </button>
+                                            <a class="mdp-action" href="@Api.LegalDocumentVersionContentUrl(previewVid)" target="_blank" rel="noopener" title="Open in new tab"><i class="bi bi-box-arrow-up-right"></i></a>
+                                        }
+                                        else
+                                        {
+                                            <span class="mdp-no-version" title="This document has no processed version yet"><i class="bi bi-slash-circle"></i></span>
+                                        }
+                                    </div>
+                                </li>
+                            }
+                        </ul>
+                    }
+                </div>
+
+                @if (_previewVersionId is { } paneVid)
+                {
+                    <div class="mdp-pdf">
+                        <div class="mdp-pdf-head">
+                            <i class="bi bi-file-earmark-pdf"></i>
+                            <span class="mdp-pdf-title">@(_previewTitle ?? "Document preview")</span>
+                            <a class="mdp-pdf-action" href="@Api.LegalDocumentVersionContentUrl(paneVid)" target="_blank" rel="noopener" title="Open in new tab"><i class="bi bi-box-arrow-up-right"></i></a>
+                            <button type="button" class="mdp-pdf-action" title="Close preview" @onclick="ClosePreview"><i class="bi bi-x-lg"></i></button>
+                        </div>
+                        <object data="@Api.LegalDocumentVersionContentUrl(paneVid)" type="application/pdf" class="mdp-pdf-frame">
+                            <div class="mdp-pdf-fallback">
+                                <p>The document preview could not be displayed inline.</p>
+                                <a class="mdp-open-btn" href="@Api.LegalDocumentVersionContentUrl(paneVid)" target="_blank" rel="noopener"><i class="bi bi-box-arrow-up-right"></i> Open document</a>
+                            </div>
+                        </object>
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public Guid MatterId { get; set; }
+    [Parameter] public bool Visible { get; set; }
+    [Parameter] public EventCallback<bool> VisibleChanged { get; set; }
+    [Parameter] public string? Title { get; set; }
+
+    private bool _loading;
+    private string? _loadError;
+    private List<LegalDocumentDto> _documents = [];
+    private Guid? _loadedForMatter;
+
+    private Guid? _previewVersionId;
+    private string? _previewTitle;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        // Load (or reload) the matter's documents the first time the dialog becomes visible for a matter.
+        if (Visible && (_loadedForMatter != MatterId || _documents.Count == 0 && _loadError is null && !_loading))
+        {
+            await LoadAsync();
+        }
+        if (!Visible)
+        {
+            _previewVersionId = null;
+            _previewTitle = null;
+        }
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true; _loadError = null;
+        try
+        {
+            _documents = (await Api.GetLegalMatterDocumentsAsync(MatterId)).ToList();
+            _loadedForMatter = MatterId;
+        }
+        catch (Exception ex) { _loadError = $"Failed to load documents: {ex.Message}"; }
+        finally { _loading = false; }
+    }
+
+    private static Guid? LatestVersionId(LegalDocumentDto doc)
+        => doc.Versions.Count == 0 ? null : doc.Versions.OrderByDescending(v => v.VersionNumber).First().LegalDocumentVersionId;
+
+    private void Preview(Guid versionId)
+    {
+        if (_previewVersionId == versionId) { ClosePreview(); return; }
+        _previewVersionId = versionId;
+        _previewTitle = _documents.FirstOrDefault(d => LatestVersionId(d) == versionId)?.FileName;
+    }
+
+    private void ClosePreview()
+    {
+        _previewVersionId = null;
+        _previewTitle = null;
+    }
+
+    private static string FileIcon(string? contentType) => (contentType ?? string.Empty).ToLowerInvariant() switch
+    {
+        var c when c.Contains("pdf") => "bi-file-earmark-pdf",
+        var c when c.Contains("image") => "bi-file-earmark-image",
+        var c when c.Contains("word") || c.Contains("document") => "bi-file-earmark-word",
+        var c when c.Contains("sheet") || c.Contains("excel") => "bi-file-earmark-spreadsheet",
+        _ => "bi-file-earmark-text"
+    };
+
+    private async Task OnClose()
+    {
+        ClosePreview();
+        if (VisibleChanged.HasDelegate) await VisibleChanged.InvokeAsync(false);
+    }
+}
