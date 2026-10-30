@@ -186,9 +186,15 @@ public sealed class AnalysisRunLedgerWriter(
             var durationSeconds = (int)Math.Round(response.DurationMilliseconds / 1000.0);
             var executionStatus = MapWideExecutionStatus(response);
             var title = BuildWideTitle(request, response);
+            // Evidence-triggered re-runs (from the Matter Workbench after documents were uploaded) carry a
+            // distinct trigger label and an idempotency key scoped to the triggering batch, so an
+            // evidence re-score is recorded as its own run and never collapses into a prior execution.
+            var evidenceTriggered = request.TriggerUploadBatchId is { } tb && tb != Guid.Empty;
             var idempotencyKey = string.IsNullOrWhiteSpace(request.CorrelationId)
                 ? response.WideExecutionId.ToString("N")
                 : request.CorrelationId;
+            if (evidenceTriggered)
+                idempotencyKey = $"{idempotencyKey}:evb:{request.TriggerUploadBatchId:N}";
             var createdByUserId = (Guid?)(request.UserId == Guid.Empty ? null : request.UserId);
 
             await connection.ExecuteAsync(new CommandDefinition(
@@ -212,8 +218,12 @@ public sealed class AnalysisRunLedgerWriter(
                     RunLabel = runLabel,
                     Title = title,
                     RunTypeCode = "MATTER_ANALYSIS",
-                    TriggerTypeCode = string.IsNullOrWhiteSpace(request.ClarificationAnswer) ? "DECISION_RUN" : "CLARIFICATION",
-                    TriggerText = request.ClarificationAnswer,
+                    TriggerTypeCode = evidenceTriggered
+                        ? "EVIDENCE_ADDED"
+                        : (string.IsNullOrWhiteSpace(request.ClarificationAnswer) ? "DECISION_RUN" : "CLARIFICATION"),
+                    TriggerText = evidenceTriggered
+                        ? BuildEvidenceTriggerText(request.TriggerDocumentCount)
+                        : request.ClarificationAnswer,
                     ExecutionStatusCode = executionStatus,
                     PublicationStatusCode = "NotPublished",
                     PackLabel = request.UseDomainPack ? "Domain Pack" : "Original",
@@ -943,6 +953,13 @@ public sealed class AnalysisRunLedgerWriter(
         var query = (response.Query ?? request.Query ?? "Matter analysis").Trim();
         return query.Length <= 120 ? query : query[..117] + "...";
     }
+
+    // Human-readable Run History label for evidence-triggered re-scores. Bounded to TriggerText's
+    // NVARCHAR(300). Falls back to a count-less phrasing when the triggering count is unknown.
+    private static string BuildEvidenceTriggerText(int? documentCount)
+        => documentCount is { } n && n > 0
+            ? $"Re-scored after {n} document{(n == 1 ? "" : "s")} added"
+            : "Re-scored after new evidence added";
 
     private static string? BuildWideBanner(string executionStatus)
         => string.Equals(executionStatus, "Failed", StringComparison.Ordinal)

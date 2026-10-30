@@ -42,7 +42,7 @@ public sealed partial class IntelligenceWide2Service
             // not an inferred value, so reporting the composite prompt key is factual. The concrete
             // version/hash are resolved per tenant by the prompt catalog at dispatch time and are not
             // returned to the caller, so they remain MISSING rather than being fabricated.
-            PromptKey: $"{IntelligencePromptCodes.WideIntent} + {IntelligencePromptCodes.WideHierarchyStep}",
+            PromptKey: $"{IntelligencePromptCodes.WideIntent}",
             PromptVersion: null,
             PromptHash: null);
 

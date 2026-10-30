@@ -785,7 +785,10 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
                 try
                 {
                     var evidenceGraph=await documentCorpusRepository.GetMatterEvidenceGraphAsync(request.TenantId,corpusMatterId,cancellationToken);
-                    var corpusSnippets=WideCorpusEvidenceProjection.Project(evidenceGraph,survivorsFinal,DateTime.UtcNow);
+                    // Optional embedding-based attachment (OFF by default). Null lookup = lexical-only (unchanged behavior).
+                    var corpusSemanticLookup=await WideCorpusSemanticAttachment.BuildAsync(aiProviderRouter,logger,request.TenantId,executionId.ToString(),configuration,evidenceGraph,survivorsFinal,cancellationToken);
+                    var corpusSemanticThreshold=corpusSemanticLookup is null?1m:configuration.CorpusBranchMinSemanticSimilarity;
+                    var corpusSnippets=WideCorpusEvidenceProjection.Project(evidenceGraph,survivorsFinal,DateTime.UtcNow,configuration.CorpusBranchMinOverlap,corpusSemanticLookup,corpusSemanticThreshold);
                     if(corpusSnippets.Count>0)
                     {
                         var existingUrls=externalKnowledge.Select(snippet=>snippet.Url).ToHashSet(StringComparer.OrdinalIgnoreCase);

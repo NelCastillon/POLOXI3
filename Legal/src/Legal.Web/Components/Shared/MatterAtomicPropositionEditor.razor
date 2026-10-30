@@ -325,6 +325,11 @@ else
 @code {
     [Parameter, EditorRequired] public Guid MatterId { get; set; }
 
+    // Optional in-place re-run hook. When this editor is hosted inside the decision cockpit, the owner
+    // supplies this callback so the "Re-run decision to re-score" button runs the combined synthesis directly
+    // from the click (no ?autoRun deep-link / page reload). Unset when hosted standalone (matter detail page).
+    [Parameter] public EventCallback OnRescoreRequested { get; set; }
+
     private bool _loading = true, _saving, _showForm;
     private string? _loadError, _saveError;
     private MatterAtomicPropositionOptionsDto _options = new();
@@ -589,12 +594,21 @@ else
         finally { _saving = false; }
     }
 
-    // Navigate to the Decision2 cockpit for this matter and re-run the full Wide pipeline (?autoRun=1).
-    // The single pipeline run regenerates every surface combined — short & long narratives, decision brief,
-    // candidate assessments and Next Best Actions — from the updated matter state (new proposition + evidence).
-    private void ReRunDecisionAsync()
+    // Explicit, user-initiated re-run. This runs ONLY from the "Re-run decision to re-score" button click
+    // (the attorney changed decision inputs and chose to regenerate). When this editor is hosted INSIDE the
+    // cockpit (Human Intelligence tab), the owner wires OnRescoreRequested so the single combined synthesis —
+    // short & long narratives, decision brief, candidate assessments and Next Best Actions — runs in-place,
+    // straight from this click. No page reload and no ?autoRun deep-link, so the costly Wide synthesis can
+    // NEVER fire as a page-load side effect. Only when hosted standalone (matter detail page) do we fall back
+    // to the cross-page navigation handoff.
+    private async Task ReRunDecisionAsync()
     {
         _pendingRescore = false;
+        if (OnRescoreRequested.HasDelegate)
+        {
+            await OnRescoreRequested.InvokeAsync();
+            return;
+        }
         Navigation.NavigateTo($"/legal/personalinjury_decision2?matterId={MatterId}&autoRun=1");
     }
 

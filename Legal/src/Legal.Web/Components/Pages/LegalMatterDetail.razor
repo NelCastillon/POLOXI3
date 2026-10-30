@@ -226,7 +226,29 @@
                     <i class="bi bi-funnel"></i> Evidence scope
                     <span class="matter-detail-panel-sub">Domain Pack evidence types &amp; concepts selected for this matter — drives L3 atomic-proposition generation</span>
                 </div>
-                <MatterEvidenceScopeEditor MatterId="MatterId" />
+
+                <MatterEvidenceUpload MatterId="MatterId" OnUploaded="OnEvidenceUploadedAsync" />
+
+                @if (_evidenceAddedCount > 0)
+                {
+                    <div class="matter-detail-evidence-added" role="status" aria-live="polite">
+                        <i class="bi bi-info-circle"></i>
+                        <span>
+                            @_evidenceAddedCount new document@(_evidenceAddedCount == 1 ? "" : "s") added to this matter.
+                            New evidence is scanned, extracted and merged, but atomic-proposition scoring is deferred — re-run the decision to re-score against the updated record.
+                        </span>
+                        @if (_matter is not null)
+                        {
+                            <a class="um-btn um-btn-primary um-btn-sm ms-auto"
+                               href="@BuildReScoreHref()"
+                               title="Open the decision cockpit and re-run to re-score with the new evidence">
+                                <i class="bi bi-arrow-repeat"></i> Re-run decision to re-score
+                            </a>
+                        }
+                    </div>
+                }
+
+                <MatterEvidenceScopeEditor @ref="_evidenceScopeEditor" MatterId="MatterId" />
             </section>
             }
 
@@ -237,7 +259,7 @@
                     <i class="bi bi-diagram-3"></i> Atomic propositions
                     <span class="matter-detail-panel-sub">L3+ propositions generated per evidence type &amp; concept — worker, model and call provenance; attorney overrides are authoritative</span>
                 </div>
-                <MatterAtomicPropositionEditor MatterId="MatterId" />
+                <MatterAtomicPropositionEditor @ref="_atomicPropositionEditor" MatterId="MatterId" />
             </section>
             }
 
@@ -469,18 +491,54 @@
             .ToList();
     private PersonalInjuryProfileEditor? _piEditor;
 
+    private MatterEvidenceScopeEditor? _evidenceScopeEditor;
+    private MatterAtomicPropositionEditor? _atomicPropositionEditor;
+    private int _evidenceAddedCount;
+    private Guid? _lastEvidenceBatchId;
+
+    // Prepare-only: uploaded documents are already scanned, stored and extracted server-side, and
+    // merged into the matter's evidence. Scoring/CDC stays deferred to the explicit decision re-run,
+    // so here we only reload the read-only scope + proposition views and surface the "re-run" hint.
+    private async Task OnEvidenceUploadedAsync(MatterEvidenceUpload.EvidenceUploadResult result)
+    {
+        _evidenceAddedCount += result.Accepted;
+        if (result.BatchId is { } batchId)
+            _lastEvidenceBatchId = batchId;
+
+        if (_evidenceScopeEditor is not null)
+            await _evidenceScopeEditor.LoadAsync();
+        if (_atomicPropositionEditor is not null)
+            await _atomicPropositionEditor.LoadAsync();
+
+        StateHasChanged();
+    }
+
     private async Task SavePiProfileAsync()
     {
         if (_piEditor is not null)
             await _piEditor.SaveAsync();
     }
 
-    // Routes Personal Injury matters to the PI decision cockpit; all others to the generic cockpit.
+    // Routes Personal Injury matters to the PI decision cockpit (the "2" page, which carries the
+    // autoRun re-run + evidence-provenance deep-link wiring); all others to the generic cockpit.
     private string DecisionBasePath =>
         string.Equals(_matter?.PracticeAreaCode, DecisionDomainPackCodes.PersonalInjury, StringComparison.OrdinalIgnoreCase)
         || string.Equals(_matter?.DomainPackCode, DecisionDomainPackCodes.PersonalInjury, StringComparison.OrdinalIgnoreCase)
-            ? "/legal/personalinjury_decision"
+            ? "/legal/personalinjury_decision2"
             : "/legal/decision";
+
+    // Builds the "re-run to re-score" deep-link. Carries the triggering upload batch + accepted-document
+    // count so the persisted AnalysisRun is labeled "Re-scored after N document(s) added", and autoRun=1
+    // so the cockpit regenerates the full combined result once on arrival (still user-initiated/metered).
+    private string BuildReScoreHref()
+    {
+        var href = $"{DecisionBasePath}?matterId={_matter!.DecisionMatterId}&autoRun=1";
+        if (_evidenceAddedCount > 0)
+            href += $"&evidenceAdded={_evidenceAddedCount}";
+        if (_lastEvidenceBatchId is { } batchId)
+            href += $"&evidenceBatch={batchId}";
+        return href;
+    }
 
     protected override async Task OnParametersSetAsync()
     {

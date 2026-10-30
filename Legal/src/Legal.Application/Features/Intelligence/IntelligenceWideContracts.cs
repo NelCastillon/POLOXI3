@@ -64,6 +64,13 @@ public sealed record WideSearchRequest(Guid TenantId,Guid UserId,[Required,Strin
     // tenant/platform configured default. Required/document-present/PRIORITIZE targets and USER
     // decisions are never affected by this dial.
     [Range(0,1)]public decimal? MatterScopeOutThresholdOverride{get;init;}
+    // Run History provenance: when this run was explicitly re-triggered from the Matter Workbench after
+    // new evidence was uploaded, these optional fields carry the triggering upload batch and the number
+    // of accepted documents so the persisted AnalysisRun is labeled "Re-scored after N document(s) added"
+    // and visibly ties the decision (and any outcome flip) to the documents that caused it. Absent =
+    // the existing decision/clarification trigger labeling is used unchanged.
+    public Guid? TriggerUploadBatchId{get;init;}
+    [Range(0,1000)]public int? TriggerDocumentCount{get;init;}
 }
 
 // Database-backed model option for the wide-search Model dropdown (active CHAT deployments).
@@ -1138,6 +1145,21 @@ public sealed record WideConfiguration(decimal TargetConfidence,decimal MinimumB
     public decimal LegalRetrievalRelevanceFloor{get;init;}=.60m;
     public decimal LegalSupportFloor{get;init;}=.50m;
     public decimal AuthoritativeSourceBonus{get;init;}=.15m;
+    // V3.x Corpus→branch attachment gate (DB-seeded; key Intelligence.SearchWide.CorpusBranchMinOverlap).
+    // Minimum fraction of a branch's significant tokens that must also appear in a corpus proposition
+    // before that proposition is credited to the branch. Replaces the previous hardcoded ">0" gate (any
+    // single shared token credited the branch), which caused false positives from incidental token
+    // overlap. Range 0..1; default .34 requires roughly a third of the branch's tokens to match.
+    public decimal CorpusBranchMinOverlap{get;init;}=.34m;
+    // Optional semantic (embedding cosine) corpus→branch attachment, OR-combined with the lexical
+    // overlap gate above so paraphrased propositions the lexical path misses can still attach
+    // (DB-seeded; key Intelligence.SearchWide.EnableCorpusSemanticAttachment / CorpusBranchMinSemanticSimilarity).
+    // OFF by default: it adds a metered embedding call per matter-scoped run and changes which evidence
+    // scores, so it is enabled per-tenant only after measurement. When off (or on failure), attachment
+    // behaves exactly like the lexical-only gate. Threshold is cosine mapped to [0,1]; .62 is deliberately
+    // conservative so the semantic path recovers genuine paraphrases without reintroducing false positives.
+    public bool EnableCorpusSemanticAttachment{get;init;}
+    public decimal CorpusBranchMinSemanticSimilarity{get;init;}=.62m;
     // V3.8 Bounded Consensus Fallback: enterprise evidence wins clear conflicts; external-only
     // support is discounted unless corroborated by enterprise evidence.
     public decimal EvidenceConsensusThreshold{get;init;}=.25m;
@@ -1296,22 +1318,17 @@ public sealed record WideConfiguration(decimal TargetConfidence,decimal MinimumB
     public int ResolutionDeepeningMinConditions{get;init;}=2;
     public int ResolutionDeepeningMaxConditions{get;init;}=4;
     // Option 5 adaptive Domain Pack coverage batches (DB-seeded; see migration 0433). Every in-scope L2
-    // is assigned to a budget-sized batch; returned coverage is validated in code and thin/missing
-    // parents get one targeted retry. L3TierOneCount>0 enables the optional Option 6 priority tier
-    // (ordering/depth only, never inclusion); 0 is pure Option 5.
+    // is assigned to a uniform budget-sized batch; returned coverage is validated in code and thin/missing
+    // parents get one targeted retry. Tier A/B ordering and context-density were removed (0471 cleanup);
+    // all parents are packed uniformly.
     public int L3BatchSize{get;init;}=8;
     public int L3BatchInputBudgetChars{get;init;}=30000;
     public int L3PassagesPerParent{get;init;}=4;
     public int L3MinimumPropositionsPerParent{get;init;}=2;
     public int L3MaxConcurrency{get;init;}=3;
-    public int L3TierOneCount{get;init;}=0;
-    public int L3TierOneBatchSize{get;init;}=3;
-    public int L3TierOneMaxPerDimension{get;init;}=2;
-    // Matter-funneled L3 (migration 0436). Tier A/B is CONTEXT DENSITY and batch size only - every in-scope
-    // L2 still receives a model pass (accuracy outranks speed; there is no zero-call tier).
+    // Matter-funneled L3 (migration 0436). L3TierAThreshold is retained only to label the scope-ledger
+    // audit TierCode; it no longer affects L3 batching or context density.
     public decimal L3TierAThreshold{get;init;}=0.35m;
-    public int L3TierABatchSize{get;init;}=4;
-    public int L3TierAPassagesPerParent{get;init;}=8;
     public int L3PassageMapConcurrency{get;init;}=4;
     public int L3PassageMapTopN{get;init;}=12;
     public int L3FactorSliceMaxItems{get;init;}=6;

@@ -104,7 +104,7 @@ public sealed partial class IntelligenceWide2Service
                 ValidationStatusCode: "VALID",
                 ModelCode: modelCode,
                 ModelVersion: null,
-                PromptCode: IntelligencePromptCodes.WideHierarchyStep,
+                PromptCode: IntelligencePromptCodes.WideIntent,
                 PromptVersion: 0,
                 AlgorithmVersion: HierarchyAlgorithmVersion,
                 ConfigurationVersion: null,
@@ -256,7 +256,7 @@ public sealed partial class IntelligenceWide2Service
                 Confidence: b.PoloxiConfidence,
                 CapabilityCode: b.CapabilityCode,
                 OriginCode: "LLM_PROPOSAL",
-                OriginPromptCode: IntelligencePromptCodes.WideHierarchyStep,
+                OriginPromptCode: IntelligencePromptCodes.WideIntent,
                 OriginPromptVersion: null,
                 OriginModelCode: null,
                 SemanticHash: null))
@@ -309,7 +309,7 @@ public sealed partial class IntelligenceWide2Service
                 Confidence: b.Confidence,
                 CapabilityCode: b.CapabilityCode,
                 OriginCode: "LLM_PROPOSAL",
-                OriginPromptCode: IntelligencePromptCodes.WideHierarchyStep,
+                OriginPromptCode: IntelligencePromptCodes.WideIntent,
                 OriginPromptVersion: null,
                 OriginModelCode: null,
                 SemanticHash: null))

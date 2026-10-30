@@ -41,8 +41,17 @@ internal static class WideCorpusEvidenceProjection
     public static List<WideExternalKnowledgeSnippet> Project(
         LegalMatterEvidenceGraphDto? graph,
         IReadOnlyCollection<WideBranchRecord> branches,
-        DateTime nowUtc)
+        DateTime nowUtc,
+        decimal minOverlap=0m,
+        Func<Guid,Guid,decimal?>? semanticSimilarity=null,
+        decimal minSemantic=1m)
     {
+        // Branch is credited only when the proposition shares at least this fraction of the branch's
+        // significant tokens (DB-seeded WideConfiguration.CorpusBranchMinOverlap). Clamped defensively.
+        minOverlap=Math.Clamp(minOverlap,0m,1m);
+        // Optional semantic gate (DB-seeded, OFF by default). When no lookup is supplied the gate is
+        // unreachable (minSemantic clamped to 1 and similarity null), so behavior matches lexical-only.
+        minSemantic=Math.Clamp(minSemantic,0m,1m);
         var result = new List<WideExternalKnowledgeSnippet>();
         if (graph is null || graph.Propositions is null || graph.Propositions.Count == 0)
             return result;
@@ -106,14 +115,21 @@ internal static class WideCorpusEvidenceProjection
             foreach (var (branch, tokens) in branchTokens)
             {
                 var overlap = OverlapRatio(propositionTokens, tokens);
-                if (overlap <= 0m)
+                var lexicalPass = overlap > 0m && overlap >= minOverlap;
+                // Semantic path (OR): attach when the embedding cosine clears its threshold even if the
+                // lexical overlap did not, so a paraphrased proposition the token gate misses still scores.
+                var semantic = semanticSimilarity?.Invoke(proposition.LegalFactPropositionId, branch.WideBranchId);
+                var semanticPass = semantic is { } sim && sim >= minSemantic;
+                if (!lexicalPass && !semanticPass)
                     continue;
 
                 matched = true;
-                // Weight the proposition's intrinsic admission score by claim/branch overlap so an
-                // on-point proposition contributes more than a tangential one. Never exceeds the
-                // intrinsic score, so presence alone can never inflate support.
-                var branchSupportScore = Math.Clamp(supportScore * overlap, 0m, 1m);
+                // Weight the proposition's intrinsic admission score by the STRONGER of claim/branch
+                // overlap and semantic similarity so an on-point proposition contributes more than a
+                // tangential one. Never exceeds the intrinsic score, so presence (lexical OR semantic)
+                // can never inflate support beyond what ClassifyAdmission already allowed.
+                var relevance = Math.Max(overlap, semantic ?? 0m);
+                var branchSupportScore = Math.Clamp(supportScore * relevance, 0m, 1m);
                 result.Add(BuildSnippet(proposition, branch.WideBranchId, branch.DisplayName, status, branchSupportScore, nowUtc, sourceDocument));
             }
 
@@ -160,8 +176,13 @@ internal static class WideCorpusEvidenceProjection
     public static List<PoloxiEvidenceDto> ProjectEvidence(
         LegalMatterEvidenceGraphDto? graph,
         IReadOnlyCollection<WideBranchRecord> branches,
-        Guid matterId)
+        Guid matterId,
+        decimal minOverlap=0m,
+        Func<Guid,Guid,decimal?>? semanticSimilarity=null,
+        decimal minSemantic=1m)
     {
+        minOverlap=Math.Clamp(minOverlap,0m,1m);
+        minSemantic=Math.Clamp(minSemantic,0m,1m);
         var result = new List<PoloxiEvidenceDto>();
         if (graph is null || graph.Propositions is null || graph.Propositions.Count == 0 || branches.Count == 0)
             return result;
@@ -229,7 +250,11 @@ internal static class WideCorpusEvidenceProjection
             var propositionTokens = Tokenize(proposition.PropositionText);
             foreach (var (branch, tokens) in branchTokens)
             {
-                if (OverlapRatio(propositionTokens, tokens) <= 0m)
+                var overlap = OverlapRatio(propositionTokens, tokens);
+                var lexicalPass = overlap > 0m && overlap >= minOverlap;
+                var semantic = semanticSimilarity?.Invoke(proposition.LegalFactPropositionId, branch.WideBranchId);
+                var semanticPass = semantic is { } sim && sim >= minSemantic;
+                if (!lexicalPass && !semanticPass)
                     continue;
                 result.Add(new PoloxiEvidenceDto(
                     HierarchyBranchId: branch.WideBranchId,

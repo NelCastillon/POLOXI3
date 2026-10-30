@@ -205,6 +205,13 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     private readonly HashSet<Guid> _explainedParentIds=new();
     private readonly List<WidePropositionAnchorRecord> _pendingAnchors=new();
     private readonly List<WidePropositionLinkRecord> _pendingLinks=new();
+    // Cumulative set of WideBranchIds that have actually been persisted via SaveWideBranchesAsync across ALL
+    // levels of this run. Proposition links (DEPENDS_ON / EQUIVALENT) can reference a parent branch from an
+    // EARLIER level, so validating link endpoints against only the current level is insufficient: a link whose
+    // LinkedParentWideBranchId points at a branch that was dropped (unresolved-parent prune), scope-eliminated,
+    // or simply saved on a prior level would violate FK_Legal_WidePropositionLink_Parent. Both endpoints must
+    // exist in this set before a link row is inserted.
+    private readonly HashSet<Guid> _persistedBranchIds=new();
     // 0442 per-matter Atomic Propositions: worker/call provenance per accepted L3+ child (keyed by branch id),
     // and the most recent generic hierarchy-step call (L4+ path) so deeper propositions keep model provenance.
     private readonly Dictionary<Guid,AtomicPropositionProvenance> _atomicProvenanceByBranch=new();
@@ -793,6 +800,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         _explainedParentIds.Clear();
         _pendingAnchors.Clear();
         _pendingLinks.Clear();
+        _persistedBranchIds.Clear();
         _atomicProvenanceByBranch.Clear();
         _lastHierarchyStepCall=null;
         ResetMatterFunnelState();
@@ -967,6 +975,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             }
             var currentLevel=MaterializeBranches(level1Branches,executionId,request.TenantId,1,new Dictionary<string,WideBranchRecord>(),configuration,deterministic:useDomainPackHierarchy);
             await wideRepository.SaveWideBranchesAsync(currentLevel,request.UserId,cancellationToken);
+            foreach(var branch in currentLevel)_persistedBranchIds.Add(branch.WideBranchId);
             allBranches.AddRange(currentLevel);
 
             // Real-time cockpit feed: the Level-1 hierarchy is now framed. Surface the count of top-level
@@ -984,9 +993,24 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 // previous level's evidence keys), so retrieval waits overlap. Results are merged
                 // sequentially in branch order so evidence, keys, and audit output stay deterministic.
                 var groundingResults=new (string StatusCode,IReadOnlyCollection<PoloxiEvidenceDto> Evidence,HashSet<string> Keys)[currentLevel.Length];
+                // LATENCY: the DB-backed Domain Pack catalog scaffolding (L1 DIM_ and L2 CPT_/EVD_ nodes) is
+                // deterministic structure, not a retrievable proposition - grounding it issued one retrieval
+                // round-trip per node every run for zero answer value. Only the atomic L3+ propositions carry
+                // matter/evidence claims worth grounding. Structural nodes get a synthetic non-grounded result
+                // (no IO, empty evidence, "STRUCTURAL" status) so they remain in the hierarchy without the
+                // evidence-void DORMANT demotion that "GROUNDED"+no-evidence would trigger below.
+                static bool IsDomainPackStructuralNode(WideBranchRecord branch)=>
+                    branch.BranchCode.StartsWith("DIM_",StringComparison.OrdinalIgnoreCase)
+                    ||branch.BranchCode.StartsWith("CPT_",StringComparison.OrdinalIgnoreCase)
+                    ||branch.BranchCode.StartsWith("EVD_",StringComparison.OrdinalIgnoreCase);
                 using(var groundingGate=new SemaphoreSlim(Math.Max(1,configuration.GroundingConcurrency)))
                     await Task.WhenAll(currentLevel.Select(async(branch,index)=>
                     {
+                        if(useDomainPackHierarchy&&IsDomainPackStructuralNode(branch))
+                        {
+                            groundingResults[index]=("STRUCTURAL",[],new HashSet<string>(branchEvidenceKeys.GetValueOrDefault(branch.WideBranchId)??[]));
+                            return;
+                        }
                         await groundingGate.WaitAsync(cancellationToken);
                         try{groundingResults[index]=await GroundBranchAsync(branch,poloxiRequest,capabilities,request.MaximumResults,branchEvidenceKeys,cancellationToken);}
                         finally{groundingGate.Release();}
@@ -998,6 +1022,18 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                     var grounded=groundingResults[index];
                     branchEvidenceKeys[branch.WideBranchId]=grounded.Keys;
                     evidence.AddRange(grounded.Evidence);
+                    // Deterministic Domain Pack scaffolding is never grounded (status STRUCTURAL): it always stays
+                    // ACTIVE so it keeps narrowing into its DB-backed children (DIM_->CPT_/EVD_->L3). It must not
+                    // be demoted by an interpretation-prior threshold or the evidence-void rule - it carries no
+                    // evidence claim of its own; the atomic L3 propositions beneath it do.
+                    if(useDomainPackHierarchy&&grounded.StatusCode=="STRUCTURAL")
+                    {
+                        var structural=branch with{GroundingStatusCode=grounded.StatusCode,EvidenceCount=0,IsEliminated=false,EliminationReason=null,BranchStateCode=WideBranchStates.Active,InterpretationPrior=branch.Confidence};
+                        levelOutcomes.Add(new(structural.WideBranchId,structural.GroundingStatusCode,0,false,null));
+                        allBranches[allBranches.FindIndex(item=>item.WideBranchId==branch.WideBranchId)]=structural;
+                        survivors.Add(structural);
+                        continue;
+                    }
                     // V2.1 branch lifecycle: the LLM percentage is an Interpretation Prior controlling retrieval
                     // allocation, NOT truth. Low priors demote to SECONDARY/DORMANT instead of eliminating.
                     // PRUNED is reserved for hard-constraint violations, explicit contradictions, or
@@ -1060,6 +1096,13 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                     var supportedShare=survivors.Count==0?0m:(decimal)survivors.Count(branch=>branch.EvidenceCount>0)/survivors.Count;
                     if(supportedShare<configuration.EvidencePriorityCoverageFloor){terminationReason="EVIDENCE_COVERAGE_PRIORITY";break;}
                 }
+
+                // WIDE_HIERARCHY_STEP RETIREMENT: the retired prompt is no longer invoked. The hierarchy keeps
+                // its DB-backed L1 (DIM_) and L2 (CPT_/EVD_) levels, and the L3 atomic propositions are still
+                // generated UNDER each DB-backed L2 parent (GenerateDomainPackLevel3Async -> ProposeBatchAsync),
+                // but that generation now runs on the atomic-contract WIDE_INTENT prompt (0470 v4.0) instead of
+                // WIDE_HIERARCHY_STEP. The off-path (non-Domain-Pack) hierarchy is bounded to its DB levels.
+                if(!useDomainPackHierarchy){terminationReason="HIERARCHY_SETTLED";break;}
 
                 // Progressive narrowing: propose the next level from surviving branches AND their grounding outcomes.
                 // When forcing the minimum depth of 2, narrow all survivors even if none opted to continue.
@@ -1207,6 +1250,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 // are marked eliminated for this run (MATTER_SCOPE_OUT) - never removed. Fail-soft.
                 if(useDomainPackHierarchy&&depth>=2)nextLevel=await PersistMatterAtomicPropositionsAsync(request,executionId,nextLevel,allBranches,configuration,depth+1,cancellationToken);
                 await wideRepository.SaveWideBranchesAsync(nextLevel,request.UserId,cancellationToken);
+                foreach(var branch in nextLevel)_persistedBranchIds.Add(branch.WideBranchId);
                 // Option 5 scope ledger: one durable row per configured L2 target (in-scope rows get their
                 // materialized branch id; rule-excluded rows keep a null branch id). Fail-soft.
                 if(useDomainPackHierarchy&&depth==1)await PersistScopeLedgerAsync(request,executionId,nextLevel,cancellationToken);
@@ -1291,7 +1335,10 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 try
                 {
                     var evidenceGraph=await documentCorpusRepository.GetMatterEvidenceGraphAsync(request.TenantId,corpusMatterId,cancellationToken);
-                    var corpusSnippets=WideCorpusEvidenceProjection.Project(evidenceGraph,survivorsFinal,DateTime.UtcNow);
+                    // Optional embedding-based attachment (OFF by default). Null lookup = lexical-only (unchanged behavior).
+                    var corpusSemanticLookup=await WideCorpusSemanticAttachment.BuildAsync(aiProviderRouter,logger,request.TenantId,executionId.ToString(),configuration,evidenceGraph,survivorsFinal,cancellationToken);
+                    var corpusSemanticThreshold=corpusSemanticLookup is null?1m:configuration.CorpusBranchMinSemanticSimilarity;
+                    var corpusSnippets=WideCorpusEvidenceProjection.Project(evidenceGraph,survivorsFinal,DateTime.UtcNow,configuration.CorpusBranchMinOverlap,corpusSemanticLookup,corpusSemanticThreshold);
                     {
                         var existingUrls=externalKnowledge.Select(snippet=>snippet.Url).ToHashSet(StringComparer.OrdinalIgnoreCase);
                         var freshCorpus=corpusSnippets.Where(snippet=>!existingUrls.Contains(snippet.Url)).ToArray();
@@ -1306,7 +1353,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                     // EvidenceTypeCode. Previously only matter facts (MATTER_FACT/LEGAL_MATTER) were ever
                     // persisted, so an L3 evidence-type query could never reveal the document evidence that
                     // actually drove scoring. Same admission gate; branch evidence counts are updated below.
-                    var corpusEvidence=WideCorpusEvidenceProjection.ProjectEvidence(evidenceGraph,survivorsFinal,corpusMatterId);
+                    var corpusEvidence=WideCorpusEvidenceProjection.ProjectEvidence(evidenceGraph,survivorsFinal,corpusMatterId,configuration.CorpusBranchMinOverlap,corpusSemanticLookup,corpusSemanticThreshold);
                     if(corpusEvidence.Count>0)
                     {
                         evidence.AddRange(corpusEvidence);

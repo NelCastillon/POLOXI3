@@ -2377,10 +2377,25 @@
     [Parameter, SupplyParameterFromQuery(Name = "autoRun")]
     public string? AutoRunFlag { get; set; }
 
+    // Run History provenance deep-link set by the matter workbench re-score CTA: the triggering upload
+    // batch and the number of accepted documents, so the regenerated run is labeled "Re-scored after N
+    // document(s) added". Both optional; absent = normal decision-run labeling.
+    [Parameter, SupplyParameterFromQuery(Name = "evidenceBatch")]
+    public Guid? EvidenceBatchId { get; set; }
+
+    [Parameter, SupplyParameterFromQuery(Name = "evidenceAdded")]
+    public int? EvidenceAddedCount { get; set; }
+
     private bool AutoRunRequested => string.Equals(AutoRunFlag, "1", StringComparison.Ordinal)
         || string.Equals(AutoRunFlag, "true", StringComparison.OrdinalIgnoreCase);
 
     private bool _autoRunTriggered;
+
+    // One-shot evidence-provenance trigger consumed by the next SearchAsync (set from the ?evidenceBatch/
+    // ?evidenceAdded deep-link at auto-run time). Cleared immediately after it is applied so only the
+    // evidence-triggered run is labeled "Re-scored after N document(s) added".
+    private Guid? _pendingTriggerBatchId;
+    private int? _pendingTriggerDocumentCount;
 
     // True only when Analysis History opened this page to view a saved run's complete results read-only.
     private bool IsSavedRunView => RunId is { } rid && rid != Guid.Empty
@@ -2835,6 +2850,10 @@
     // authoritative branch-target IV table. An empty result renders the corresponding empty-state.
     private Legal.Application.Features.Intelligence.Epistemic.MatterPropositionInformationValueResult? _propositionInfoValue;
     internal bool _propositionInfoValueLoading;
+    // One-shot gate: true ONLY while the fresh-run completion path refreshes post-answer intelligence, so
+    // the live INTELLIGENCE_WIDE_ANSWER (gpt-6-astra) NBA phrasing call fires exactly once per attorney run
+    // and never as a page-load / restore / tab-switch side effect. Reset immediately after NBA is phrased.
+    private bool _allowLiveNbaGeneration;
 
     // Next Best Action frontier: advisory, decision-directed actions composed server-side from the
     // proposition VIV frontier + evidence graph + Domain Pack. Loaded alongside the proposition IV for
@@ -7995,13 +8014,27 @@
             }
             else
             {
-                try
+                // Decision-directed Next Best Actions phrase a LIVE INTELLIGENCE_WIDE_ANSWER (gpt-6-astra)
+                // call, so they must ONLY be generated right after the attorney actually ran the decision in
+                // THIS circuit (fresh-run completion). A bare page load, a restore from sessionStorage, a
+                // calibration-data refresh, or a tab switch must never phrase NBA — doing so would fire an
+                // expensive LLM call as a load-time side effect. _allowLiveNbaGeneration is set true only on
+                // the fresh-run path and reset here so it is strictly one-shot.
+                if (_response is null || !_allowLiveNbaGeneration)
                 {
-                    _nextBestActions = await Api.GetLegalMatterNextBestActionsAsync(matterId, correlationId);
+                    _nextBestActions ??= new Legal.Application.Features.Intelligence.Decision.NextBestActionResult(
+                        matterId, [], "Run the decision to generate next best actions.");
                 }
-                catch (Exception ex)
+                else
                 {
-                    _nextBestActions = new Legal.Application.Features.Intelligence.Decision.NextBestActionResult(matterId, [], $"Next best actions could not be loaded: {ex.Message}");
+                    try
+                    {
+                        _nextBestActions = await Api.GetLegalMatterNextBestActionsAsync(matterId, correlationId);
+                    }
+                    catch (Exception ex)
+                    {
+                        _nextBestActions = new Legal.Application.Features.Intelligence.Decision.NextBestActionResult(matterId, [], $"Next best actions could not be loaded: {ex.Message}");
+                    }
                 }
             }
             // What To Resolve Next: a thin projection over the SAME proposition VIV / LegalADV frontier.
@@ -10528,23 +10561,11 @@
             await TryRestorePersistedOverviewAsync();
         }
 
-        // Matter workbench deep-link (?autoRun=1): after the attorney adds a new atomic proposition and/or
-        // new document evidence, re-run the full Wide pipeline ONCE so the entire combined result — short and
-        // long narratives, decision brief, candidate assessments, and Next Best Actions — is regenerated from
-        // the updated matter state in a single consistent synthesis. Never fires for read-only saved-run views.
-        if (!_initializing && _overviewRestoreAttempted && AutoRunRequested && !_autoRunTriggered
-            && !IsSavedRunView && !_loading
-            && MatterId is { } autoMatterId && autoMatterId != Guid.Empty
-            && !string.IsNullOrWhiteSpace(_query))
-        {
-            _autoRunTriggered = true;
-            // Strip ?autoRun=1 from the address bar BEFORE running so a browser refresh (which resets
-            // _autoRunTriggered) cannot re-fire a fresh — and costly — Wide synthesis. replace:true keeps
-            // this out of history. The intended re-run still proceeds even if a prior overview was restored
-            // from sessionStorage, because this is an explicit regenerate-from-updated-inputs request.
-            Navigation.NavigateTo(Navigation.GetUriWithQueryParameter("autoRun", (string?)null), replace: true);
-            await SearchAsync();
-        }
+        // NOTE: The costly Wide synthesis (INTELLIGENCE_WIDE_ANSWER) must NEVER be started as a page-load
+        // side effect. The previous ?autoRun=1 deep-link fired a full run from here on navigation/refresh.
+        // Re-running after the attorney adds a proposition/evidence is now driven directly from the explicit
+        // "Re-run decision to re-score" button click inside the Human Intelligence tab
+        // (ReRunDecisionFromHumanIntelligenceAsync), so no auto-run happens on render.
     }
 
     // Saves the submitted prompt onto the matter as Additional Narrative. Must complete BEFORE the LLM
@@ -10571,6 +10592,19 @@
             _loading = false;
             return false;
         }
+    }
+
+    // In-place re-score invoked directly from the Human Intelligence tab's "Re-run decision to re-score"
+    // button (embedded MatterAtomicPropositionEditor). Runs the single combined Wide synthesis from the
+    // updated matter state WITHOUT a ?autoRun deep-link / page reload, so the costly LLM call only ever
+    // fires from this explicit attorney click — never as a page-load side effect.
+    internal async Task ReRunDecisionFromHumanIntelligenceAsync()
+    {
+        if (_loading) return;
+        if (IsSavedRunView) return;
+        if (MatterId is not { } matterId || matterId == Guid.Empty) return;
+        if (string.IsNullOrWhiteSpace(_query)) return;
+        await SearchAsync();
     }
 
     private async Task SearchAsync()
@@ -10604,7 +10638,14 @@
         await PersistBlendedScoreThresholdAsync();
         try
         {
-            _response = await Api.IntelligentSearchWide2DynamicAsync(new(Guid.Empty, Guid.Empty, _query.Trim(), 50, correlationId) { UsePoloxiEngine = _usePoloxiEngine, UseDomainPack = _useDomainPack, ModelCode = _selectedModelCode, ForceRequestedModelAllStages = !string.IsNullOrWhiteSpace(_selectedModelCode), ContextCode = _selectedContextCode, MatterId = MatterId, MatterScopeOutThresholdOverride = _blendedScoreThreshold }, _searchCancellation.Token);
+            // Consume the one-shot evidence-provenance trigger (set only for the workbench auto-run), so
+            // the resulting AnalysisRun is labeled with the triggering batch; cleared so later manual
+            // re-runs record as ordinary decision runs.
+            var triggerBatchId = _pendingTriggerBatchId;
+            var triggerDocumentCount = _pendingTriggerDocumentCount;
+            _pendingTriggerBatchId = null;
+            _pendingTriggerDocumentCount = null;
+            _response = await Api.IntelligentSearchWide2DynamicAsync(new(Guid.Empty, Guid.Empty, _query.Trim(), 50, correlationId) { UsePoloxiEngine = _usePoloxiEngine, UseDomainPack = _useDomainPack, ModelCode = _selectedModelCode, ForceRequestedModelAllStages = !string.IsNullOrWhiteSpace(_selectedModelCode), ContextCode = _selectedContextCode, MatterId = MatterId, MatterScopeOutThresholdOverride = _blendedScoreThreshold, TriggerUploadBatchId = triggerBatchId, TriggerDocumentCount = triggerDocumentCount }, _searchCancellation.Token);
         }
         catch (OperationCanceledException)
         {
@@ -10630,7 +10671,18 @@
                     // instead of forcing the user to re-run the pipeline.
                     await PersistOverviewAsync(matterId, _response);
                 }
-                await RefreshPostAnswerIntelligenceAsync();
+                // Fresh-run completion: this is the ONLY place allowed to phrase live NBA via the metered
+                // INTELLIGENCE_WIDE_ANSWER call. Flag it one-shot so RefreshPostAnswerIntelligenceAsync ->
+                // LoadPropositionInfoValueAsync generates NBA now, then reset so no later load path can.
+                _allowLiveNbaGeneration = true;
+                try
+                {
+                    await RefreshPostAnswerIntelligenceAsync();
+                }
+                finally
+                {
+                    _allowLiveNbaGeneration = false;
+                }
             }
         }
     }
@@ -10837,7 +10889,16 @@
                     // Also persist to the browser so a full page reload restores the answer.
                     await PersistOverviewAsync(matterId, _response);
                 }
-                await RefreshPostAnswerIntelligenceAsync();
+                // Explicit clarification-submit is a real attorney run — allow one-shot live NBA phrasing.
+                _allowLiveNbaGeneration = true;
+                try
+                {
+                    await RefreshPostAnswerIntelligenceAsync();
+                }
+                finally
+                {
+                    _allowLiveNbaGeneration = false;
+                }
             }
         }
     }
