@@ -2037,28 +2037,6 @@
         </div>
     }
 
-    @if (_documentPreviewUrl is not null && _ambiguityEvidenceGroup is null)
-    {
-        <div class="um-modal-backdrop" @onclick="CloseDocumentPreview">
-            <div class="um-modal doc-preview-modal" @onclick:stopPropagation="true">
-                <div class="um-modal-header">
-                    <i class="bi bi-file-earmark-pdf"></i>
-                    <span>@_documentPreviewTitle</span>
-                    <a class="um-btn um-btn-ghost um-btn-sm ms-auto" href="@_documentPreviewUrl" target="_blank" rel="noopener" title="Open in new tab"><i class="bi bi-box-arrow-up-right"></i></a>
-                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" title="Close" @onclick="CloseDocumentPreview"><i class="bi bi-x-lg"></i></button>
-                </div>
-                <div class="um-modal-body doc-preview-body">
-                    <object data="@_documentPreviewUrl" type="application/pdf" class="doc-preview-frame">
-                        <div class="doc-preview-fallback">
-                            <p>The document preview could not be displayed inline.</p>
-                            <a class="um-btn um-btn-primary" href="@_documentPreviewUrl" target="_blank" rel="noopener">Open document</a>
-                        </div>
-                    </object>
-                </div>
-            </div>
-        </div>
-    }
-
     @if (_ambiguityPopupGroup is { } ag)
     {
         var popBreakdown = AmbiguityGroupScoreBreakdown(ag);
@@ -2386,6 +2364,12 @@
     [Parameter, SupplyParameterFromQuery(Name = "evidenceAdded")]
     public int? EvidenceAddedCount { get; set; }
 
+    // Fill-only deep-link used by the Run History example chips: pre-seed the composer question so an
+    // attorney can review/edit before explicitly pressing "Let's Go". Never auto-runs, because SearchAsync
+    // persists _query as the matter's Additional Narrative and activates the matter corpus.
+    [Parameter, SupplyParameterFromQuery(Name = "prompt")]
+    public string? PromptSeed { get; set; }
+
     private bool AutoRunRequested => string.Equals(AutoRunFlag, "1", StringComparison.Ordinal)
         || string.Equals(AutoRunFlag, "true", StringComparison.OrdinalIgnoreCase);
 
@@ -2400,6 +2384,8 @@
     // True only when Analysis History opened this page to view a saved run's complete results read-only.
     private bool IsSavedRunView => RunId is { } rid && rid != Guid.Empty
         && (string.Equals(ReadOnlyFlag, "1", StringComparison.Ordinal) || string.Equals(ReadOnlyFlag, "true", StringComparison.OrdinalIgnoreCase));
+
+    internal bool IsSavedRunViewPublic => IsSavedRunView;
 
     private string? _savedRunError;
 
@@ -7405,6 +7391,9 @@
     private IReadOnlyCollection<WideModelOptionDto> _models = [];
     private string _selectedContextCode = "Legal";
     private IReadOnlyCollection<WideSearchContextDto> _contexts = [];
+    // Database-backed starter example-prompt chips (POLOXI.Legal_SearchExamplePrompt), shown on the
+    // Decision2 composer before a run to help the attorney compose a strong first question.
+    internal IReadOnlyCollection<WideSearchExamplePromptDto> _examplePrompts = [];
     internal bool _loading, _usePoloxiEngine = true;
     internal bool _useDomainPack = true;
     // Blended Score scope-gate dial (per-matter MatterScopeOutThreshold). The user tunes this per run;
@@ -10352,6 +10341,7 @@
         var modelsTask = SafeAsync(() => Api.GetIntelligenceWide2ModelsAsync(), (IReadOnlyCollection<WideModelOptionDto>)[]);
         var showPipelineTask = SafeAsync(() => Api.GetSearch2ShowPipelineAsync(), false);
         var contextsTask = SafeAsync(() => Api.GetIntelligenceSearch2ContextsAsync(), (IReadOnlyCollection<WideSearchContextDto>)[]);
+        var examplePromptsTask = SafeAsync(() => Api.GetIntelligenceExamplePromptsAsync(), (IReadOnlyCollection<WideSearchExamplePromptDto>)[]);
 
         // Separate decision landscapes (migration 0451): load the pack's decision contracts so the Overview
         // can group the scored ranking by DecisionContractCode. Advisory/presentation only and failure-soft —
@@ -10392,7 +10382,8 @@
                 ActiveMatter.Set(_matter?.DecisionMatterId ?? matterId);
                 if (_matter is not null && string.IsNullOrWhiteSpace(_query))
                 {
-                    // Seed a readable default question. Prefer the matter's previously captured Additional
+                    // A ?prompt= deep-link (Run History example chip) wins: the attorney explicitly chose that
+                    // example question. Otherwise seed a readable default question. Prefer the matter's previously
                     // Narrative so a re-run (e.g. ?autoRun=1 after adding a proposition/evidence) regenerates
                     // from the SAME prompt context instead of overwriting it with only the title — SearchAsync
                     // persists _query back as the matter Additional Narrative. Fall back to the title when no
@@ -10400,9 +10391,11 @@
                     // facts, evidence, provenance) is projected server-side from the immutable Matter Context
                     // Snapshot via MatterId — it is NOT concatenated into the free-text question here, so
                     // distinct legal fields never collapse and the user can freely edit without losing context.
-                    _query = !string.IsNullOrWhiteSpace(_matter.AdditionalNarrative)
-                        ? _matter.AdditionalNarrative!
-                        : (_matter.Title ?? string.Empty);
+                    _query = !string.IsNullOrWhiteSpace(PromptSeed)
+                        ? PromptSeed!
+                        : (!string.IsNullOrWhiteSpace(_matter.AdditionalNarrative)
+                            ? _matter.AdditionalNarrative!
+                            : (_matter.Title ?? string.Empty));
                 }
             }
             catch { _matter = null; }
@@ -10425,6 +10418,7 @@
         }
         _showPipeline = await showPipelineTask;
         _contexts = await contextsTask;
+        _examplePrompts = await examplePromptsTask;
         _decisionContracts = await contractsTask;
         // Restore the Blended Score dial default. Prefer this matter's saved per-matter value; only
         // when the matter has none fall back to the tenant/platform /legal/configuration default.
@@ -10604,6 +10598,87 @@
         if (IsSavedRunView) return;
         if (MatterId is not { } matterId || matterId == Guid.Empty) return;
         if (string.IsNullOrWhiteSpace(_query)) return;
+        await SearchAsync();
+    }
+
+    // Matter-derived follow-up chips. Built ONLY from THIS matter's own run results — the attorney's
+    // highest-value open resolution questions (What To Resolve Next) and the decision-directed Next Best
+    // Actions composed server-side. There are no generic/static chips: if the matter has not produced
+    // results yet, there is nothing to suggest, so the row simply does not render. Fill-only, like the
+    // clarification path: clicking a chip seeds the composer so the attorney reviews/edits before running
+    // (SearchAsync persists _query as the matter Additional Narrative and activates the matter corpus).
+    internal IReadOnlyList<string> MatterFollowUpChips
+    {
+        get
+        {
+            var chips = new List<string>();
+
+            foreach (var t in OvResolutionTargets)
+            {
+                if (!string.IsNullOrWhiteSpace(t.ResolutionQuestion))
+                    chips.Add(t.ResolutionQuestion!.Trim());
+            }
+
+            foreach (var a in OvNextBestActions)
+            {
+                if (!string.IsNullOrWhiteSpace(a.Title))
+                    chips.Add(a.Title.Trim());
+            }
+
+            return chips
+                .Where(c => c.Length > 0)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(6)
+                .ToList();
+        }
+    }
+
+    // Short chip caption derived from the full follow-up question (kept concise; full text is the tooltip).
+    internal static string ChipLabel(string chip)
+    {
+        var text = chip.Split('(')[0].Trim();
+        if (text.Length <= 48) return text;
+        var cut = text[..48];
+        var lastSpace = cut.LastIndexOf(' ');
+        return (lastSpace > 24 ? cut[..lastSpace] : cut).TrimEnd() + "\u2026";
+    }
+
+    // Seed the composer from a matter-derived follow-up chip. Does NOT auto-run.
+    internal void UseFollowUp(string chip)
+    {
+        if (string.IsNullOrWhiteSpace(chip)) return;
+        _query = chip;
+    }
+
+    // Seed the composer from a DB-backed starter example prompt. Does NOT auto-run: the attorney
+    // reviews/edits before launching. Applies the example's suggested context when one is provided.
+    internal void UseExamplePrompt(WideSearchExamplePromptDto example)
+    {
+        if (example is null || string.IsNullOrWhiteSpace(example.PromptText)) return;
+        _query = example.PromptText;
+        if (!string.IsNullOrWhiteSpace(example.ContextCode)
+            && _contexts.Any(c => string.Equals(c.ContextCode, example.ContextCode, StringComparison.OrdinalIgnoreCase)))
+        {
+            _selectedContextCode = example.ContextCode!;
+        }
+    }
+
+    // Inline follow-up composer surface for the Overview tab (next to the chips). Binds the same
+    // _query the main composer uses, so a chip click or typed follow-up flows through SearchAsync.
+    internal string FollowUpQuery
+    {
+        get => _query;
+        set => _query = value;
+    }
+
+    internal bool FollowUpBusy => _loading;
+    // Run the follow-up question from the Overview tab. Reuses SearchAsync (persists _query as the
+    // matter Additional Narrative, activates the matter corpus) — never on saved-run views.
+    internal async Task RunFollowUpAsync()
+    {
+        if (_loading) return;
+        if (IsSavedRunView) return;
+        if (string.IsNullOrWhiteSpace(_query) || _query.Trim().Length < 2) return;
         await SearchAsync();
     }
 

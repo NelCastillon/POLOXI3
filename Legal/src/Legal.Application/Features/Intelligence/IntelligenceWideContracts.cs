@@ -48,6 +48,9 @@ public sealed record WideSearchRequest(Guid TenantId,Guid UserId,[Required,Strin
     // Search context (POLOXI.Legal_SearchContext.ContextCode): null/empty/GENERAL keeps the default
     // pipeline; LEGAL routes external grounding through legal sources (CourtListener + GovInfo/eCFR).
     [StringLength(50)]public string? ContextCode{get;init;}
+    // Continuous-chat thread id: all runs sharing this id form one reopenable conversation. Persisted on
+    // POLOXI.Legal_WideSearchRunResult.ConversationId so a whole thread reloads chronologically. Null = standalone.
+    public Guid? ConversationId{get;init;}
     // R2 Matter-first proposal input: when set (and ContextCode==LEGAL), the pipeline loads one
     // immutable Matter Context Snapshot by this id and projects its distinct legal-scope + PI-profile
     // fields into the Astra proposal prompt. The original user Query is preserved verbatim and is never
@@ -78,6 +81,9 @@ public sealed record WideModelOptionDto(string ModelCode,string DeploymentName,s
 
 // Database-backed context option for the wide-search Context dropdown (POLOXI.Legal_SearchContext).
 public sealed record WideSearchContextDto(string ContextCode,string DisplayName,string? Description,bool IsDefault);
+
+// Database-backed example prompt chip for the wide-search composer (POLOXI.Legal_SearchExamplePrompt).
+public sealed record WideSearchExamplePromptDto(string Label,string PromptText,string? ContextCode);
 
 // Well-known search context codes (POLOXI.Legal_SearchContext.ContextCode).
 public static class WideSearchContexts
@@ -264,6 +270,64 @@ public static class WideEntropyBases
 public sealed record WideSearchOperationStartResponse(Guid OperationId);
 
 public sealed record WideSearchOperationStatusResponse(Guid OperationId,string StatusCode,WideSearchResponse? Response,string? ErrorMessage);
+
+// ── /legal/search Run History (per-user) ────────────────────────────────────────────────────────
+// Lightweight list projection for the inline Run History panel. One row per captured standalone Wide
+// run, newest first, scoped to the running user. Promoted scalar metrics drive the premium cards;
+// the full reopenable response lives in the detail payload (fetched on demand).
+public sealed record WideSearchRunSummaryDto(
+	Guid WideSearchRunResultId,
+	Guid WideExecutionId,
+	string Query,
+	string? StatusCode,
+	string? TerminationReasonCode,
+	string? AnswerKindCode,
+	string? FinalAnswer,
+	decimal FinalConfidence,
+	decimal? DecisionConfidence,
+	int DepthReached,
+	int LlmCallCount,
+	int BranchCount,
+	int CandidateCount,
+	int ExternalEvidenceCount,
+	int EnterpriseEvidenceCount,
+	decimal EvidenceCoverage,
+	string? ProviderCodeUsed,
+	string? ModelCodeUsed,
+	string? ContextCode,
+	long DurationMilliseconds,
+	DateTime CreatedDateUtc,
+	Guid? ConversationId=null);
+
+// Paged history result for the inline panel (newest first).
+public sealed record WideSearchRunHistoryPage(IReadOnlyCollection<WideSearchRunSummaryDto> Items,int Page,int PageSize,int TotalCount)
+{
+	public int TotalPages=>PageSize<=0?0:(int)Math.Ceiling(TotalCount/(double)PageSize);
+}
+
+// Full reopen payload: the saved WideSearchResponse rehydrated verbatim plus its header metadata so
+// the page can render the exact saved result read-only.
+public sealed record WideSearchRunDetailDto(
+	Guid WideSearchRunResultId,
+	Guid WideExecutionId,
+	string Query,
+	string? ContextCode,
+	DateTime CreatedDateUtc,
+	WideSearchResponse? Response);
+
+// Capture envelope written once per standalone /legal/search run. DetailJson is the loss-free
+// serialized WideSearchResponse; promoted fields are derived from the response for the list projection.
+public sealed record WideSearchRunCapture(
+	Guid TenantId,
+	Guid UserId,
+	string? ContextCode,
+	WideSearchResponse Response,
+	string DetailJson,
+	Guid? ConversationId=null);
+
+// One run within a reopened conversation thread (ordered oldest-first). DetailJson rehydrates the
+// full WideSearchResponse; Query is the user text for that turn.
+public sealed record WideConversationTurnDto(Guid WideSearchRunResultId,Guid WideExecutionId,string Query,string? ContextCode,DateTime CreatedDateUtc,WideSearchResponse? Response);
 
 // V3.12 P0 stage telemetry: per-LLM-stage wall time and token counts, collected in-memory during
 // the run and disclosed on the response so latency regressions are visible without querying

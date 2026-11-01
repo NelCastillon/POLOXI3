@@ -210,6 +210,18 @@ ORDER BY SortOrder,DisplayName;
         return (await connection.QueryAsync<WideSearchContextDto>(new CommandDefinition(sql,new{TenantId=tenantId},cancellationToken:cancellationToken))).AsList();
     }
 
+    public async Task<IReadOnlyCollection<WideSearchExamplePromptDto>> GetSearchExamplePromptsAsync(Guid tenantId,CancellationToken cancellationToken=default)
+    {
+        const string sql="""
+SELECT Label,PromptText,ContextCode
+FROM POLOXI.Legal_SearchExamplePrompt
+WHERE IsActive=1 AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL)
+ORDER BY SortOrder,Label;
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return (await connection.QueryAsync<WideSearchExamplePromptDto>(new CommandDefinition(sql,new{TenantId=tenantId},cancellationToken:cancellationToken))).AsList();
+    }
+
     public async Task<WideLegalGroundingConfiguration> GetLegalGroundingConfigurationAsync(Guid tenantId,CancellationToken cancellationToken=default)
     {
         const string sql="""
@@ -1091,4 +1103,109 @@ WHERE WideExecutionId=@WideExecutionId AND TenantId=@TenantId AND IsDeleted=0;
         using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         await connection.ExecuteAsync(new CommandDefinition(sql,new{TenantId=tenantId,UserId=userId,update.WideExecutionId,update.InitialEntropy,update.FinalEntropy,update.InitialNormalizedEntropy,update.FinalNormalizedEntropy,update.TotalActualInformationGain,update.InformationRoundCount,update.InformationTargetCount,update.InformationRetrievalCount,update.EntropyBasisCode,update.DecisionConfidence,update.ClarificationTarget,update.ClarificationQuestion,update.IntentEntropy,update.PriorIntentEntropy,update.ClarificationGain,update.ClarificationRound},cancellationToken:cancellationToken));
     }
+
+    // ── /legal/search Run History (per-user, isolated from Decision2) ────────────────────────────
+    public async Task SaveWideSearchRunResultAsync(WideSearchRunCapture capture,CancellationToken cancellationToken=default)
+    {
+        var r=capture.Response;
+        const string sql="""
+INSERT POLOXI.Legal_WideSearchRunResult
+    (WideSearchRunResultId,WideExecutionId,Query,StatusCode,TerminationReasonCode,DepthReached,LlmCallCount,
+     FinalConfidence,DecisionConfidence,AnswerVerificationCode,AnswerKindCode,FinalAnswer,DurationMilliseconds,
+     ProviderCodeUsed,ModelCodeUsed,EvidenceCoverage,ExternalEvidenceCount,EnterpriseEvidenceCount,BranchCount,
+     CandidateCount,ContextCode,ConversationId,DetailJson,CapturedUtc,TenantId,CreatedDateUtc,CreatedByUserId,IsDeleted)
+VALUES
+    (NEWID(),@WideExecutionId,@Query,@StatusCode,@TerminationReasonCode,@DepthReached,@LlmCallCount,
+     @FinalConfidence,@DecisionConfidence,@AnswerVerificationCode,@AnswerKindCode,@FinalAnswer,@DurationMilliseconds,
+     @ProviderCodeUsed,@ModelCodeUsed,@EvidenceCoverage,@ExternalEvidenceCount,@EnterpriseEvidenceCount,@BranchCount,
+     @CandidateCount,@ContextCode,@ConversationId,@DetailJson,SYSUTCDATETIME(),@TenantId,SYSUTCDATETIME(),@UserId,0);
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(sql,new
+        {
+            r.WideExecutionId,r.Query,r.StatusCode,r.TerminationReasonCode,r.DepthReached,r.LlmCallCount,
+            r.FinalConfidence,r.DecisionConfidence,r.AnswerVerificationCode,r.AnswerKindCode,r.FinalAnswer,r.DurationMilliseconds,
+            r.ProviderCodeUsed,r.ModelCodeUsed,r.EvidenceCoverage,r.ExternalEvidenceCount,r.EnterpriseEvidenceCount,
+            BranchCount=r.Branches?.Count??0,CandidateCount=r.Candidates?.Count??0,capture.ContextCode,capture.ConversationId,capture.DetailJson,
+            TenantId=capture.TenantId,UserId=capture.UserId
+        },cancellationToken:cancellationToken));
+    }
+
+    public async Task<WideSearchRunHistoryPage> GetWideSearchRunHistoryAsync(Guid tenantId,Guid userId,int page,int pageSize,CancellationToken cancellationToken=default)
+    {
+        if(page<1)page=1;
+        if(pageSize<1)pageSize=20;
+        if(pageSize>100)pageSize=100;
+        const string sql="""
+SELECT COUNT(1)
+FROM POLOXI.Legal_WideSearchRunResult
+WHERE TenantId=@TenantId AND CreatedByUserId=@UserId AND IsDeleted=0;
+
+SELECT WideSearchRunResultId,WideExecutionId,Query,StatusCode,TerminationReasonCode,AnswerKindCode,FinalAnswer,
+       FinalConfidence,DecisionConfidence,DepthReached,LlmCallCount,BranchCount,CandidateCount,
+       ExternalEvidenceCount,EnterpriseEvidenceCount,EvidenceCoverage,ProviderCodeUsed,ModelCodeUsed,ContextCode,
+       DurationMilliseconds,CreatedDateUtc,ConversationId
+FROM POLOXI.Legal_WideSearchRunResult
+WHERE TenantId=@TenantId AND CreatedByUserId=@UserId AND IsDeleted=0
+ORDER BY CreatedDateUtc DESC
+OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        using var reader=await connection.QueryMultipleAsync(new CommandDefinition(sql,new{TenantId=tenantId,UserId=userId,Offset=(page-1)*pageSize,PageSize=pageSize},cancellationToken:cancellationToken));
+        var total=await reader.ReadFirstAsync<int>();
+        var items=(await reader.ReadAsync<WideSearchRunSummaryDto>()).AsList();
+        return new WideSearchRunHistoryPage(items,page,pageSize,total);
+    }
+
+    public async Task<WideSearchRunDetailDto?> GetWideSearchRunResultAsync(Guid tenantId,Guid userId,Guid wideSearchRunResultId,CancellationToken cancellationToken=default)
+    {
+        const string sql="""
+SELECT TOP(1) WideSearchRunResultId,WideExecutionId,Query,ContextCode,CreatedDateUtc,DetailJson
+FROM POLOXI.Legal_WideSearchRunResult
+WHERE TenantId=@TenantId AND CreatedByUserId=@UserId AND WideSearchRunResultId=@WideSearchRunResultId AND IsDeleted=0;
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var row=await connection.QuerySingleOrDefaultAsync<WideSearchRunResultRow>(new CommandDefinition(sql,new{TenantId=tenantId,UserId=userId,WideSearchRunResultId=wideSearchRunResultId},cancellationToken:cancellationToken));
+        if(row is null)return null;
+        WideSearchResponse? response=null;
+        if(!string.IsNullOrWhiteSpace(row.DetailJson))
+        {
+            // DetailJson is serialized by IntelligenceWideService using JsonSerializerDefaults.Web (camelCase),
+            // so reopen MUST deserialize with the same Web options. Using default (case-sensitive PascalCase)
+            // options silently produced an empty response, which made the Reopen button appear to do nothing.
+            try{response=JsonSerializer.Deserialize<WideSearchResponse>(row.DetailJson,RunHistoryJsonOptions);}
+            catch(JsonException){response=null;}
+        }
+        return new WideSearchRunDetailDto(row.WideSearchRunResultId,row.WideExecutionId,row.Query??string.Empty,row.ContextCode,row.CreatedDateUtc,response);
+    }
+
+    public async Task<IReadOnlyList<WideConversationTurnDto>> GetWideSearchConversationAsync(Guid tenantId,Guid userId,Guid conversationId,CancellationToken cancellationToken=default)
+    {
+        const string sql="""
+SELECT WideSearchRunResultId,WideExecutionId,Query,ContextCode,CreatedDateUtc,DetailJson
+FROM POLOXI.Legal_WideSearchRunResult
+WHERE TenantId=@TenantId AND CreatedByUserId=@UserId AND ConversationId=@ConversationId AND IsDeleted=0
+ORDER BY CreatedDateUtc ASC;
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var rows=await connection.QueryAsync<WideSearchRunResultRow>(new CommandDefinition(sql,new{TenantId=tenantId,UserId=userId,ConversationId=conversationId},cancellationToken:cancellationToken));
+        var turns=new List<WideConversationTurnDto>();
+        foreach(var row in rows)
+        {
+            WideSearchResponse? response=null;
+            if(!string.IsNullOrWhiteSpace(row.DetailJson))
+            {
+                try{response=JsonSerializer.Deserialize<WideSearchResponse>(row.DetailJson,RunHistoryJsonOptions);}
+                catch(JsonException){response=null;}
+            }
+            turns.Add(new WideConversationTurnDto(row.WideSearchRunResultId,row.WideExecutionId,row.Query??string.Empty,row.ContextCode,row.CreatedDateUtc,response));
+        }
+        return turns;
+    }
+
+    private sealed record WideSearchRunResultRow(Guid WideSearchRunResultId,Guid WideExecutionId,string? Query,string? ContextCode,DateTime CreatedDateUtc,string? DetailJson);
+
+    // Must match the serializer used by IntelligenceWideService (JsonSerializerDefaults.Web) so the saved
+    // DetailJson round-trips back into a fully-populated WideSearchResponse on reopen.
+    private static readonly JsonSerializerOptions RunHistoryJsonOptions=new(JsonSerializerDefaults.Web);
 }

@@ -866,7 +866,10 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         // Raw first LLM result: fire the PLAIN query at the selected model in parallel — exactly what the
         // user would get from the model's own chat interface, before POLOXI touches anything. Comparison
         // only; fail-soft so a raw-call failure never blocks the POLOXI answer.
-        var llmRawTask=GetRawLlmRankingAsync(request,cancellationToken);
+        // DISABLED for /legal/personalinjury_decision2 (isolated Wide2 route): the raw comparison baseline
+        // is intentionally skipped here to avoid the extra reasoning-tier LLM call. Downstream still awaits
+        // this task and assigns an empty LlmRawItems collection, so no other behavior changes.
+        var llmRawTask=Task.FromResult<IReadOnlyCollection<WideInterpretiveResultItemDto>>([]);
         try
         {
             // Stage 0 (V2.1): Query Contract — separate hard constraints, output requirements, and the
@@ -4454,6 +4457,32 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             :null;
     }
 
+    // Resolves the DB-backed DimensionCode for ANY scored branch, not only the L1 DIM_ element axes. The
+    // branches that actually feed the disposition element vector are the L2 Domain Pack children: CPT_{concept}
+    // and EVD_{evidenceType} (BuildDomainPackLevel2Branches). Their parent dimension identity is NOT in the
+    // branch code - it is recorded deterministically in the per-run scope ledger (RecordScope persists each
+    // child's dimensionCode keyed by NormalizeCode(branchCode)). Before this resolver the directional-adjustment
+    // loop called ExtractDimensionCode alone, which only matches "DIM_" prefixes, so every CPT_/EVD_ branch
+    // returned null, the signed directional vectors never accumulated, and legally opposite same-archetype
+    // outcomes collapsed to an identical gated composite (the observed identical-support tie). This maps each
+    // scored branch back to its canonical DimensionCode using the authoritative scope ledger first, then falls
+    // back to the DIM_ prefix. No display-name/keyword inference: the mapping is the DB-seeded pack identity.
+    private string? ResolveScoredBranchDimensionCode(WideBranchRecord branch)
+    {
+        if(branch.BranchCode is{Length:>0}branchCode)
+        {
+            if(_scopeLedgerByBranchCode.TryGetValue(NormalizeCode(branchCode),out var scopeIndex)
+                &&scopeIndex>=0&&scopeIndex<_scopeLedger.Count)
+            {
+                var ledgerDimension=_scopeLedger[scopeIndex].DimensionCode;
+                if(!string.IsNullOrWhiteSpace(ledgerDimension))return ledgerDimension;
+            }
+            var direct=ExtractDimensionCode(branchCode);
+            if(direct is not null)return direct;
+        }
+        return null;
+    }
+
     // Signed directional contribution (migration 0451). Maps a dimension's strength onto a specific outcome
     // using the DB-backed DirectionCode/Weight so mirror outcomes (e.g. M3 Plaintiff vs M4 Defense) move in
     // OPPOSITE directions on a shared element axis instead of both absorbing the same positive evidence:
@@ -4580,7 +4609,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             decimal directionAccum=0m,directionWeight=0m;
             foreach(var item in scored)
             {
-                var dimensionCode=ExtractDimensionCode(item.Branch.BranchCode);
+                var dimensionCode=ResolveScoredBranchDimensionCode(item.Branch);
                 if(dimensionCode is null)continue;
                 var contribution=ResolveDirectionalContribution(outcomeCode,dimensionCode,item.Score);
                 if(contribution==0m)continue;
@@ -9161,7 +9190,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                         decimal directionAccum=0m,directionWeight=0m;
                         foreach(var item in dispositionScores)
                         {
-                            var dimensionCode=ExtractDimensionCode(item.Branch.BranchCode);
+                            var dimensionCode=ResolveScoredBranchDimensionCode(item.Branch);
                             if(dimensionCode is null)continue;
                             var contribution=ResolveDirectionalContribution(dispositionOutcomeCode,dimensionCode,item.Score);
                             if(contribution==0m)continue;

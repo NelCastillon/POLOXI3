@@ -50,11 +50,14 @@
                     </select>
                 </label>
                 <label class="poloxi-toggle"><input type="checkbox" @bind="_usePoloxiEngine" /><span></span><strong>POLOXI Engine</strong></label>
+                <button type="button" class="um-btn um-btn-ghost poloxi-history-btn" title="Open your Search History — every /legal/search run you have made, reopenable and re-runnable." @onclick="ToggleHistoryAsync">
+                    <i class="bi bi-clock-history"></i><span>Search History</span>
+                </button>
                 <button class="um-btn poloxi-launch-btn" @onclick="SearchAsync" disabled="@(_loading||string.IsNullOrWhiteSpace(_query))"><span>Let's Go</span><i class="bi bi-arrow-right-circle-fill poloxi-launch-arrow"></i></button>
             </div>
         </section>
 
-        <ResearchHealthPanel />
+        @HistoryPanel
 
         @if (_loading)
         {
@@ -75,6 +78,48 @@
         }
         else if (_response is not null)
         {
+            <div class="visually-hidden" role="status" aria-live="polite">Analysis complete. Results are ready.</div>
+            @if (_reopenedRun is { } reopened)
+            {
+                <div class="poloxi-reopened-banner" role="status">
+                    <i class="bi bi-clock-history"></i>
+                    <div class="poloxi-reopened-text">
+                        <strong>Viewing a saved run</strong>
+                        <span>Captured @reopened.CreatedDateUtc.ToLocalTime().ToString("MMM d, yyyy · h:mm tt") — this is a read-only snapshot.</span>
+                    </div>
+                    <div class="poloxi-reopened-actions">
+                        <button type="button" class="um-btn um-btn-sm" @onclick="() => ReRunAsync(reopened.Query)"><i class="bi bi-arrow-repeat"></i> Re-run this query</button>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="DismissReopenedRun"><i class="bi bi-x-lg"></i> Close</button>
+                    </div>
+                </div>
+            }
+
+            @if (_thread.Count > 1)
+            {
+                <section class="poloxi-thread" aria-label="Conversation so far">
+                    @for (var i = 0; i < _thread.Count - 1; i++)
+                    {
+                        var turn = _thread[i];
+                        @if (turn.StartedNewSegment)
+                        {
+                            <div class="poloxi-thread-divider"><span><i class="bi bi-arrow-repeat"></i> New context — @turn.ContextCode / @turn.ModelCode</span></div>
+                        }
+                        <div class="poloxi-thread-turn">
+                            <div class="poloxi-thread-q"><i class="bi @(turn.IsFollowUp ? "bi-arrow-return-right" : "bi-person")" aria-hidden="true"></i><span>@turn.UserText</span></div>
+                            @if (!string.IsNullOrWhiteSpace(turn.AnswerSummary))
+                            {
+                                <div class="poloxi-thread-a"><i class="bi bi-water" aria-hidden="true"></i><span>@turn.AnswerSummary</span></div>
+                            }
+                        </div>
+                    }
+                    @if (_thread[^1].StartedNewSegment)
+                    {
+                        <div class="poloxi-thread-divider"><span><i class="bi bi-arrow-repeat"></i> New context — @_thread[^1].ContextCode / @_thread[^1].ModelCode</span></div>
+                    }
+                    <div class="poloxi-thread-current"><i class="bi bi-chat-right-dots" aria-hidden="true"></i><span>@_thread[^1].UserText</span></div>
+                </section>
+            }
+
             @if (_response.StatusCode == "USER_CLARIFICATION_REQUIRED" && !string.IsNullOrWhiteSpace(_response.ClarificationQuestion))
             {
                 <section class="poloxi-explanation">
@@ -128,9 +173,6 @@
                                 <h2>Analysis result</h2>
                             }
                         </div>
-                        <span class="poloxi-confidence-pill poloxi-confidence-pill--@answerContext.ConfidenceLabel.ToLowerInvariant()" title="@ConfidenceTooltip">
-                            <i class="bi bi-shield-check"></i> @(HasAnyEvidence ? $"{answerContext.ConfidenceLabel} evidence confidence" : "Evidence confidence: NONE") · @GroundingBadge
-                        </span>
                     </div>
                     <p class="poloxi-answer-narrative">@answerContext.ConfidenceNarrative</p>
                     @if (_response.LegalAnswer is { } legalAnswer)
@@ -466,12 +508,19 @@
                                 <div class="poloxi-evidence-main">
                                     <strong>@InterpretiveBranchDisplayWithLevel(result)</strong>
                                     <small>@result.Interpretation</small>
-                                    @foreach (var item in result.Items)
-                                    {
-                                        <p><strong>@item.RankNumber. @item.Name</strong> &mdash; @item.Detail</p>
-                                    }
-                                    <div>
-                                        <span class="um-badge um-badge-neutral">INTERPRETIVE</span>
+                                     @foreach (var item in result.Items)
+                                     {
+                                         <p>
+                                             <strong>@item.RankNumber. @item.Name</strong>
+                                             @if (item.Score.HasValue)
+                                             {
+                                                 <span class="um-badge um-badge-neutral" title="LLM-assigned strength/likelihood for this item (0-100%).">@item.Score.Value.ToString("P0")</span>
+                                             }
+                                             &mdash; @item.Detail
+                                         </p>
+                                     }
+                                     <div>
+                                         <span class="um-badge um-badge-neutral">INTERPRETIVE</span>
                                         @if (result.DataVolatility == "TIME_SENSITIVE")
                                         {
                                             <span class="um-badge um-badge-warning" title="This result depends on facts that change over time; figures may be outdated."><i class="bi bi-clock-history"></i> TIME-SENSITIVE</span>
@@ -504,12 +553,19 @@
                                         <div class="poloxi-evidence-main">
                                             <strong>@InterpretiveBranchDisplayWithLevel(result)</strong>
                                             <small>@result.Interpretation</small>
-                                            @foreach (var item in result.Items)
-                                            {
-                                                <p><strong>@item.RankNumber. @item.Name</strong> &mdash; @item.Detail</p>
-                                            }
-                                            <div>
-                                                <span class="um-badge um-badge-neutral" title="This interpretation path was demoted to dormant/secondary — retained for completeness, not driving the primary answer.">NOT PRIORITIZED</span>
+                                             @foreach (var item in result.Items)
+                                             {
+                                                 <p>
+                                                     <strong>@item.RankNumber. @item.Name</strong>
+                                                     @if (item.Score.HasValue)
+                                                     {
+                                                         <span class="um-badge um-badge-neutral" title="LLM-assigned strength/likelihood for this item (0-100%).">@item.Score.Value.ToString("P0")</span>
+                                                     }
+                                                     &mdash; @item.Detail
+                                                 </p>
+                                             }
+                                             <div>
+                                                 <span class="um-badge um-badge-neutral" title="This interpretation path was demoted to dormant/secondary
                                                 <span class="um-badge um-badge-neutral">INTERPRETIVE</span>
                                                 @if (result.DataVolatility == "TIME_SENSITIVE")
                                                 {
@@ -523,16 +579,35 @@
                                         </div>
                                         <div class="poloxi-score" title="POLOXI branch-support confidence: interpretation prior blended with evidence support."><strong>@result.Confidence.ToString("P0")</strong><small>POLOXI</small></div>
                                     </article>
-                                }
-                            </div>
-                        }
-                    }
-                </section>
-            </div>
-            }
+                                                     }
+                                                 </div>
+                                                        }
+                                                    }
+                                                </section>
+                                                                             </div>
+                                                                             }
 
-                                </section>
-                            }
+                                                                 </section>
+                                                             }
+
+                                            @if (_response.ExternalReferences.Count > 0)
+                                            {
+                                                <section class="poloxi-answer-section poloxi-reveal poloxi-external-sources">
+                                                    <h3><i class="bi bi-globe2"></i> External sources <small class="poloxi-section-note">Real-world references &middot; LLM knowledge (not enterprise-verified)</small></h3>
+                                                    @foreach (var reference in _response.ExternalReferences)
+                                                    {
+                                                        <article class="poloxi-evidence poloxi-evidence-clickable" @ondblclick="() => OpenExternal(reference.Url)" title="Double-click to open @reference.Url in a new tab.">
+                                                            <span class="poloxi-rank"><i class="bi bi-globe2"></i></span>
+                                                            <div class="poloxi-evidence-main">
+                                                                <strong>@reference.Title</strong>
+                                                                <small>@reference.Source</small>
+                                                                <p>@reference.Summary</p>
+                                                                <div><span class="um-badge um-badge-neutral">@BranchNameWithLevel(reference.BranchDisplayName)</span> <a href="@reference.Url" target="_blank" rel="noopener noreferrer" @onclick:stopPropagation="true">@reference.Url <i class="bi bi-box-arrow-up-right"></i></a></div>
+                                                            </div>
+                                                        </article>
+                                                    }
+                                                </section>
+                                            }
                             @if (!ShowAnswerView && !string.IsNullOrWhiteSpace(_response.FinalAnswer))
             {
                 <section class="poloxi-explanation">
@@ -694,16 +769,28 @@
                                 }
                             </div>
                             <div class="poloxi-score"><strong>@candidate.QualityScore.ToString("P0")</strong><small>Quality</small></div>
-                            <div class="poloxi-score" title="How well the evidence supports the quality score: independent-source diversity and dimension coverage. Weak evidence lowers this confidence, never the quality itself."><strong>@candidate.EvidenceConfidence.ToString("P0")</strong><small>Evidence</small></div>
-                        </article>
-                    }
-                </section>
-            }
+                                             <div class="poloxi-score" title="How well the evidence supports the quality score: independent-source diversity and dimension coverage. Weak evidence lowers this confidence, never the quality itself."><strong>@candidate.EvidenceConfidence.ToString("P0")</strong><small>Evidence</small></div>
+                                        </article>
+                                    }
+                                             </section>
+                                        }
 
-                    <ResearchSourcesPanel Response="_response" />
+                            @if (_response.StatusCode != "USER_CLARIFICATION_REQUIRED")
+                            {
+                                <section class="poloxi-followup" aria-label="Ask a follow-up">
+                                    <div class="poloxi-followup-input">
+                                        <i class="bi bi-chat-right-dots" aria-hidden="true"></i>
+                                        <textarea class="poloxi-followup-area" rows="2" placeholder="Ask a follow-up — POLOXI keeps the same reasoning context. Changing model or context starts a fresh thread."
+                                                  @bind="_followUp" @bind:event="oninput" @onkeydown="FollowUpKeyDown" disabled="@_loading"></textarea>
+                                        <button type="button" class="um-btn um-btn-primary poloxi-followup-btn" disabled="@(_loading || string.IsNullOrWhiteSpace(_followUp))" @onclick="SubmitFollowUpAsync">
+                                            <i class="bi bi-arrow-return-right"></i><span>Continue</span>
+                                        </button>
+                                    </div>
+                                </section>
+                            }
 
-        }
-    </div>
+                                    }
+                </div>
 
     @if (_ambiguityPopupGroup is { } ag)
     {
@@ -953,6 +1040,100 @@
 </LegalWorkspace>
 
 @code {
+    // ── /legal/search Run History (per-user, inline drawer) ─────────────────────────────────────
+    // Premium inline history panel: lists the signed-in user's own past runs (newest first), with
+    // KPI-style metrics per run, pagination, reopen (full read-only restore of the saved response),
+    // and re-run. Isolated from Decision2.
+    private RenderFragment HistoryPanel => __builder =>
+    {
+        @if (_showHistory)
+        {
+            <section class="poloxi-history" aria-label="Search history">
+                <div class="poloxi-history-header">
+                    <div class="poloxi-history-title">
+                        <span class="poloxi-history-icon"><i class="bi bi-clock-history"></i></span>
+                        <div>
+                            <span>Your searches — reopen a saved result or re-run the query</span>
+                            <h2>Search History</h2>
+                        </div>
+                    </div>
+                    <div class="poloxi-history-actions">
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="RefreshHistoryAsync" disabled="@_historyLoading"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _showHistory = false"><i class="bi bi-x-lg"></i> Close</button>
+                    </div>
+                </div>
+
+                @if (_historyError is not null)
+                {
+                    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_historyError</div>
+                }
+
+                @if (_historyLoading)
+                {
+                    <div class="poloxi-history-loading"><span class="spinner-border"></span> Loading search history…</div>
+                }
+                else if (_history is null || _history.Items.Count == 0)
+                {
+                    <div class="poloxi-history-empty">
+                        <i class="bi bi-inboxes"></i>
+                        <h3>No searches yet</h3>
+                        <p>Run a search and it will appear here — reopenable and re-runnable.</p>
+                    </div>
+                }
+                else
+                {
+                    <div class="poloxi-history-list">
+                        @foreach (var run in _history.Items)
+                        {
+                            <div class="poloxi-history-card @(run.WideSearchRunResultId == _reopenedRun?.WideSearchRunResultId ? "poloxi-history-card--active" : "")">
+                                <div class="poloxi-history-card-main" @onclick="() => ReopenRunAsync(run.WideSearchRunResultId)">
+                                    <div class="poloxi-history-card-top">
+                                        <span class="poloxi-history-status poloxi-history-status--@(HistoryStatusClass(run.StatusCode))">@HistoryStatusLabel(run.StatusCode)</span>
+                                        <span class="poloxi-history-when" title="@run.CreatedDateUtc.ToLocalTime().ToString("f")">@RelativeTime(run.CreatedDateUtc)</span>
+                                    </div>
+                                    <p class="poloxi-history-query">@run.Query</p>
+                                    @if (!string.IsNullOrWhiteSpace(run.FinalAnswer))
+                                    {
+                                        <p class="poloxi-history-answer">@Truncate(run.FinalAnswer!, 160)</p>
+                                    }
+                                    <div class="poloxi-history-metrics">
+                                        <span title="Decision/interpretation confidence"><i class="bi bi-speedometer2"></i> @(((run.DecisionConfidence ?? run.FinalConfidence)).ToString("P0"))</span>
+                                        <span title="Ranked candidates"><i class="bi bi-trophy"></i> @run.CandidateCount</span>
+                                        <span title="Interpretation branches explored"><i class="bi bi-diagram-3"></i> @run.BranchCount</span>
+                                        <span title="Evidence items (external + enterprise)"><i class="bi bi-link-45deg"></i> @(run.ExternalEvidenceCount + run.EnterpriseEvidenceCount)</span>
+                                        <span title="LLM calls"><i class="bi bi-cpu"></i> @run.LlmCallCount</span>
+                                        <span title="Duration"><i class="bi bi-stopwatch"></i> @FormatDuration(run.DurationMilliseconds)</span>
+                                        @if (!string.IsNullOrWhiteSpace(run.ModelCodeUsed))
+                                        {
+                                            <span title="Model used"><i class="bi bi-robot"></i> @run.ModelCodeUsed</span>
+                                        }
+                                    </div>
+                                </div>
+                                <div class="poloxi-history-card-actions">
+                                    <button type="button" class="um-btn um-btn-sm" title="Reopen the exact saved result (read-only)" @onclick="() => ReopenRunAsync(run.WideSearchRunResultId)" @onclick:stopPropagation="true"><i class="bi bi-box-arrow-up-right"></i> Reopen</button>
+                                    @if (run.ConversationId is { } convId)
+                                    {
+                                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" title="Reopen the full conversation thread and keep chatting" @onclick="() => ReopenThreadAsync(convId)" @onclick:stopPropagation="true"><i class="bi bi-chat-dots"></i> Reopen thread</button>
+                                    }
+                                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" title="Run this query again" @onclick="() => ReRunAsync(run.Query)" @onclick:stopPropagation="true"><i class="bi bi-arrow-repeat"></i> Re-run</button>
+                                </div>
+                            </div>
+                        }
+                    </div>
+
+                    @if (_history.TotalPages > 1)
+                    {
+                        <div class="poloxi-history-pager">
+                            <button type="button" class="um-btn um-btn-ghost um-btn-sm" disabled="@(_history.Page <= 1 || _historyLoading)" @onclick="() => LoadHistoryAsync(_history.Page - 1)"><i class="bi bi-chevron-left"></i> Previous</button>
+                            <span class="poloxi-history-pageinfo">Page @_history.Page of @_history.TotalPages · @_history.TotalCount run@(_history.TotalCount == 1 ? "" : "s")</span>
+                            <button type="button" class="um-btn um-btn-ghost um-btn-sm" disabled="@(_history.Page >= _history.TotalPages || _historyLoading)" @onclick="() => LoadHistoryAsync(_history.Page + 1)">Next <i class="bi bi-chevron-right"></i></button>
+                        </div>
+                    }
+                }
+            </section>
+        }
+    };
+
     // POLOXI ABV (Actionable Business Value): advisory next-action panel. The LLM proposes intent only;
     // impact/urgency/owner/action resolve deterministically from a database-backed Domain Pack, each with
     // provenance. Review-only in phase 1 (ExecutionAllowed=false, human approval required).
@@ -1469,34 +1650,6 @@
                     </div>
                 </li>
             </ol>
-            @if (_showPipeline)
-            {
-                <section class="poloxi-panel poloxi-pipeline-panel">
-                    <div class="poloxi-panel-header">
-                        <div class="poloxi-panel-title">
-                            <span class="poloxi-panel-icon"><i class="bi bi-diagram-3"></i></span>
-                            <div><span>End-to-end POLOXI pipeline</span><h2>MECE + hierarchical decomposition</h2></div>
-                        </div>
-                        <span class="poloxi-status" title="Interpretation defines quality, evidence supports confidence, constraints veto only explicit requirements.">QUALITY FIRST</span>
-                    </div>
-                    <ol class="poloxi-pipeline-steps">
-                        <li><strong>Query contract</strong><span>Separate fixed constraints from the ambiguous concept being ranked.</span></li>
-                        <li><strong>MECE hierarchy</strong><span>Decompose the ambiguous concept into non-overlapping, collectively exhaustive parent dimensions.</span></li>
-                        <li><strong>Hierarchical sub-criteria</strong><span>Break parent dimensions into child criteria, then roll children back into the parent so nothing is double counted.</span></li>
-                        <li><strong>Candidate discovery</strong><span>@(FinalRankedCandidates.Count > 0 ? "Merge interpretive candidates, harvested evidence names, and verified seed candidates; reject query echoes and pseudo-candidates." : "Candidate competition data was not produced for this execution.")</span></li>
-                        <li><strong>Candidate × Branch matrix</strong><span>@(FinalRankedCandidates.Count > 0 ? "Score every candidate against every scoreable dimension and compute quality from interpretation-weighted dimensions." : "No final Candidate × Branch matrix is available for this run.")</span></li>
-                        <li><strong>Evidence confidence</strong><span>Use source diversity and dimension coverage to disclose confidence/support, not to override quality.</span></li>
-                        <li><strong>Constraint guardrails</strong><span>Apply veto penalties only when the query states an explicit hard requirement.</span></li>
-                        <li><strong>Final ranking</strong><span>Rank by composite quality first, then use support tier as the tie-breaker.</span></li>
-                    </ol>
-                    <div class="poloxi-formula-grid">
-                        <article><span>Branch confidence</span><strong>0.45 × Interpretation + 0.55 × Evidence</strong><small>Used for lifecycle, support, and diagnostics.</small></article>
-                        <article><span>Quality weighting</span><strong>Interpretation prior</strong><small>Determines dimension importance in the candidate composite.</small></article>
-                        <article><span>Roll-up</span><strong>50% parent + 50% children</strong><small>Uses hierarchical decomposition without double counting.</small></article>
-                        <article><span>Ranking order</span><strong>Quality → Support tier</strong><small>Evidence validates confidence; quality leads the answer.</small></article>
-                    </div>
-                </section>
-            }
             @if (ShouldShowComparisonPanel)
             {
                 <div class="poloxi-compare">
@@ -1669,6 +1822,36 @@
     private bool _showAnswerView = true;
     private string? _error;
     private WideSearchResponse? _response;
+
+    // Continuous-chat thread (Phase 1, in-memory). Each turn captures the user's text and the resulting
+    // response summary; the latest turn is the one fully rendered via _response. Follow-ups chain to the
+    // previous turn's WideExecutionId so POLOXI reweights the SAME reasoning context instead of restarting.
+    private readonly List<ConversationTurn> _thread = [];
+    private string _followUp = "";
+    // The model/context the current thread was rooted with. If the user changes either mid-thread, the next
+    // follow-up starts a FRESH ROOT (no ParentWideExecutionId) to keep grounding coherent.
+    private string _threadRootModelCode = "";
+    private string _threadRootContextCode = "";
+    private Guid? _conversationId;
+
+    private sealed class ConversationTurn
+    {
+        public required string UserText { get; init; }
+        public required bool IsFollowUp { get; init; }
+        public Guid WideExecutionId { get; set; }
+        public string? AnswerSummary { get; set; }
+        public string? ModelCode { get; init; }
+        public string? ContextCode { get; init; }
+        public bool StartedNewSegment { get; init; }
+    }
+
+    // /legal/search Run History (per-user) state.
+    private bool _showHistory;
+    private bool _historyLoading;
+    private string? _historyError;
+    private WideSearchRunHistoryPage? _history;
+    private WideSearchRunDetailDto? _reopenedRun;
+    private const int HistoryPageSize = 10;
 
     private bool ShowAnswerView => _showAnswerView && _response?.AnswerContext is not null && _response.StatusCode != "USER_CLARIFICATION_REQUIRED";
     // FinalConfidence equals the evidence-weighted DecisionConfidence ONLY when a Candidate × Branch
@@ -1974,13 +2157,21 @@
     {
         if (string.IsNullOrWhiteSpace(_query) || _query.Trim().Length < 2) return;
         _clarificationAnswer = "";
+        // A brand-new search starts a fresh conversation thread.
+        _thread.Clear();
+        _conversationId = Guid.NewGuid();
+        _followUp = "";
+        _threadRootModelCode = _selectedModelCode ?? "";
+        _threadRootContextCode = _selectedContextCode ?? "";
         _loading = true;
         _error = null;
         _searchCancellation?.Dispose();
         _searchCancellation = new CancellationTokenSource();
+        var userText = _query.Trim();
         try
         {
-            _response = await Api.IntelligentSearchWideDynamicAsync(new(Guid.Empty, Guid.Empty, _query.Trim(), 50, Guid.NewGuid().ToString("N")) { UsePoloxiEngine = _usePoloxiEngine, ModelCode = string.IsNullOrWhiteSpace(_selectedModelCode) ? "gpt-4.1-mini" : _selectedModelCode, ContextCode = _selectedContextCode }, _searchCancellation.Token);
+            _response = await Api.IntelligentSearchWideDynamicAsync(new(Guid.Empty, Guid.Empty, userText, 50, Guid.NewGuid().ToString("N")) { UsePoloxiEngine = _usePoloxiEngine, ModelCode = string.IsNullOrWhiteSpace(_selectedModelCode) ? "gpt-4.1-mini" : _selectedModelCode, ContextCode = _selectedContextCode, ConversationId = _conversationId }, _searchCancellation.Token);
+            RecordTurn(userText, isFollowUp: false, startedNewSegment: false);
         }
         catch (OperationCanceledException)
         {
@@ -1995,6 +2186,38 @@
             _loading = false;
         }
     }
+
+    // Appends the just-completed run to the in-memory thread and remembers the chaining anchor.
+    private void RecordTurn(string userText, bool isFollowUp, bool startedNewSegment)
+    {
+        if (_response is null) return;
+        _thread.Add(new ConversationTurn
+        {
+            UserText = userText,
+            IsFollowUp = isFollowUp,
+            WideExecutionId = _response.WideExecutionId,
+            AnswerSummary = BuildAnswerSummary(_response),
+            ModelCode = string.IsNullOrWhiteSpace(_selectedModelCode) ? "Auto" : _selectedModelCode,
+            ContextCode = _selectedContextCode,
+            StartedNewSegment = startedNewSegment
+        });
+    }
+
+    // A short, honest one-line summary of a response for the transcript (no fabricated content).
+    private static string BuildAnswerSummary(WideSearchResponse response)
+    {
+        if (response.StatusCode == "USER_CLARIFICATION_REQUIRED" && !string.IsNullOrWhiteSpace(response.ClarificationQuestion))
+            return "Clarification requested: " + response.ClarificationQuestion;
+        if (response.AnswerContext?.WinnerDisplayName is { Length: > 0 } winner)
+            return winner + " ranks #1" + (response.Candidates.Count > 1 ? $" of {response.Candidates.Count} candidates" : "");
+        if (!string.IsNullOrWhiteSpace(response.FinalAnswer))
+        {
+            var text = response.FinalAnswer!.Trim();
+            return text.Length > 160 ? text[..160] + "…" : text;
+        }
+        return "Answer ready";
+    }
+
 
     // V2.8: submitting a clarification answer continues the SAME reasoning context — the answer is
     // sent as an added constraint alongside the original query, so POLOXI reweights instead of restarting.
@@ -2020,6 +2243,7 @@
         try
         {
             _response = await Api.IntelligentSearchWideDynamicAsync(new(Guid.Empty, Guid.Empty, _query.Trim(), 50, Guid.NewGuid().ToString("N")) { UsePoloxiEngine = _usePoloxiEngine, ClarificationAnswer = answer.Trim(), ClarificationTarget = target, ClarificationRound = round, PriorIntentEntropy = priorIntentEntropy, OriginalAnswerKind = originalAnswerKind, ParentWideExecutionId = parentExecutionId, ModelCode = string.IsNullOrWhiteSpace(_selectedModelCode) ? "gpt-4.1-mini" : _selectedModelCode, ContextCode = _selectedContextCode }, _searchCancellation.Token);
+            RecordTurn(answer.Trim(), isFollowUp: true, startedNewSegment: false);
             _clarificationAnswer = "";
         }
         catch (OperationCanceledException)
@@ -2035,6 +2259,65 @@
             _loading = false;
         }
     }
+
+    // Continuous chat: a free-text follow-up continues the SAME POLOXI reasoning chain by sending the
+    // previous turn's WideExecutionId as ParentWideExecutionId. If the user changed model or context since
+    // the thread root, we start a FRESH ROOT (no parent) so grounding stays coherent.
+    private async Task SubmitFollowUpAsync()
+    {
+        var answer = _followUp.Trim();
+        if (string.IsNullOrWhiteSpace(answer) || _response is null || _loading) return;
+
+        var currentModel = _selectedModelCode ?? "";
+        var currentContext = _selectedContextCode ?? "";
+        var contextChanged = currentModel != _threadRootModelCode || currentContext != _threadRootContextCode;
+
+        Guid? parentExecutionId = contextChanged ? null : _response.WideExecutionId;
+        var round = contextChanged ? 0 : _response.ClarificationRound + 1;
+        var priorIntentEntropy = contextChanged ? (decimal?)null : _response.IntentEntropy;
+        var originalAnswerKind = contextChanged ? null : _response.AnswerKindCode;
+
+        if (contextChanged)
+        {
+            // Re-root the thread to the newly selected model/context. Start a new conversation segment so
+            // incompatible grounding is never threaded into the same durable conversation.
+            _threadRootModelCode = currentModel;
+            _threadRootContextCode = currentContext;
+            _conversationId = Guid.NewGuid();
+        }
+
+        _loading = true;
+        _error = null;
+        _searchCancellation?.Dispose();
+        _searchCancellation = new CancellationTokenSource();
+        try
+        {
+            _response = await Api.IntelligentSearchWideDynamicAsync(new(Guid.Empty, Guid.Empty, answer, 50, Guid.NewGuid().ToString("N")) { UsePoloxiEngine = _usePoloxiEngine, ClarificationRound = round, PriorIntentEntropy = priorIntentEntropy, OriginalAnswerKind = originalAnswerKind, ParentWideExecutionId = parentExecutionId, ModelCode = string.IsNullOrWhiteSpace(_selectedModelCode) ? "gpt-4.1-mini" : _selectedModelCode, ContextCode = _selectedContextCode, ConversationId = _conversationId }, _searchCancellation.Token);
+            RecordTurn(answer, isFollowUp: true, startedNewSegment: contextChanged);
+            _followUp = "";
+        }
+        catch (OperationCanceledException)
+        {
+            // User-initiated cancel — keep the thread on screen.
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task FollowUpKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Enter" && !args.ShiftKey)
+        {
+            await SubmitFollowUpAsync();
+        }
+    }
+
 
     // Cancels the in-flight wide search: stops the client poll loop and (best-effort) the server-side pipeline.
     private void CancelSearch() => _searchCancellation?.Cancel();
@@ -2065,6 +2348,160 @@
     private async Task OpenExternal(string url)
     {
         if (!string.IsNullOrWhiteSpace(url)) await JS.InvokeVoidAsync("open", url, "_blank", "noopener,noreferrer");
+    }
+
+    // ── /legal/search Run History (per-user) ────────────────────────────────────────────────────
+    private async Task ToggleHistoryAsync()
+    {
+        _showHistory = !_showHistory;
+        if (_showHistory && _history is null) await LoadHistoryAsync(1);
+    }
+
+    private Task RefreshHistoryAsync() => LoadHistoryAsync(_history?.Page ?? 1);
+
+    private async Task LoadHistoryAsync(int page)
+    {
+        if (page < 1) page = 1;
+        _historyLoading = true;
+        _historyError = null;
+        try
+        {
+            _history = await Api.GetSearchRunHistoryAsync(page, HistoryPageSize);
+        }
+        catch (Exception ex)
+        {
+            _historyError = $"Could not load search history: {ex.Message}";
+        }
+        finally
+        {
+            _historyLoading = false;
+        }
+    }
+
+    // Reopen the exact saved result read-only: rehydrate the full WideSearchResponse into the page.
+    private async Task ReopenRunAsync(Guid wideSearchRunResultId)
+    {
+        _historyError = null;
+        try
+        {
+            var detail = await Api.GetSearchRunResultAsync(wideSearchRunResultId);
+            if (detail is null)
+            {
+                _historyError = "That run could not be found — it may have been removed.";
+                return;
+            }
+            if (detail.Response is null)
+            {
+                _historyError = "That run has no saved result to reopen.";
+                return;
+            }
+            _reopenedRun = detail;
+            _response = detail.Response;
+            _query = detail.Query;
+            _error = null;
+            _showAnswerView = true;
+            _showHistory = false;
+        }
+        catch (Exception ex)
+        {
+            _historyError = $"Could not reopen the run: {ex.Message}";
+        }
+    }
+
+    private void DismissReopenedRun()
+    {
+        _reopenedRun = null;
+        _response = null;
+    }
+
+    // Reopen a full conversation thread (every run sharing the ConversationId, oldest first) and make it
+    // LIVE again: the last turn becomes the active _response, the in-memory transcript is rebuilt, and the
+    // thread root (conversation id + model/context) is restored so the next follow-up continues the chain.
+    private async Task ReopenThreadAsync(Guid conversationId)
+    {
+        _historyError = null;
+        try
+        {
+            var turns = await Api.GetSearchConversationAsync(conversationId);
+            var usable = turns.Where(t => t.Response is not null).ToList();
+            if (usable.Count == 0)
+            {
+                _historyError = "That conversation has no saved results to reopen.";
+                return;
+            }
+
+            _thread.Clear();
+            for (var i = 0; i < usable.Count; i++)
+            {
+                var turn = usable[i];
+                _thread.Add(new ConversationTurn
+                {
+                    UserText = turn.Query,
+                    IsFollowUp = i > 0,
+                    WideExecutionId = turn.WideExecutionId,
+                    AnswerSummary = BuildAnswerSummary(turn.Response!),
+                    ModelCode = turn.Response!.ModelCodeUsed,
+                    ContextCode = turn.ContextCode,
+                    StartedNewSegment = i == 0
+                });
+            }
+
+            var last = usable[^1];
+            _reopenedRun = null;
+            _conversationId = conversationId;
+            _response = last.Response;
+            _query = usable[0].Query;
+            _threadRootModelCode = _selectedModelCode ?? "";
+            _threadRootContextCode = _selectedContextCode ?? "";
+            _error = null;
+            _showAnswerView = true;
+            _showHistory = false;
+        }
+        catch (Exception ex)
+        {
+            _historyError = $"Could not reopen the conversation: {ex.Message}";
+        }
+    }
+
+    // Re-run a saved query as a brand-new live search (creates a new run in history).
+    private async Task ReRunAsync(string query)
+    {
+        _reopenedRun = null;
+        _showHistory = false;
+        _query = query;
+        await SearchAsync();
+        if (_showHistory) await LoadHistoryAsync(1);
+    }
+
+    private static string HistoryStatusLabel(string? statusCode) => statusCode switch
+    {
+        null or "" => "Completed",
+        "USER_CLARIFICATION_REQUIRED" => "Clarification",
+        _ => System.Globalization.CultureInfo.CurrentCulture.TextInfo.ToTitleCase(statusCode.Replace('_', ' ').ToLowerInvariant()),
+    };
+
+    private static string HistoryStatusClass(string? statusCode) => statusCode switch
+    {
+        "USER_CLARIFICATION_REQUIRED" => "clarify",
+        "FAILED" or "ERROR" => "failed",
+        "CANCELLED" => "cancelled",
+        _ => "ok",
+    };
+
+    private static string FormatDuration(long milliseconds)
+        => milliseconds >= 1000 ? $"{milliseconds / 1000.0:0.0}s" : $"{milliseconds}ms";
+
+    private static string Truncate(string value, int max)
+        => value.Length <= max ? value : value[..max].TrimEnd() + "…";
+
+    private static string RelativeTime(DateTime utc)
+    {
+        var delta = DateTime.UtcNow - utc;
+        if (delta.TotalSeconds < 60) return "just now";
+        if (delta.TotalMinutes < 60) return $"{(int)delta.TotalMinutes}m ago";
+        if (delta.TotalHours < 24) return $"{(int)delta.TotalHours}h ago";
+        if (delta.TotalDays < 7) return $"{(int)delta.TotalDays}d ago";
+        return utc.ToLocalTime().ToString("MMM d, yyyy");
     }
 }
 

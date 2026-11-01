@@ -53,6 +53,8 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
 
     public Task<IReadOnlyCollection<WideSearchContextDto>> GetSearchContextsAsync(Guid tenantId,CancellationToken cancellationToken=default)=>wideRepository.GetSearchContextsAsync(tenantId,cancellationToken);
 
+    public Task<IReadOnlyCollection<WideSearchExamplePromptDto>> GetSearchExamplePromptsAsync(Guid tenantId,CancellationToken cancellationToken=default)=>wideRepository.GetSearchExamplePromptsAsync(tenantId,cancellationToken);
+
     public Task<IReadOnlyCollection<LegalGroundingSettingDto>> GetLegalGroundingSettingsAsync(CancellationToken cancellationToken=default)=>wideRepository.GetLegalGroundingSettingsAsync(cancellationToken);
 
     public Task SaveLegalGroundingSettingAsync(SaveLegalGroundingSettingRequest request,Guid actorUserId,CancellationToken cancellationToken=default)=>wideRepository.SaveLegalGroundingSettingAsync(request,actorUserId,cancellationToken);
@@ -68,6 +70,19 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
     public Task<bool> GetShowPipelineAsync(CancellationToken cancellationToken=default)=>wideRepository.GetShowPipelineAsync(cancellationToken);
 
     public Task SaveShowPipelineAsync(bool showPipeline,CancellationToken cancellationToken=default)=>wideRepository.SaveShowPipelineAsync(showPipeline,cancellationToken);
+
+    // /legal/search Run History (per-user). Isolated from Decision2.
+    public Task<WideSearchRunHistoryPage> GetSearchRunHistoryAsync(Guid tenantId,Guid userId,int page,int pageSize,CancellationToken cancellationToken=default)
+        =>wideRepository.GetWideSearchRunHistoryAsync(tenantId,userId,page,pageSize,cancellationToken);
+
+    public Task<WideSearchRunDetailDto?> GetSearchRunResultAsync(Guid tenantId,Guid userId,Guid wideSearchRunResultId,CancellationToken cancellationToken=default)
+        =>wideRepository.GetWideSearchRunResultAsync(tenantId,userId,wideSearchRunResultId,cancellationToken);
+
+    public Task<IReadOnlyList<WideConversationTurnDto>> GetSearchConversationAsync(Guid tenantId,Guid userId,Guid conversationId,CancellationToken cancellationToken=default)
+        =>wideRepository.GetWideSearchConversationAsync(tenantId,userId,conversationId,cancellationToken);
+
+    // Serializer for the loss-free Run History capture of the full WideSearchResponse.
+    private static readonly System.Text.Json.JsonSerializerOptions RunHistoryJsonOptions=new(System.Text.Json.JsonSerializerDefaults.Web);
 
     public async Task<PoloxiSearchResponse> SearchWithPoloxiWideAsync(PoloxiSearchRequest request,CancellationToken cancellationToken=default)
     {
@@ -512,7 +527,30 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
     // Depth is unbounded; the LLM decides when narrowing is no longer relevant. DB-backed circuit breakers
     // (AbsoluteDepthCeiling, MaximumTotalLlmCalls) only guard against runaway cost.
     // ---------------------------------------------------------------------------------------------------
+    // Public entry point: runs the Wide pipeline, then best-effort captures the completed run into the
+    // per-user /legal/search Run History so it can be listed and reopened. Capture never breaks search.
     public async Task<WideSearchResponse> SearchDynamicAsync(WideSearchRequest request,CancellationToken cancellationToken=default)
+    {
+        var response=await SearchDynamicCoreAsync(request,cancellationToken);
+        try
+        {
+            if(request.TenantId!=Guid.Empty&&request.UserId!=Guid.Empty)
+            {
+                var detailJson=System.Text.Json.JsonSerializer.Serialize(response,RunHistoryJsonOptions);
+                await wideRepository.SaveWideSearchRunResultAsync(
+                    new WideSearchRunCapture(request.TenantId,request.UserId,request.ContextCode,response,detailJson,request.ConversationId),
+                    cancellationToken);
+            }
+        }
+        catch(Exception ex)when(!cancellationToken.IsCancellationRequested)
+        {
+            // Fail-soft: Run History is observability, never part of the critical result path.
+            logger.LogWarning(ex,"Failed to capture /legal/search Run History for execution {WideExecutionId}.",response.WideExecutionId);
+        }
+        return response;
+    }
+
+    private async Task<WideSearchResponse> SearchDynamicCoreAsync(WideSearchRequest request,CancellationToken cancellationToken=default)
     {
         Validate(request);
         if(request.UserId==Guid.Empty)throw new UnauthorizedAccessException("An authenticated user is required for Wide search.");
@@ -2354,13 +2392,13 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
                     }
                     if(authorities.Count>0)
                     {
-                        var collected=new List<WideExternalKnowledgeSnippet>();
-                        foreach(var authority in authorities.Take(2))
+                        var authorityTargets=authorities.Take(2).ToArray();
+                        var perAuthority=await Task.WhenAll(authorityTargets.Select(authority=>
                         {
                             var attributionQuery=NormalizeQuery($"{authority.Query} {branch.DisplayName}").ToLowerInvariant();
-                            collected.AddRange(await RetrieveStampedAsync(branch,authority.Query,attributionQuery,authority.Kind,authority));
-                        }
-                        results[index]=collected;
+                            return RetrieveStampedAsync(branch,authority.Query,attributionQuery,authority.Kind,authority);
+                        }));
+                        results[index]=perAuthority.SelectMany(snippets=>snippets).ToArray();
                     }
                     else if(useLegalGrounding)
                     {
@@ -4039,6 +4077,18 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
         }
         // Minimum independent-host requirement: a metric derived from a single source is not trusted
         // enough to influence the Candidate × Branch matrix.
+        // Magnitude-coherence guard: a single monetary branch (e.g. "Housing affordability") routinely
+        // captures BOTH a rent figure ($2,280) and a home-value figure ($1,074,700) from the same
+        // snippets. Averaging them fabricates a meaningless number that, after min-max inversion,
+        // crushed the only candidate with cited data to ~0 (the Torrance 6% artifact) even though that
+        // candidate held the LOWEST cited housing cost. When the extracted numbers span more than one
+        // order of magnitude they are not the same metric - reject the extraction and fall back to the
+        // model's judgment for this cell instead of blending a garbage value.
+        if(numbers.Count>1)
+        {
+            var nonZero=numbers.Where(number=>number>0m).ToArray();
+            if(nonZero.Length>1&&nonZero.Max()/nonZero.Min()>25m){value=0;return false;}
+        }
         value=numbers.Count==0?0:numbers.Average();
         return numbers.Count>0&&hosts.Count>=2;
     }
@@ -5657,61 +5707,27 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
                     scoredByCandidate[resolved]=existing with{BranchScores=merged};
                 }
             }
-            // V3.11.1 Anchor Calibration: chunk-local scoring has NO shared basis — the model grades
-            // each chunk relatively, so every chunk produced its own 100% "winner" per branch and the
-            // merged matrix carried several fabricated per-branch maxima (multiple 100%s on the same
-            // Safety branch). The top interpretive-support candidates now ride along in EVERY chunk as
-            // shared anchors; each later chunk's branch scores are rescaled so its anchor scores align
-            // with the reference chunk's anchor scores, giving all chunks one common scoring basis.
-            // Anchors are scored once (merge dedupes on resolved identity), never re-admitted twice.
+            // ORIGINAL POLOXI FORMULA: the V3.11.1 Anchor Calibration chunk rescaling has been removed.
+            // The top interpretive-support candidates still ride along in every chunk as shared anchors
+            // (so each chunk has a common reference set), but chunk branch scores are no longer deflated
+            // toward a reference chunk — scores are merged as the matrix model returns them.
             var anchorCandidates=candidateNames.Take(Math.Min(3,candidateNames.Length)).ToArray();
             var anchorNames=new HashSet<string>(anchorCandidates.Select(anchor=>anchor.Name),StringComparer.OrdinalIgnoreCase);
-            // Reference anchor branch scores from the FIRST chunk that returns them.
-            var anchorReference=new Dictionary<string,Dictionary<string,decimal>>(StringComparer.OrdinalIgnoreCase);
-            List<WideCandidateScore> CalibrateChunk(List<WideCandidateScore> chunkScores)
-            {
-                if(chunkScores.Count==0)return chunkScores;
-                var chunkAnchors=chunkScores
-                    .Select(score=>(Score:score,Resolved:ResolveCandidateName(score.Name)))
-                    .Where(pair=>pair.Resolved is not null&&anchorNames.Contains(pair.Resolved))
-                    .ToArray();
-                if(anchorReference.Count==0)
-                {
-                    foreach(var(score,resolved)in chunkAnchors)
-                        anchorReference[resolved!]=score.BranchScores.GroupBy(branchScore=>branchScore.BranchDisplayName,StringComparer.OrdinalIgnoreCase).ToDictionary(group=>group.Key,group=>group.First().EvidenceScore,StringComparer.OrdinalIgnoreCase);
-                    return chunkScores;
-                }
-                // Per-branch scale = mean(reference anchor score)/mean(this chunk's anchor score).
-                var scaleByBranch=new Dictionary<string,decimal>(StringComparer.OrdinalIgnoreCase);
-                foreach(var branchName in chunkAnchors.SelectMany(pair=>pair.Score.BranchScores.Select(branchScore=>branchScore.BranchDisplayName)).Distinct(StringComparer.OrdinalIgnoreCase))
-                {
-                    var pairs=chunkAnchors
-                        .Select(pair=>(Chunk:pair.Score.BranchScores.FirstOrDefault(branchScore=>string.Equals(branchScore.BranchDisplayName,branchName,StringComparison.OrdinalIgnoreCase))?.EvidenceScore,
-                            Reference:pair.Resolved is not null&&anchorReference.TryGetValue(pair.Resolved,out var reference)&&reference.TryGetValue(branchName,out var referenceScore)?referenceScore:(decimal?)null))
-                        .Where(pair=>pair.Chunk is>0m&&pair.Reference is not null)
-                        .ToArray();
-                    if(pairs.Length==0)continue;
-                    var scale=pairs.Average(pair=>pair.Reference!.Value)/pairs.Average(pair=>pair.Chunk!.Value);
-                    // Only deflate — inflating non-anchor scores would fabricate strength.
-                    if(scale<1m)scaleByBranch[branchName]=scale;
-                }
-                if(scaleByBranch.Count==0)return chunkScores;
-                return chunkScores.Select(score=>
-                {
-                    var resolved=ResolveCandidateName(score.Name);
-                    if(resolved is not null&&anchorNames.Contains(resolved))return score;
-                    var rescaled=score.BranchScores.Select(branchScore=>scaleByBranch.TryGetValue(branchScore.BranchDisplayName,out var scale)
-                        ?branchScore with{EvidenceScore=Math.Clamp(branchScore.EvidenceScore*scale,0,1)}
-                        :branchScore).ToArray();
-                    return score with{BranchScores=rescaled};
-                }).ToList();
-            }
             var nonAnchorPool=candidateNames.Where(candidate=>!anchorNames.Contains(candidate.Name)).ToArray();
             var matrixChunks=new List<(string Name,string? Detail)[]>();
             foreach(var chunkBody in nonAnchorPool.Chunk(12-anchorCandidates.Length))
                 matrixChunks.Add(anchorCandidates.Concat(chunkBody).ToArray());
             if(matrixChunks.Count==0&&anchorCandidates.Length>0)matrixChunks.Add(anchorCandidates);
-            foreach(var chunk in matrixChunks)MergeScores(CalibrateChunk(await ScoreCandidateChunkAsync(chunk)));
+            // ORIGINAL POLOXI FORMULA: the V3.11.1 anchor-calibration chunk rescaling has been removed.
+            // Chunk scores are merged as returned by the matrix model, without cross-chunk anchor
+            // deflation.
+            // V3.23 Parallel matrix fan-out: each chunk is a self-contained Candidate x Branch LLM call
+            // with no dependency on any other chunk's result, so the network-bound calls are dispatched
+            // concurrently and only the (non-thread-safe) MergeScores accumulation is serialized afterward.
+            // Results are merged in the original chunk order so scoring stays deterministic. This is the
+            // single highest-leverage latency lever - the matrix pass is the bulk of the LLM wall-clock.
+            var chunkScoreTasks=matrixChunks.Select(chunk=>ScoreCandidateChunkAsync(chunk)).ToArray();
+            foreach(var scoreTask in chunkScoreTasks)MergeScores(await scoreTask);
             var requiredBranchIds=matrixBranches.Select(branch=>branch.WideBranchId).ToHashSet();
             var incompleteCandidates=candidateNames.Where(candidate=>
             {
@@ -5719,23 +5735,30 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
                 var returnedBranchIds=score.BranchScores.Select(branchScore=>ResolveBranch(branchScore.BranchDisplayName)?.WideBranchId).Where(branchId=>branchId is not null).Select(branchId=>branchId!.Value).ToHashSet();
                 return !requiredBranchIds.IsSubsetOf(returnedBranchIds);
             }).ToArray();
-            foreach(var recoveryChunk in incompleteCandidates.Chunk(12))
-            {
-                var missingBranches=recoveryChunk.SelectMany(candidate=>
+            // V3.23 Parallel recovery fan-out: compute each recovery chunk's missing-branch set FIRST
+            // (these reads touch shared scoredByCandidate), then dispatch the independent re-ask calls
+            // concurrently and merge their results in order. Chunks with no missing branches are skipped.
+            var recoveryRequests=incompleteCandidates.Chunk(12)
+                .Select(recoveryChunk=>
                 {
-                    if(!scoredByCandidate.TryGetValue(candidate.Name,out var score))return matrixBranches;
-                    var returnedBranchIds=score.BranchScores.Select(branchScore=>ResolveBranch(branchScore.BranchDisplayName)?.WideBranchId).Where(branchId=>branchId is not null).Select(branchId=>branchId!.Value).ToHashSet();
-                    return matrixBranches.Where(branch=>!returnedBranchIds.Contains(branch.WideBranchId));
-                }).DistinctBy(branch=>branch.WideBranchId).ToArray();
-                if(missingBranches.Length>0)MergeScores(await ScoreCandidateChunkAsync(recoveryChunk,missingBranches));
-            }
+                    var missingBranches=recoveryChunk.SelectMany(candidate=>
+                    {
+                        if(!scoredByCandidate.TryGetValue(candidate.Name,out var score))return matrixBranches;
+                        var returnedBranchIds=score.BranchScores.Select(branchScore=>ResolveBranch(branchScore.BranchDisplayName)?.WideBranchId).Where(branchId=>branchId is not null).Select(branchId=>branchId!.Value).ToHashSet();
+                        return matrixBranches.Where(branch=>!returnedBranchIds.Contains(branch.WideBranchId));
+                    }).DistinctBy(branch=>branch.WideBranchId).ToArray();
+                    return (Chunk:recoveryChunk,MissingBranches:missingBranches);
+                })
+                .Where(request=>request.MissingBranches.Length>0)
+                .ToArray();
+            var recoveryTasks=recoveryRequests.Select(request=>ScoreCandidateChunkAsync(request.Chunk,request.MissingBranches)).ToArray();
+            foreach(var recoveryTask in recoveryTasks)MergeScores(await recoveryTask);
             var scoredCandidates=scoredCandidateOrder.Select(name=>scoredByCandidate[name]).ToList();
             var proposal=new WideCandidateScoringProposal(scoredCandidates);
             if(proposal.Candidates is not{Count:>0})return [];
             static decimal InterpretationWeight(WideBranchRecord branch)=>BranchAllocationWeight(branch);
             var rfnBranchWeights=CompileRfnGlobalBranchWeights(survivors.Concat(childBranches).ToArray(),branches.Concat(childBranches).ToArray());
             if(rfnBranchWeights.Count==0)return [];
-            var metricScores=CompileMetricNormalizedScores(candidateNames,matrixBranches,externalKnowledge);
             var entries=new List<(WideCandidateRecord Record,bool SupportExcluded,decimal RawComposite)>();
             var evidenceConfidences=new Dictionary<string,decimal>(StringComparer.OrdinalIgnoreCase);
             // V3.5: per-candidate roll-up disclosure (parent dimension -> direct score + child scores).
@@ -5745,6 +5768,55 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
             var admissionInfo=new Dictionary<string,(string Mode,int Interpretive,int Hosts,int Total)>(StringComparer.OrdinalIgnoreCase);
             // V2.9.4 support tier per candidate (STRONG/MODERATE/LIMITED) for transparent disclosure.
             var supportTiers=new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
+            // V3.21 Interpretive Fusion: the interpretive lists the answer LLM produced are themselves a
+            // per-branch ranking signal. Each list IS one branch (its BranchDisplayName) and each row is a
+            // candidate carrying the model's own 0-1 strength Score for that candidate under that branch.
+            // The pure Candidate x Branch matrix call and these interpretive lists are two independent model
+            // judgments; historically only the matrix survived into the composite, so a candidate the model
+            // ranked mid-pack across every interpretive dimension could still sink to last. We fuse the two
+            // at the CELL level (per candidate, per branch) before roll-up and RFN weighting.
+            //
+            // CALIBRATION (within-list normalization): raw LLM 0-1 scores are poorly calibrated in absolute
+            // terms - the model compresses a whole list into an arbitrary band (e.g. 0.6-0.9), so the raw
+            // number mostly encodes which band the model felt like using, not true cross-dimension strength.
+            // What IS reliable is a candidate's RELATIVE standing within its own list. So each list is min-max
+            // normalized to span [0,1] when it has score spread; a list with no usable score spread (all equal
+            // or all null) falls back to normalized ordinal rank ((maxRank-rank+1)/maxRank). This yields a
+            // comparable "interpretive standing" per (candidate, branch) that can be fused across dimensions.
+            var interpretiveCellScores=new Dictionary<(string Candidate,Guid Branch),decimal>();
+            foreach(var interpretive in interpretiveResults)
+            {
+                var interpretiveBranch=ResolveBranch(interpretive.BranchDisplayName);
+                if(interpretiveBranch is null||interpretive.Items is not{Count:>0}items)continue;
+                var maxRank=Math.Max(items.Max(item=>item.RankNumber>0?item.RankNumber:1),1);
+                // Resolve each row to a canonical candidate, keeping the first occurrence per candidate so
+                // repeated echoes within one list cannot distort the normalization range.
+                var rows=new List<(string Candidate,int Rank,decimal? Score)>();
+                var seen=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach(var item in items)
+                {
+                    var canonical=ResolveCandidateName(item.Name);
+                    if(canonical is null||!seen.Add(canonical))continue;
+                    rows.Add((canonical,item.RankNumber>0?item.RankNumber:maxRank,item.Score is{}s?Math.Clamp(s,0,1):null));
+                }
+                if(rows.Count==0)continue;
+                var scored=rows.Where(row=>row.Score is not null).Select(row=>row.Score!.Value).ToArray();
+                var usableSpread=scored.Length>=2&&scored.Max()-scored.Min()>0.0001m;
+                var scoreMin=usableSpread?scored.Min():0m;
+                var scoreRange=usableSpread?scored.Max()-scored.Min():1m;
+                foreach(var row in rows)
+                {
+                    // Normalized ordinal rank is the always-available fallback standing.
+                    var rankStanding=Math.Clamp((decimal)(maxRank-row.Rank+1)/maxRank,0,1);
+                    // When the list has genuine score spread, use the min-max normalized LLM score so the
+                    // candidate's relative standing (not the model's arbitrary band) drives fusion; otherwise
+                    // fall back to the ordinal rank standing.
+                    var standing=usableSpread&&row.Score is{}value
+                        ?Math.Clamp((value-scoreMin)/scoreRange,0,1)
+                        :rankStanding;
+                    interpretiveCellScores.TryAdd((row.Candidate,interpretiveBranch.WideBranchId),standing);
+                }
+            }
             // V3.6 pass 1: resolve each candidate's direct + child scores and rolled-up effective
             // dimension scores. Composites are computed in pass 2, AFTER cross-candidate contrast
             // normalization, because the confidence-weighted roll-up (a mean of sub-scores) compresses
@@ -5761,15 +5833,29 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
                 {
                     var branch=ResolveBranch(score.BranchDisplayName);
                     if(branch is null)continue;
-                    // V3.10.5: a trusted deterministic metric (tightened branch gate + unit-aware
-                    // extraction + ≥2 independent hosts) is BLENDED 50/50 with the model's evidence
-                    // judgment instead of replacing it — the metric grounds the score while the LLM
-                    // signal prevents min-max normalization artifacts (0%/100%) from dominating.
+                    // ORIGINAL POLOXI FORMULA: the V3.10.5 deterministic metric min-max blend has been
+                    // removed. Each Candidate × Branch cell uses the model's evidence judgment directly;
+                    // the normalized external-metric override no longer displaces or blends into the
+                    // model score. Evidence still shrinks the prior via GatedCs below.
                     var llmScore=Math.Clamp(score.EvidenceScore,0,1);
-                    var priorScore=metricScores.TryGetValue(resolvedName,out var candidateMetrics)&&candidateMetrics.TryGetValue(branch.WideBranchId,out var metricScore)?Math.Clamp(0.5m*metricScore+0.5m*llmScore,0,1):llmScore;
+                    var priorScore=llmScore;
                     // Evidence-gated Cs: the (metric-blended) model prior shrunk toward the branch's measured
                     // evidence support in proportion to admitted-evidence volume. No admitted evidence → prior.
-                    var clamped=WideCandidateBranchScoring.GatedCs(priorScore,branch.EvidenceSupport,branch.EvidenceCount);
+                    var gated=WideCandidateBranchScoring.GatedCs(priorScore,branch.EvidenceSupport,branch.EvidenceCount);
+                    // V3.21 Interpretive Fusion: blend the matrix/L cell with the answer LLM's own per-branch
+                    // interpretive standing for this candidate. The weight is EVIDENCE-ADAPTIVE rather than a
+                    // flat constant:
+                    //   - When a branch has admitted evidence, the matrix cell is genuinely grounded (it shrank
+                    //     toward measured support), so it should dominate -> matrix weight rises toward 0.70.
+                    //   - When a branch has NO admitted evidence, the matrix cell is just the matrix model's
+                    //     own prior - the same KIND of signal as the interpretive list, i.e. a second
+                    //     independent opinion. Averaging two independent judgments cuts variance, so the
+                    //     interpretive voice earns more weight -> matrix weight falls toward 0.50.
+                    // Centered on the 0.6/0.4 split; evidenced branches lean matrix, ungrounded branches blend
+                    // the two model opinions more evenly. Never below 0.5 so the matrix always stays >= the list.
+                    var clamped=interpretiveCellScores.TryGetValue((resolvedName,branch.WideBranchId),out var interpretiveCell)
+                        ?Math.Clamp((branch.EvidenceCount>0?.70m:.50m)*gated+(branch.EvidenceCount>0?.30m:.50m)*interpretiveCell,0,1)
+                        :gated;
                     if(branch.ParentWideBranchId is not null&&childrenByParent.Contains(branch.ParentWideBranchId.Value)&&!scoringBranchIds.Contains(branch.WideBranchId))
                     {
                         var list=childScoresByParent.TryGetValue(branch.ParentWideBranchId.Value,out var existing)?existing:childScoresByParent[branch.ParentWideBranchId.Value]=[];
@@ -5803,22 +5889,11 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
                 }
                 return new{Candidate=candidate,CandidateId=candidateId,ResolvedName=resolvedName,Effective=effectiveByBranch,ChildRows=childRows,Disclosure=childDisclosure};
             }).Where(item=>item is not null).Select(item=>item!).ToList();
-            // V3.6 Fix B — per-dimension contrast normalization: rolled-up dimension scores regress
-            // toward the mean (averaging many sub-scores compresses spread), which made POLOXI's final
-            // ranking collapse toward the unweighted mention baseline. For each dimension scored by 2+
-            // candidates, deviations from the cross-candidate mean are amplified by a fixed gain
-            // (order-preserving, mean-preserving, clamped to 0..1) so real differences between
-            // candidates stay visible in the composite. Child scores are never altered — only the
-            // parent-dimension score that feeds the composite.
-            const decimal ContrastGain=1.6m;
-            foreach(var branch in branches)
-            {
-                var scored=prepared.Where(entry=>entry.Effective.ContainsKey(branch.WideBranchId)).ToArray();
-                if(scored.Length<2)continue;
-                var mean=scored.Average(entry=>entry.Effective[branch.WideBranchId]);
-                foreach(var entry in scored)
-                    entry.Effective[branch.WideBranchId]=Math.Clamp(mean+(entry.Effective[branch.WideBranchId]-mean)*ContrastGain,0,1);
-            }
+            // ORIGINAL POLOXI FORMULA: the V3.6 Fix B cross-candidate contrast amplification (ContrastGain
+            // = 1.6) has been removed. The original formula uses the interpretation-weighted, hierarchically
+            // rolled-up dimension scores directly, without stretching deviations from the cross-candidate
+            // mean. Candidates are ranked purely on composite quality derived from their own dimension
+            // scores, not on an amplified contrast against the pool.
             foreach(var item in prepared)
             {
                 var candidate=item.Candidate;
@@ -5898,8 +5973,12 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
                 // interpretation dimension. It stays admitted (evidence attests it exists), but it
                 // cannot claim STRONG support and its composite is damped so it cannot outrank
                 // interpretation-backed candidates on near-tied quality scores. Disclosed, not removed.
+                // ORIGINAL POLOXI FORMULA: the V3.11.2 interpretive-absence composite damping
+                // (composite *= 0.85 for candidates appearing in zero interpretation dimensions) has
+                // been removed. Composite quality is derived purely from the interpretation-weighted
+                // dimension scores; interpretive absence is disclosed via the support tier, not by
+                // discounting the quality score.
                 if(supportTier=="STRONG"&&interpretiveCount==0)supportTier="MODERATE";
-                if(interpretiveCount==0)composite*=.85m;
                 if(supportTier is not null&&!HasNamedEntityAdmissionSupport(resolvedName,queryContract,interpretiveCount,distinctHosts,exclusiveHosts,requiredSupport))
                     supportTier=null;
                 var supportExcluded=false;
@@ -5958,24 +6037,42 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
                     // candidates that missed the LLM matrix response. Scores are branch-specific and
                     // evidence-derived; an omitted candidate cannot receive one uniform quality score across
                     // every dimension merely because it was mentioned in retrieved text.
+                    // V3.22 Interpretive-standing completion: a candidate the matrix model omitted is scored
+                    // from external evidence FIRST; where no external host co-mentions it with a branch, fall
+                    // back to the answer LLM's own per-branch interpretive standing for that candidate. This
+                    // stops a strongly interpretively-supported entity (named across several dimensions, often
+                    // the raw single-shot #1) from being silently dropped merely because retrieved snippets
+                    // never paired its name with a branch phrase. Evidence admission gates are unchanged -
+                    // interpretive standing only supplies a branch quality score, never host/evidence support.
                     var fallbackScorePairs=branches
-                        .Select(branch=>(Branch:branch,Score:ComputeCandidateBranchSignal(name,branch,externalKnowledge)))
+                        .Select(branch=>
+                        {
+                            var evidenceSignal=ComputeCandidateBranchSignal(name,branch,externalKnowledge);
+                            var score=evidenceSignal>0m
+                                ?evidenceSignal
+                                :interpretiveCellScores.TryGetValue((name,branch.WideBranchId),out var interpretiveStanding)?interpretiveStanding:0m;
+                            return (Branch:branch,Score:score);
+                        })
                         .Where(item=>item.Score>0m)
                         .ToArray();
-                    if(fallbackScorePairs.Length==0)continue;
-                    var scoreByBranch=fallbackScorePairs.ToDictionary(item=>item.Branch.WideBranchId,item=>item.Score);
-                    var weightedQuality=rfnBranchWeights.Where(weight=>scoreByBranch.ContainsKey(weight.Key)).Sum(weight=>weight.Value*scoreByBranch[weight.Key]);
-                    var coveredWeight=rfnBranchWeights.Where(weight=>scoreByBranch.ContainsKey(weight.Key)).Sum(weight=>weight.Value);
-                    var coverage=Math.Clamp(coveredWeight,0,1);
-                    var supportRatio=Math.Clamp((decimal)Math.Min(combinedSupport,Math.Max(requiredSupport,1))/Math.Max(requiredSupport,1),0m,1m);
-                    var composite=Math.Clamp(weightedQuality*coverage,0m,.75m);
-                    var fallbackScores=fallbackScorePairs.Select(item=>new WideCandidateBranchScoreRecord(Guid.NewGuid(),candidateId,item.Branch.WideBranchId,request.TenantId,item.Branch.DisplayName,item.Score)).ToArray();
-                    entries.Add((new(candidateId,executionId,request.TenantId,Truncate(name,300)!,"Admitted by deterministic Top-N completion from retrieved evidence and interpretive support; the scoring model omitted this candidate from the matrix response.",composite,0,false,null,fallbackScores),false,composite));
-                    evidenceConfidences[name]=Math.Clamp((distinctHosts<=1?.55m:Math.Min(1m,.55m+.15m*(distinctHosts-1)))*supportRatio,0m,1m);
-                    admissionInfo[name]=("TOP_N_COMPLETION",interpretiveCount,distinctHosts,Math.Max(support,combinedSupport));
-                    supportTiers[name]=supportTier;
-                    neededForContract--;
-                    continue;
+                    if(fallbackScorePairs.Length>0)
+                    {
+                        var scoreByBranch=fallbackScorePairs.ToDictionary(item=>item.Branch.WideBranchId,item=>item.Score);
+                        var weightedQuality=rfnBranchWeights.Where(weight=>scoreByBranch.ContainsKey(weight.Key)).Sum(weight=>weight.Value*scoreByBranch[weight.Key]);
+                        var coveredWeight=rfnBranchWeights.Where(weight=>scoreByBranch.ContainsKey(weight.Key)).Sum(weight=>weight.Value);
+                        var coverage=Math.Clamp(coveredWeight,0,1);
+                        var supportRatio=Math.Clamp((decimal)Math.Min(combinedSupport,Math.Max(requiredSupport,1))/Math.Max(requiredSupport,1),0m,1m);
+                        var composite=Math.Clamp(weightedQuality*coverage,0m,.75m);
+                        var fallbackScores=fallbackScorePairs.Select(item=>new WideCandidateBranchScoreRecord(Guid.NewGuid(),candidateId,item.Branch.WideBranchId,request.TenantId,item.Branch.DisplayName,item.Score)).ToArray();
+                        entries.Add((new(candidateId,executionId,request.TenantId,Truncate(name,300)!,"Admitted by deterministic Top-N completion from retrieved evidence and interpretive support; the scoring model omitted this candidate from the matrix response.",composite,0,false,null,fallbackScores),false,composite));
+                        evidenceConfidences[name]=Math.Clamp((distinctHosts<=1?.55m:Math.Min(1m,.55m+.15m*(distinctHosts-1)))*supportRatio,0m,1m);
+                        admissionInfo[name]=("TOP_N_COMPLETION",interpretiveCount,distinctHosts,Math.Max(support,combinedSupport));
+                        supportTiers[name]=supportTier;
+                        neededForContract--;
+                        continue;
+                    }
+                    // No evidence pairing AND no interpretive standing: fall through to an explicit ruled-out
+                    // row below instead of silently dropping the candidate (no row at all).
                 }
                 var reason=dominatedFragments.TryGetValue(name,out var dominator)
                     ?$"Name fragment of '{dominator}': no evidence host discusses it independently."

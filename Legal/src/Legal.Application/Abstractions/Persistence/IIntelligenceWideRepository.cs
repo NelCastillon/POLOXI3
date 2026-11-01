@@ -10,6 +10,8 @@ public interface IIntelligenceWideRepository
     Task<IReadOnlyCollection<WideModelOptionDto>> GetWideModelsAsync(Guid tenantId,CancellationToken cancellationToken=default);
     // Active search-context options for the wide-search Context dropdown (POLOXI.Legal_SearchContext).
     Task<IReadOnlyCollection<WideSearchContextDto>> GetSearchContextsAsync(Guid tenantId,CancellationToken cancellationToken=default);
+    // Active example-prompt chips for the wide-search composer (POLOXI.Legal_SearchExamplePrompt).
+    Task<IReadOnlyCollection<WideSearchExamplePromptDto>> GetSearchExamplePromptsAsync(Guid tenantId,CancellationToken cancellationToken=default);
     // Legal-context grounding configuration (CourtListener + GovInfo/eCFR) from Core.ConfigurationSetting.
     Task<WideLegalGroundingConfiguration> GetLegalGroundingConfigurationAsync(Guid tenantId,CancellationToken cancellationToken=default);
     Task<IReadOnlyCollection<LegalAuthoritySourceDescriptor>> GetLegalAuthoritySourcesAsync(Guid tenantId,CancellationToken cancellationToken=default);
@@ -86,4 +88,14 @@ public interface IIntelligenceWideRepository
     Task UpdateWideExecutionEntropyAsync(Guid tenantId,Guid userId,WideExecutionEntropyUpdate update,CancellationToken cancellationToken=default);
     // V3.0: persists one adaptive-narrowing evaluation with its full transition provenance (never deleted).
     Task SaveNarrowingIterationAsync(WideNarrowingIterationRecord iteration,Guid userId,CancellationToken cancellationToken=default);
+    // ── /legal/search Run History (per-user, isolated from Decision2) ────────────────────────────
+    // Write-once capture of a completed standalone Wide run so the inline Run History panel can list
+    // and reopen it. Best-effort; never on the critical result path.
+    Task SaveWideSearchRunResultAsync(WideSearchRunCapture capture,CancellationToken cancellationToken=default);
+    // Paged list of the running user's own runs, newest first.
+    Task<WideSearchRunHistoryPage> GetWideSearchRunHistoryAsync(Guid tenantId,Guid userId,int page,int pageSize,CancellationToken cancellationToken=default);
+    // Full reopen payload (the saved WideSearchResponse rehydrated) for a single run owned by the user.
+    Task<WideSearchRunDetailDto?> GetWideSearchRunResultAsync(Guid tenantId,Guid userId,Guid wideSearchRunResultId,CancellationToken cancellationToken=default);
+    // All runs in a continuous-chat thread (shared ConversationId), oldest-first, owned by the user.
+    Task<IReadOnlyList<WideConversationTurnDto>> GetWideSearchConversationAsync(Guid tenantId,Guid userId,Guid conversationId,CancellationToken cancellationToken=default);
 }

@@ -49,6 +49,25 @@ public sealed class ApiClient(HttpClient httpClient)
 
     public async Task<IReadOnlyCollection<WideSearchContextDto>> GetIntelligenceSearchContextsAsync(CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<WideSearchContextDto>>("api/intelligence_wide/contexts",token)??[];
 
+    // Database-backed example prompt chips for the /legal/search composer (POLOXI.Legal_SearchExamplePrompt).
+    public async Task<IReadOnlyCollection<WideSearchExamplePromptDto>> GetIntelligenceExamplePromptsAsync(CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<WideSearchExamplePromptDto>>("api/intelligence_wide/example_prompts",token)??[];
+
+    // /legal/search Run History (per-user). Paged list, newest first.
+    public async Task<WideSearchRunHistoryPage> GetSearchRunHistoryAsync(int page=1,int pageSize=20,CancellationToken token=default)
+        =>await _httpClient.GetFromJsonAsync<WideSearchRunHistoryPage>($"api/intelligence_wide/history?page={page}&pageSize={pageSize}",token)??new WideSearchRunHistoryPage([],page,pageSize,0);
+
+    // /legal/search Run History: full reopen payload (the saved WideSearchResponse). Null when not found.
+    public async Task<WideSearchRunDetailDto?> GetSearchRunResultAsync(Guid wideSearchRunResultId,CancellationToken token=default)
+    {
+        using var message=await _httpClient.GetAsync($"api/intelligence_wide/history/{wideSearchRunResultId}",token);
+        if(message.StatusCode==HttpStatusCode.NotFound)return null;
+        message.EnsureSuccessStatusCode();
+        return await message.Content.ReadFromJsonAsync<WideSearchRunDetailDto>(token);
+    }
+
+    // /legal/search continuous-chat thread: every run sharing the ConversationId, oldest-first.
+    public async Task<IReadOnlyList<WideConversationTurnDto>> GetSearchConversationAsync(Guid conversationId,CancellationToken token=default)
+        =>await _httpClient.GetFromJsonAsync<IReadOnlyList<WideConversationTurnDto>>($"api/intelligence_wide/conversations/{conversationId}",token)??[];
     // ── POLOXI Wide2 pipeline (isolated clone backing /legal/personalinjury_decision2) ──────────────
     // Same start+poll transport as the Wide search, but every call targets the isolated api/intelligence_wide2
     // controller/service so changes to /legal/search never affect /legal/personalinjury_decision2.

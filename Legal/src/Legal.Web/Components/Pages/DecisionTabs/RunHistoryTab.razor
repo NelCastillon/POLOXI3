@@ -96,7 +96,7 @@
                             <li>
                                 <button type="button"
                                         class="ram-run @(run.AnalysisRunId == _selectedRunId ? "ram-run--active" : null)"
-                                        @onclick="() => _selectedRunId = run.AnalysisRunId">
+                                        @onclick="() => SelectRunAsync(run.AnalysisRunId)">
                                     <div class="ram-run-top">
                                         <span class="ram-run-label">@run.RunLabel</span>
                                         <span class="ram-run-status ram-run-status--@run.ExecutionStatusCode.ToLowerInvariant()">@run.ExecutionStatusCode</span>
@@ -167,6 +167,23 @@
                         </div>
                         <span class="ram-run-status ram-run-status--@selected.ExecutionStatusCode.ToLowerInvariant()">@selected.ExecutionStatusCode</span>
                     </div>
+
+                    @* ── Ask a follow-up. Built ONLY from THIS run's own saved results — the Next Best Actions
+                         composed server-side at execution time (no generic/static prompts, no fresh LLM call).
+                         Fill-only: a chip opens this matter's composer with the question pre-seeded (?prompt=)
+                         so the attorney reviews/edits before running. Hidden when the run saved no actions. ── *@
+                    @if (_followUpChips.Count > 0)
+                    {
+                        <section class="poloxi-examples" aria-label="Follow-up questions from this run's results">
+                            <span class="poloxi-examples-label"><i class="bi bi-stars" aria-hidden="true"></i> Ask a follow-up</span>
+                            <div class="poloxi-examples-chips">
+                                @foreach (var chip in _followUpChips)
+                                {
+                                    <button type="button" class="poloxi-example-chip" title="@chip" @onclick="() => UseFollowUp(chip)">@ChipLabel(chip)</button>
+                                }
+                            </div>
+                        </section>
+                    }
 
                     <p class="ram-authority-note">
                         <i class="bi bi-info-circle" aria-hidden="true"></i>
@@ -360,6 +377,11 @@
     private bool _deleting;
     private string? _deleteError;
 
+    // Follow-up chips for the currently selected run, derived ONLY from that run's own saved Next Best
+    // Actions (composed server-side at execution time). No generic/static prompts and no fresh LLM call.
+    private IReadOnlyList<string> _followUpChips = [];
+    private Guid? _followUpRunId;
+
     protected override async Task OnParametersSetAsync()
     {
         if (MatterId != _loadedMatterId)
@@ -368,6 +390,8 @@
             _selectedRunId = null;
             await LoadAsync();
         }
+
+        await LoadFollowUpChipsAsync();
     }
 
     private async Task LoadAsync()
@@ -396,6 +420,66 @@
         {
             _loading = false;
         }
+    }
+
+    // Select a run in the ledger and refresh the run-specific follow-up chips for it.
+    private async Task SelectRunAsync(Guid runId)
+    {
+        _selectedRunId = runId;
+        await LoadFollowUpChipsAsync();
+    }
+
+    // Load the selected run's saved Next Best Actions and turn their titles into follow-up chips. Fail-soft:
+    // legacy runs with no persisted NBA (or any load error) simply produce no chips, so the row hides.
+    private async Task LoadFollowUpChipsAsync()
+    {
+        if (_selectedRunId is not { } runId || runId == Guid.Empty)
+        {
+            _followUpChips = [];
+            _followUpRunId = null;
+            return;
+        }
+
+        if (_followUpRunId == runId)
+            return;
+
+        _followUpRunId = runId;
+        try
+        {
+            var nba = await Api.GetSavedNextBestActionsAsync(runId);
+            _followUpChips = nba?.Actions is { Count: > 0 } actions
+                ? actions
+                    .Where(a => !string.IsNullOrWhiteSpace(a.Title))
+                    .Select(a => a.Title.Trim())
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Take(6)
+                    .ToList()
+                : [];
+        }
+        catch
+        {
+            _followUpChips = [];
+        }
+    }
+
+    // Short chip caption derived from the full follow-up question (full text stays in the tooltip).
+    private static string ChipLabel(string chip)
+    {
+        var text = chip.Split('(')[0].Trim();
+        if (text.Length <= 48) return text;
+        var cut = text[..48];
+        var lastSpace = cut.LastIndexOf(' ');
+        return (lastSpace > 24 ? cut[..lastSpace] : cut).TrimEnd() + "\u2026";
+    }
+
+    // Fill-only: open this matter's Decision2 composer with the follow-up question pre-seeded. Does NOT run,
+    // because running persists the prompt as matter Additional Narrative and activates the matter corpus.
+    private void UseFollowUp(string chip)
+    {
+        if (MatterId is not { } matterId || matterId == Guid.Empty || string.IsNullOrWhiteSpace(chip))
+            return;
+        var encoded = Uri.EscapeDataString(chip);
+        Navigation.NavigateTo($"/legal/personalinjury_decision2?matterId={matterId}&prompt={encoded}");
     }
 
     private AnalysisRunDto? SelectedRun =>

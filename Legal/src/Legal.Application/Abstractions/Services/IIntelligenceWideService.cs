@@ -12,6 +12,8 @@ public interface IIntelligenceWideService
     Task<IReadOnlyCollection<WideModelOptionDto>> GetWideModelsAsync(Guid tenantId,CancellationToken cancellationToken=default);
     // Database-backed context options for the wide-search Context dropdown (POLOXI.Legal_SearchContext).
     Task<IReadOnlyCollection<WideSearchContextDto>> GetSearchContextsAsync(Guid tenantId,CancellationToken cancellationToken=default);
+    // Database-backed example-prompt chips for the wide-search composer (POLOXI.Legal_SearchExamplePrompt).
+    Task<IReadOnlyCollection<WideSearchExamplePromptDto>> GetSearchExamplePromptsAsync(Guid tenantId,CancellationToken cancellationToken=default);
     // Editable Legal Grounding settings (Core.ConfigurationSetting) surfaced on /legal/configuration.
     Task<IReadOnlyCollection<LegalGroundingSettingDto>> GetLegalGroundingSettingsAsync(CancellationToken cancellationToken=default);
     Task SaveLegalGroundingSettingAsync(SaveLegalGroundingSettingRequest request,Guid actorUserId,CancellationToken cancellationToken=default);
@@ -25,4 +27,10 @@ public interface IIntelligenceWideService
     // Platform UI toggle controlling whether /legal/search shows the End-to-end POLOXI pipeline section.
     Task<bool> GetShowPipelineAsync(CancellationToken cancellationToken=default);
     Task SaveShowPipelineAsync(bool showPipeline,CancellationToken cancellationToken=default);
+    // /legal/search Run History (per-user): paged list of the user's own past runs, newest first.
+    Task<WideSearchRunHistoryPage> GetSearchRunHistoryAsync(Guid tenantId,Guid userId,int page,int pageSize,CancellationToken cancellationToken=default);
+    // /legal/search Run History: full reopen payload (saved WideSearchResponse) for one of the user's runs.
+    Task<WideSearchRunDetailDto?> GetSearchRunResultAsync(Guid tenantId,Guid userId,Guid wideSearchRunResultId,CancellationToken cancellationToken=default);
+    // /legal/search continuous-chat thread: all runs sharing a ConversationId, oldest-first, owned by the user.
+    Task<IReadOnlyList<WideConversationTurnDto>> GetSearchConversationAsync(Guid tenantId,Guid userId,Guid conversationId,CancellationToken cancellationToken=default);
 }

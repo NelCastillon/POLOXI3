@@ -68,8 +68,32 @@ public sealed class IntelligenceWideController(IIntelligenceWideService service,
     [Authorize(Policy=IntelligencePolicies.Search)]
     public async Task<IActionResult> Contexts(CancellationToken cancellationToken)=>Ok(await service.GetSearchContextsAsync(TenantId,cancellationToken));
 
+    // Database-backed example prompt chips for the wide-search composer (POLOXI.Legal_SearchExamplePrompt).
+    [HttpGet("example_prompts")]
+    [Authorize(Policy=IntelligencePolicies.Search)]
+    public async Task<IActionResult> ExamplePrompts(CancellationToken cancellationToken)=>Ok(await service.GetSearchExamplePromptsAsync(TenantId,cancellationToken));
+
     // Platform UI toggle: when true the search result page renders the End-to-end POLOXI pipeline section.
     [HttpGet("show-pipeline")]
     [Authorize(Policy=IntelligencePolicies.Search)]
     public async Task<IActionResult> ShowPipeline(CancellationToken cancellationToken)=>Ok(new{showPipeline=await service.GetShowPipelineAsync(cancellationToken)});
+
+    // ── /legal/search Run History (per-user, isolated from Decision2) ──────────────────────────────
+    // Paged list of the signed-in user's own past Wide search runs, newest first.
+    [HttpGet("history")]
+    [Authorize(Policy=IntelligencePolicies.Search)]
+    public async Task<IActionResult> History([FromQuery]int page=1,[FromQuery]int pageSize=20,CancellationToken cancellationToken=default)
+        =>Ok(await service.GetSearchRunHistoryAsync(TenantId,ActorUserId,page,pageSize,cancellationToken));
+
+    // Full reopen payload (the saved WideSearchResponse) for one of the user's own runs.
+    [HttpGet("history/{wideSearchRunResultId:guid}")]
+    [Authorize(Policy=IntelligencePolicies.Search)]
+    public async Task<IActionResult> HistoryDetail(Guid wideSearchRunResultId,CancellationToken cancellationToken)
+        =>await service.GetSearchRunResultAsync(TenantId,ActorUserId,wideSearchRunResultId,cancellationToken) is{}detail?Ok(detail):NotFound();
+
+    // Full continuous-chat thread: every run sharing the ConversationId, oldest-first, scoped to the user.
+    [HttpGet("conversations/{conversationId:guid}")]
+    [Authorize(Policy=IntelligencePolicies.Search)]
+    public async Task<IActionResult> Conversation(Guid conversationId,CancellationToken cancellationToken)
+        =>Ok(await service.GetSearchConversationAsync(TenantId,ActorUserId,conversationId,cancellationToken));
 }
