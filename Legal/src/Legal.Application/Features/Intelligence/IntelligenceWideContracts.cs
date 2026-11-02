@@ -297,7 +297,11 @@ public sealed record WideSearchRunSummaryDto(
 	string? ContextCode,
 	long DurationMilliseconds,
 	DateTime CreatedDateUtc,
-	Guid? ConversationId=null);
+	Guid? ConversationId=null,
+	// Enterprise Search Quality Indicator persisted at run time (0475). Null for runs captured before the
+	// quality feature or when scoring failed soft.
+	decimal? QualityScore=null,
+	string? QualityGrade=null);
 
 // Paged history result for the inline panel (newest first).
 public sealed record WideSearchRunHistoryPage(IReadOnlyCollection<WideSearchRunSummaryDto> Items,int Page,int PageSize,int TotalCount)
@@ -313,7 +317,8 @@ public sealed record WideSearchRunDetailDto(
 	string Query,
 	string? ContextCode,
 	DateTime CreatedDateUtc,
-	WideSearchResponse? Response);
+	WideSearchResponse? Response,
+	Guid? ConversationId=null);
 
 // Capture envelope written once per standalone /legal/search run. DetailJson is the loss-free
 // serialized WideSearchResponse; promoted fields are derived from the response for the list projection.
@@ -328,6 +333,67 @@ public sealed record WideSearchRunCapture(
 // One run within a reopened conversation thread (ordered oldest-first). DetailJson rehydrates the
 // full WideSearchResponse; Query is the user text for that turn.
 public sealed record WideConversationTurnDto(Guid WideSearchRunResultId,Guid WideExecutionId,string Query,string? ContextCode,DateTime CreatedDateUtc,WideSearchResponse? Response);
+
+// ── Enterprise Search Quality Indicator ──────────────────────────────────────────────────────────────
+// Per-result quality assessment attached to WideSearchResponse and persisted with each run. Composed by a
+// deterministic, DB-backed scorer (0475 rubric) with an optional fail-soft LLM suggestion refinement.
+public sealed record SearchQualityAssessmentDto(
+	decimal Score,                 // composite 0..1
+	int Percent,                   // Score rounded to 0..100 for display
+	string Grade,                  // A..E
+	string GradeLabel,             // e.g. "Excellent"
+	string GradeColorHex,          // band color for the badge
+	IReadOnlyCollection<SearchQualityFactorScoreDto> Factors,
+	IReadOnlyCollection<SearchQualitySuggestionDto> Suggestions);
+
+// One scored factor in the breakdown (already normalized and weighted).
+public sealed record SearchQualityFactorScoreDto(
+	string FactorCode,
+	string DisplayName,
+	string? Description,
+	decimal RawValue,              // the underlying signal value
+	decimal NormalizedValue,       // 0..1 after min/max normalization
+	decimal Weight,                // configured weight
+	decimal WeightedScore);        // NormalizedValue * Weight contribution
+
+// An actionable suggestion surfaced to the user (e.g. a better model for this search type).
+public sealed record SearchQualitySuggestionDto(
+	string Kind,                   // MODEL / CONTEXT / QUERY / GENERAL
+	string Message,
+	string? RecommendedModelCode=null,
+	string? RecommendedModelLabel=null);
+
+// ── Search Quality configuration projections (DB-backed, read by the scorer) ──
+public sealed record SearchQualityFactorConfigDto(
+	string FactorCode,
+	string DisplayName,
+	string? Description,
+	string MetricCode,
+	decimal Weight,
+	decimal MinValue,
+	decimal MaxValue,
+	bool HigherIsBetter,
+	int SortOrder);
+
+public sealed record SearchQualityGradeBandDto(
+	string Grade,
+	string Label,
+	decimal MinScore,
+	string ColorHex,
+	int SortOrder);
+
+public sealed record SearchModelRecommendationDto(
+	string? AnswerKindCode,
+	string? ContextCode,
+	string RecommendedModelCode,
+	string RecommendedModelLabel,
+	string Rationale,
+	int Priority);
+
+public sealed record SearchQualityConfig(
+	IReadOnlyCollection<SearchQualityFactorConfigDto> Factors,
+	IReadOnlyCollection<SearchQualityGradeBandDto> GradeBands,
+	IReadOnlyCollection<SearchModelRecommendationDto> ModelRecommendations);
 
 // V3.12 P0 stage telemetry: per-LLM-stage wall time and token counts, collected in-memory during
 // the run and disclosed on the response so latency regressions are visible without querying
@@ -625,6 +691,10 @@ public sealed record WideSearchResponse(Guid WideExecutionId,string Query,string
     // V3.2: the governing AnswerKind classification (ENTITY_RANKING / CONTENT_ENUMERATION / SINGLE_ANSWER)
     // and whether kind-aware budget routing actually tuned this execution's workflow.
     public string? AnswerKindCode{get;init;}
+    // The classified follow-up intent (NARROW/RERANK/ENRICH/EXPLAIN/PIVOT/RESET) when this response was
+    // produced by the conversation-turn follow-up path; null for a root execution. Lets the UI label the
+    // turn and render a 'new context' divider for RESET.
+    public string? FollowUpIntentCode{get;init;}
     public bool AnswerKindRoutingApplied{get;init;}
     // Actual provider/model that composed the final answer (resolved by the router: explicit override or Auto route).
     public string? ProviderCodeUsed{get;init;}
@@ -733,6 +803,11 @@ public sealed record WideSearchResponse(Guid WideExecutionId,string Query,string
     // it, what could change it). POLOXI remains the sole owner of ranking/scoring/uncertainty; this layer
     // never changes the decision state. Null for non-legal context, zero candidates, or a fail-soft error.
     public WideCandidateLandscapeDto? CandidateLandscape{get;init;}
+    // Enterprise Search Quality Indicator: per-result quality assessment (A-E grade + composite score +
+    // weighted factor breakdown + model-appropriateness suggestions). DB-backed rubric (0475); computed
+    // fail-soft after the pipeline completes. Null when scoring is disabled or failed soft (UI then omits
+    // the indicator rather than fabricating a grade). Never influences ranking, confidence, or the answer.
+    public SearchQualityAssessmentDto? QualityAssessment{get;init;}
 }
 // POLOXI computation-details projection for the Candidate Competition tab. Every value is DB-backed
 // (Core.ConfigurationSetting) so the UI never hardcodes scoring weights or the algorithm version.
@@ -1178,7 +1253,61 @@ public sealed record WideInterpretiveResultDto(string BranchDisplayName,string I
     public string ScoreSource{get;init;}="LLM";
 }
 
-public sealed record WideInterpretiveResultItemDto(int RankNumber,string Name,string Detail,decimal? Score=null);
+public sealed record WideInterpretiveResultItemDto(int RankNumber,string Name,string Detail,decimal? Score=null)
+{
+    // Generic, open-ended facet bag (e.g. date, location, premium, jurisdiction). Kept as an ordered
+    // name/value list so ENRICH follow-ups can attach ANY requested attribute without new DTO fields,
+    // and so the UI renders whatever facets are present. Nullable/defaulted = backward compatible with
+    // previously persisted JSON that has no attributes.
+    public IReadOnlyCollection<WideResultItemAttributeDto> Attributes{get;init;}=[];
+}
+
+public sealed record WideResultItemAttributeDto(string Label,string Value);
+
+// Follow-up intent taxonomy. A continuation (clarification/free-text follow-up) is not always a
+// narrowing constraint: the user may want the SAME result set transformed in place. Classifying the
+// follow-up lets the pipeline either re-derive (NARROW/RERANK) or transform prior results (ENRICH/EXPLAIN)
+// instead of blindly appending every answer as a hard constraint.
+//   NARROW  - adds a filtering constraint; re-run the pipeline reweighted (legacy fusion path).
+//   RERANK  - reorders/reprioritizes the existing items by a stated preference; re-run reweighted.
+//   ENRICH  - attaches additional attributes/facets (e.g. "add date and location") to existing items
+//             WITHOUT changing their identity or order.
+//   EXPLAIN - elaborates/justifies existing items (e.g. "why these?") WITHOUT changing their identity/order.
+//   PIVOT   - keeps the SAME entity universe (the prior candidate set) but asks a NEW ranking question
+//             over it (e.g. prior "most expensive city" then "which is cheapest" / "best for family").
+//             This is NOT a narrowing constraint: fusing it onto the parent query produces a
+//             contradictory blend, so PIVOT re-runs the pipeline scoped to the prior entities with the
+//             new objective, regenerating the headline/answer/groups bound to the pivot prompt.
+//   RESET   - abandons the prior thread ("disregard previous thread", "start over", "new search"): the
+//             continuation becomes a NEW ROOT (no parent, round 0) while the transcript keeps prior turns.
+public enum WideFollowUpIntent
+{
+    Narrow = 0,
+    Rerank = 1,
+    Enrich = 2,
+    Explain = 3,
+    Pivot = 4,
+    Reset = 5
+}
+
+// Classifier output: the resolved intent plus the optional facet labels an ENRICH follow-up requested
+// (e.g. ["date","location"]). Confidence lets the router fall back to the legacy NARROW path when the
+// classifier is unsure. RawReason is diagnostic only.
+public sealed record WideFollowUpClassification(WideFollowUpIntent Intent,decimal Confidence)
+{
+    public IReadOnlyCollection<string> RequestedFacets{get;init;}=[];
+    public string? RawReason{get;init;}
+}
+
+// Transform request for the in-place (ENRICH/EXPLAIN) path: carries the classified intent, the user's
+// follow-up answer text, the requested facets, and the prior interpretive results to transform. The
+// transform MUST preserve each item's RankNumber/Name identity and ordering - it only augments
+// Attributes (ENRICH) or Detail (EXPLAIN).
+public sealed record WideFollowUpTransformRequest(
+    WideFollowUpIntent Intent,
+    string FollowUpText,
+    IReadOnlyCollection<string> RequestedFacets,
+    IReadOnlyCollection<WideInterpretiveResultDto> PriorResults);
 
 public sealed record WideActionSuggestionDto(string DisplayName,string NavigationRoute,string Rationale);
 
@@ -1729,7 +1858,29 @@ public sealed record WideInterpretiveResult(string BranchDisplayName,string Inte
     public string DataVolatility{get;init;}="STABLE";
 }
 
-public sealed record WideInterpretiveResultItem(int RankNumber,string Name,string Detail,decimal? Score=null);
+public sealed record WideInterpretiveResultItem(int RankNumber,string Name,string Detail,decimal? Score=null)
+{
+    // Open-ended facets the LLM may attach to an item (date, location, etc.). Defaulted empty so the
+    // existing answer schema stays backward compatible; populated by ENRICH follow-up transforms.
+    public IReadOnlyCollection<WideResultItemAttribute> Attributes{get;init;}=[];
+}
+
+public sealed record WideResultItemAttribute(string Label,string Value);
+
+// LLM proposal shape for the follow-up intent classifier (deserialized from the classifier schema).
+public sealed record WideFollowUpClassifierProposal(string Intent,decimal Confidence,IReadOnlyCollection<string> RequestedFacets,string Reason);
+
+// Single-call conversation-turn follow-up proposal: the LLM returns the classified intent PLUS the
+// fully-bound answer/result for the follow-up (headline, winner, answer, and the interpretive result
+// set) so the rendered turn always matches the prompt that produced it.
+public sealed record WideFollowUpTurnProposal(
+    string Intent,
+    decimal Confidence,
+    string? EffectiveQuery,
+    string? Headline,
+    string? WinnerDisplayName,
+    string? Answer,
+    IReadOnlyCollection<WideInterpretiveResult> InterpretiveResults);
 
 public sealed record WideAnswerAction(string DisplayName,string NavigationRoute,string Rationale);
 

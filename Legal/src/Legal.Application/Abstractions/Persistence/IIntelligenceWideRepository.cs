@@ -98,4 +98,11 @@ public interface IIntelligenceWideRepository
     Task<WideSearchRunDetailDto?> GetWideSearchRunResultAsync(Guid tenantId,Guid userId,Guid wideSearchRunResultId,CancellationToken cancellationToken=default);
     // All runs in a continuous-chat thread (shared ConversationId), oldest-first, owned by the user.
     Task<IReadOnlyList<WideConversationTurnDto>> GetWideSearchConversationAsync(Guid tenantId,Guid userId,Guid conversationId,CancellationToken cancellationToken=default);
+    // Latest persisted WideSearchResponse for a given execution, tenant-scoped. Used by the follow-up
+    // ENRICH/EXPLAIN continuation path to rehydrate the parent result set for in-place transformation
+    // (keyed by ParentWideExecutionId, not run-result id). Fail-soft: returns null on missing/corrupt row.
+    Task<WideSearchResponse?> GetWideExecutionResponseAsync(Guid tenantId,Guid wideExecutionId,CancellationToken cancellationToken=default);
+    // DB-backed Search Quality Indicator configuration (0475): weighted factors, grade bands, and model
+    // recommendations. Platform (tenant-null) rows are global defaults, overridable per tenant.
+    Task<SearchQualityConfig> GetSearchQualityConfigAsync(Guid tenantId,CancellationToken cancellationToken=default);
 }

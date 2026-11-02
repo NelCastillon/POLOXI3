@@ -764,8 +764,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         // round 1 even when the caller forgot to increment — round math must never trust the client alone.
         if(!string.IsNullOrWhiteSpace(request.ClarificationAnswer))
         {
-            var clarificationConstraint=string.IsNullOrWhiteSpace(request.ClarificationTarget)?NormalizeQuery(request.ClarificationAnswer):$"{request.ClarificationTarget.Trim()}: {NormalizeQuery(request.ClarificationAnswer)}";
-            request=request with{Query=$"{request.Query} ({clarificationConstraint})",ClarificationRound=Math.Max(request.ClarificationRound,1)};
+            request=request with{Query=WideQueryFusion.Compose(request.Query,request.ClarificationTarget,request.ClarificationAnswer),ClarificationRound=Math.Max(request.ClarificationRound,1)};
         }
         // R2 Matter-first proposal input: load ONE immutable Matter Context Snapshot for this run when a
         // LEGAL request carries a MatterId. The snapshot is a projected INPUT to the proposal prompts; the
@@ -3698,7 +3697,8 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         }
     }
 
-    // Enterprise grounding: a branch mapped to an approved capability executes a deterministic authorized
+    // ── Follow-up intent routing ──────────────────────────────────────────────────────────────────
+    // Grounds a single branch against the capability catalog: the branch's interpretation drives a POLOXI
     // search; child evidence is intersected with the parent's evidence (progressive narrowing of the same
     // entity type). Unmapped branches survive as INTERPRETIVE reasoning paths.
     // Pure grounding: reads parent evidence keys but never mutates shared state, so branches within a
@@ -5919,7 +5919,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         var confidenceNarrative=responseMode switch
         {
             WideResponseModes.ClarificationRequired=>"Several distinct matches are possible — one detail from you resolves which one is meant.",
-            WideResponseModes.LimitedEvidence=>$"{winner.DisplayName} leads this analysis, but fewer of the deciding factors are backed by retrieved evidence than POLOXI prefers — treat the ranking as directional.",
+            WideResponseModes.LimitedEvidence=>$"{winner.DisplayName} is the current front-runner in this analysis. It makes a strong directional call while more of the deciding factors are still being corroborated with retrieved evidence.",
             WideResponseModes.AnswerWithRefinement=>$"{winner.DisplayName} leads this analysis, but several candidates scored closely and the ranking could change depending on how the deciding factors are weighted.",
             _=>$"{winner.DisplayName} leads this analysis with clear separation from the alternatives.",
         };

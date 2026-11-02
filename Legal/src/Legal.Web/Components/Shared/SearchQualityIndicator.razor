@@ -1,0 +1,105 @@
+@*
+    SearchQualityIndicator - enterprise per-result quality badge for /legal/search.
+
+    Renders the DB-backed Search Quality Assessment (migration 0475): a letter grade (A-E) with its
+    composite percentage, an expandable weighted-factor breakdown, and actionable suggestions (e.g. a
+    better model for the detected search type). Compact mode is used on Run History cards; the full
+    expandable form is used in the live result header. Fail-soft: renders nothing when Assessment is null.
+*@
+@if (Assessment is not null)
+{
+    <div class="sqi @(Compact ? "sqi--compact" : "")">
+        <button type="button"
+                class="sqi-badge"
+                style="--sqi-color:@Assessment.GradeColorHex"
+                title="Search quality: @Assessment.GradeLabel (@Assessment.Percent%)"
+                @onclick="Toggle"
+                @onclick:stopPropagation="true">
+            <span class="sqi-grade">@Assessment.Grade</span>
+            <span class="sqi-meta">
+                <span class="sqi-label">Quality</span>
+                <span class="sqi-score">@Assessment.Percent%<span class="sqi-caption"> @Assessment.GradeLabel</span></span>
+            </span>
+            @if (!Compact)
+            {
+                <i class="bi @(_expanded ? "bi-chevron-up" : "bi-chevron-down") sqi-chevron"></i>
+            }
+        </button>
+
+        @if (_expanded && !Compact)
+        {
+            <div class="sqi-detail">
+                @if (Assessment.Factors.Count > 0)
+                {
+                    <div class="sqi-section-title">Quality factors</div>
+                    <ul class="sqi-factors">
+                        @foreach (var factor in Assessment.Factors)
+                        {
+                            <li class="sqi-factor" title="@factor.Description">
+                                <span class="sqi-factor-name">@factor.DisplayName</span>
+                                <span class="sqi-bar">
+                                    <span class="sqi-bar-fill" style="width:@Pct(factor.NormalizedValue)%"></span>
+                                </span>
+                                <span class="sqi-factor-val">@Pct(factor.NormalizedValue)%</span>
+                            </li>
+                        }
+                    </ul>
+                }
+
+                @if (Assessment.Suggestions.Count > 0)
+                {
+                    <div class="sqi-section-title">Suggestions</div>
+                    <ul class="sqi-suggestions">
+                        @foreach (var suggestion in Assessment.Suggestions)
+                        {
+                            <li class="sqi-suggestion">
+                                <i class="bi @SuggestionIcon(suggestion.Kind) sqi-suggestion-icon"></i>
+                                <span class="sqi-suggestion-text">
+                                    @suggestion.Message
+                                    @if (!string.IsNullOrEmpty(suggestion.RecommendedModelCode) && OnUseModel.HasDelegate)
+                                    {
+                                        <button type="button" class="sqi-use-model"
+                                                @onclick="() => OnUseModel.InvokeAsync(suggestion.RecommendedModelCode!)"
+                                                @onclick:stopPropagation="true">
+                                            Use @suggestion.RecommendedModelLabel
+                                        </button>
+                                    }
+                                </span>
+                            </li>
+                        }
+                    </ul>
+                }
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public SearchQualityAssessmentDto? Assessment { get; set; }
+
+    // Compact mode (Run History cards): badge only, non-expandable.
+    [Parameter] public bool Compact { get; set; }
+
+    // Optional callback to apply a recommended model to the composer (live header only).
+    [Parameter] public EventCallback<string> OnUseModel { get; set; }
+
+    private bool _expanded;
+
+    private void Toggle()
+    {
+        if (!Compact)
+        {
+            _expanded = !_expanded;
+        }
+    }
+
+    private static int Pct(decimal value) => (int)Math.Round(Math.Clamp(value, 0m, 1m) * 100m, MidpointRounding.AwayFromZero);
+
+    private static string SuggestionIcon(string kind) => kind switch
+    {
+        "MODEL" => "bi-cpu",
+        "CONTEXT" => "bi-diagram-3",
+        "QUERY" => "bi-pencil-square",
+        _ => "bi-lightbulb"
+    };
+}

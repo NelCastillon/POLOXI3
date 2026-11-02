@@ -1108,17 +1108,20 @@ WHERE WideExecutionId=@WideExecutionId AND TenantId=@TenantId AND IsDeleted=0;
     public async Task SaveWideSearchRunResultAsync(WideSearchRunCapture capture,CancellationToken cancellationToken=default)
     {
         var r=capture.Response;
+        var q=r.QualityAssessment;
         const string sql="""
 INSERT POLOXI.Legal_WideSearchRunResult
     (WideSearchRunResultId,WideExecutionId,Query,StatusCode,TerminationReasonCode,DepthReached,LlmCallCount,
      FinalConfidence,DecisionConfidence,AnswerVerificationCode,AnswerKindCode,FinalAnswer,DurationMilliseconds,
      ProviderCodeUsed,ModelCodeUsed,EvidenceCoverage,ExternalEvidenceCount,EnterpriseEvidenceCount,BranchCount,
-     CandidateCount,ContextCode,ConversationId,DetailJson,CapturedUtc,TenantId,CreatedDateUtc,CreatedByUserId,IsDeleted)
+     CandidateCount,ContextCode,ConversationId,DetailJson,QualityScore,QualityGrade,QualityFactorsJson,QualitySuggestionsJson,
+     CapturedUtc,TenantId,CreatedDateUtc,CreatedByUserId,IsDeleted)
 VALUES
     (NEWID(),@WideExecutionId,@Query,@StatusCode,@TerminationReasonCode,@DepthReached,@LlmCallCount,
      @FinalConfidence,@DecisionConfidence,@AnswerVerificationCode,@AnswerKindCode,@FinalAnswer,@DurationMilliseconds,
      @ProviderCodeUsed,@ModelCodeUsed,@EvidenceCoverage,@ExternalEvidenceCount,@EnterpriseEvidenceCount,@BranchCount,
-     @CandidateCount,@ContextCode,@ConversationId,@DetailJson,SYSUTCDATETIME(),@TenantId,SYSUTCDATETIME(),@UserId,0);
+     @CandidateCount,@ContextCode,@ConversationId,@DetailJson,@QualityScore,@QualityGrade,@QualityFactorsJson,@QualitySuggestionsJson,
+     SYSUTCDATETIME(),@TenantId,SYSUTCDATETIME(),@UserId,0);
 """;
         using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         await connection.ExecuteAsync(new CommandDefinition(sql,new
@@ -1127,6 +1130,9 @@ VALUES
             r.FinalConfidence,r.DecisionConfidence,r.AnswerVerificationCode,r.AnswerKindCode,r.FinalAnswer,r.DurationMilliseconds,
             r.ProviderCodeUsed,r.ModelCodeUsed,r.EvidenceCoverage,r.ExternalEvidenceCount,r.EnterpriseEvidenceCount,
             BranchCount=r.Branches?.Count??0,CandidateCount=r.Candidates?.Count??0,capture.ContextCode,capture.ConversationId,capture.DetailJson,
+            QualityScore=q?.Score,QualityGrade=q?.Grade,
+            QualityFactorsJson=q is null?null:JsonSerializer.Serialize(q.Factors,RunHistoryJsonOptions),
+            QualitySuggestionsJson=q is null?null:JsonSerializer.Serialize(q.Suggestions,RunHistoryJsonOptions),
             TenantId=capture.TenantId,UserId=capture.UserId
         },cancellationToken:cancellationToken));
     }
@@ -1144,7 +1150,7 @@ WHERE TenantId=@TenantId AND CreatedByUserId=@UserId AND IsDeleted=0;
 SELECT WideSearchRunResultId,WideExecutionId,Query,StatusCode,TerminationReasonCode,AnswerKindCode,FinalAnswer,
        FinalConfidence,DecisionConfidence,DepthReached,LlmCallCount,BranchCount,CandidateCount,
        ExternalEvidenceCount,EnterpriseEvidenceCount,EvidenceCoverage,ProviderCodeUsed,ModelCodeUsed,ContextCode,
-       DurationMilliseconds,CreatedDateUtc,ConversationId
+       DurationMilliseconds,CreatedDateUtc,ConversationId,QualityScore,QualityGrade
 FROM POLOXI.Legal_WideSearchRunResult
 WHERE TenantId=@TenantId AND CreatedByUserId=@UserId AND IsDeleted=0
 ORDER BY CreatedDateUtc DESC
@@ -1160,7 +1166,7 @@ OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
     public async Task<WideSearchRunDetailDto?> GetWideSearchRunResultAsync(Guid tenantId,Guid userId,Guid wideSearchRunResultId,CancellationToken cancellationToken=default)
     {
         const string sql="""
-SELECT TOP(1) WideSearchRunResultId,WideExecutionId,Query,ContextCode,CreatedDateUtc,DetailJson
+SELECT TOP(1) WideSearchRunResultId,WideExecutionId,Query,ContextCode,CreatedDateUtc,DetailJson,ConversationId
 FROM POLOXI.Legal_WideSearchRunResult
 WHERE TenantId=@TenantId AND CreatedByUserId=@UserId AND WideSearchRunResultId=@WideSearchRunResultId AND IsDeleted=0;
 """;
@@ -1176,13 +1182,13 @@ WHERE TenantId=@TenantId AND CreatedByUserId=@UserId AND WideSearchRunResultId=@
             try{response=JsonSerializer.Deserialize<WideSearchResponse>(row.DetailJson,RunHistoryJsonOptions);}
             catch(JsonException){response=null;}
         }
-        return new WideSearchRunDetailDto(row.WideSearchRunResultId,row.WideExecutionId,row.Query??string.Empty,row.ContextCode,row.CreatedDateUtc,response);
+        return new WideSearchRunDetailDto(row.WideSearchRunResultId,row.WideExecutionId,row.Query??string.Empty,row.ContextCode,row.CreatedDateUtc,response,row.ConversationId);
     }
 
     public async Task<IReadOnlyList<WideConversationTurnDto>> GetWideSearchConversationAsync(Guid tenantId,Guid userId,Guid conversationId,CancellationToken cancellationToken=default)
     {
         const string sql="""
-SELECT WideSearchRunResultId,WideExecutionId,Query,ContextCode,CreatedDateUtc,DetailJson
+SELECT WideSearchRunResultId,WideExecutionId,Query,ContextCode,CreatedDateUtc,DetailJson,ConversationId
 FROM POLOXI.Legal_WideSearchRunResult
 WHERE TenantId=@TenantId AND CreatedByUserId=@UserId AND ConversationId=@ConversationId AND IsDeleted=0
 ORDER BY CreatedDateUtc ASC;
@@ -1203,9 +1209,57 @@ ORDER BY CreatedDateUtc ASC;
         return turns;
     }
 
-    private sealed record WideSearchRunResultRow(Guid WideSearchRunResultId,Guid WideExecutionId,string? Query,string? ContextCode,DateTime CreatedDateUtc,string? DetailJson);
+    public async Task<WideSearchResponse?> GetWideExecutionResponseAsync(Guid tenantId,Guid wideExecutionId,CancellationToken cancellationToken=default)
+    {
+        // Follow-up ENRICH/EXPLAIN rehydration: load the most recently persisted response for the parent
+        // execution (tenant-scoped, not user-scoped, so the continuation runs on behalf of the pipeline).
+        // DetailJson is camelCase (JsonSerializerDefaults.Web); reopen MUST use RunHistoryJsonOptions.
+        const string sql="""
+SELECT TOP(1) DetailJson
+FROM POLOXI.Legal_WideSearchRunResult
+WHERE TenantId=@TenantId AND WideExecutionId=@WideExecutionId AND IsDeleted=0
+ORDER BY CreatedDateUtc DESC;
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var detailJson=await connection.QuerySingleOrDefaultAsync<string?>(new CommandDefinition(sql,new{TenantId=tenantId,WideExecutionId=wideExecutionId},cancellationToken:cancellationToken));
+        if(string.IsNullOrWhiteSpace(detailJson))return null;
+        try{return JsonSerializer.Deserialize<WideSearchResponse>(detailJson,RunHistoryJsonOptions);}
+        catch(JsonException){return null;}
+    }
 
-    // Must match the serializer used by IntelligenceWideService (JsonSerializerDefaults.Web) so the saved
-    // DetailJson round-trips back into a fully-populated WideSearchResponse on reopen.
+    private sealed record WideSearchRunResultRow(Guid WideSearchRunResultId,Guid WideExecutionId,string? Query,string? ContextCode,DateTime CreatedDateUtc,string? DetailJson,Guid? ConversationId=null);
+
+    // ── Enterprise Search Quality Indicator configuration (0475) ──────────────────────────────────────
+    // Platform (tenant-null) rows are the global defaults; a tenant-specific row with the same key
+    // overrides the platform row. Fail-soft callers treat an empty config as "scoring disabled".
+    public async Task<SearchQualityConfig> GetSearchQualityConfigAsync(Guid tenantId,CancellationToken cancellationToken=default)
+    {
+        const string sql="""
+SELECT FactorCode,DisplayName,Description,MetricCode,Weight,MinValue,MaxValue,HigherIsBetter,SortOrder
+FROM POLOXI.Legal_SearchQualityFactor f
+WHERE f.IsActive=1 AND f.IsDeleted=0 AND (f.TenantId=@TenantId OR f.TenantId IS NULL)
+  AND NOT EXISTS(SELECT 1 FROM POLOXI.Legal_SearchQualityFactor o WHERE o.FactorCode=f.FactorCode AND o.TenantId=@TenantId AND o.IsActive=1 AND o.IsDeleted=0 AND f.TenantId IS NULL)
+ORDER BY SortOrder;
+
+SELECT Grade,Label,MinScore,ColorHex,SortOrder
+FROM POLOXI.Legal_SearchQualityGradeBand g
+WHERE g.IsActive=1 AND g.IsDeleted=0 AND (g.TenantId=@TenantId OR g.TenantId IS NULL)
+  AND NOT EXISTS(SELECT 1 FROM POLOXI.Legal_SearchQualityGradeBand o WHERE o.Grade=g.Grade AND o.TenantId=@TenantId AND o.IsActive=1 AND o.IsDeleted=0 AND g.TenantId IS NULL)
+ORDER BY MinScore DESC;
+
+SELECT AnswerKindCode,ContextCode,RecommendedModelCode,RecommendedModelLabel,Rationale,Priority
+FROM POLOXI.Legal_SearchModelRecommendation r
+WHERE r.IsActive=1 AND r.IsDeleted=0 AND (r.TenantId=@TenantId OR r.TenantId IS NULL)
+ORDER BY Priority;
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        using var reader=await connection.QueryMultipleAsync(new CommandDefinition(sql,new{TenantId=tenantId},cancellationToken:cancellationToken));
+        var factors=(await reader.ReadAsync<SearchQualityFactorConfigDto>()).AsList();
+        var bands=(await reader.ReadAsync<SearchQualityGradeBandDto>()).AsList();
+        var recommendations=(await reader.ReadAsync<SearchModelRecommendationDto>()).AsList();
+
+        return new SearchQualityConfig(factors,bands,recommendations);
+    }
+
     private static readonly JsonSerializerOptions RunHistoryJsonOptions=new(JsonSerializerDefaults.Web);
 }

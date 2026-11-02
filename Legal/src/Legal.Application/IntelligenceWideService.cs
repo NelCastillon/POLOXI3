@@ -14,7 +14,7 @@ namespace Legal.Application;
 // Isolated clone of the POLOXI search orchestration used by /intelligence/search/poloxi_wide.
 // Intentionally duplicates IntelligenceService.SearchWithPoloxiAsync so this "Wide" path can be
 // tweaked freely without changing /intelligence/search/poloxi behavior.
-public sealed partial class IntelligenceWideService(IIntelligenceRepository repository,IIntelligenceWideRepository wideRepository,IAiProviderRouter aiProviderRouter,IExternalKnowledgeProvider externalKnowledgeProvider,ILegalRetriever legalRetriever,IPromptCatalog promptCatalog,IAdaptiveRetriever adaptiveRetriever,IAbvResolutionEngine abvEngine,ILegalDocumentCorpusRepository documentCorpusRepository,ILogger<IntelligenceWideService> logger):IIntelligenceWideService
+public sealed partial class IntelligenceWideService(IIntelligenceRepository repository,IIntelligenceWideRepository wideRepository,IAiProviderRouter aiProviderRouter,IExternalKnowledgeProvider externalKnowledgeProvider,ILegalRetriever legalRetriever,IPromptCatalog promptCatalog,IAdaptiveRetriever adaptiveRetriever,IAbvResolutionEngine abvEngine,ILegalDocumentCorpusRepository documentCorpusRepository,ISearchQualityScorer searchQualityScorer,ILogger<IntelligenceWideService> logger):IIntelligenceWideService
 {
     private const int WideUserPromptBudget=48000;
     // Safe ceiling for the combined system+user prompt sent to a governed AI call. It sits below the
@@ -532,6 +532,17 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
     public async Task<WideSearchResponse> SearchDynamicAsync(WideSearchRequest request,CancellationToken cancellationToken=default)
     {
         var response=await SearchDynamicCoreAsync(request,cancellationToken);
+        // Enterprise Search Quality Indicator: compute the per-result quality assessment (fail-soft) and
+        // attach it to the response so the live result header and Run History both reflect run-time quality.
+        try
+        {
+            var assessment=await searchQualityScorer.AssessAsync(response,request.TenantId,request.ModelCode,request.ContextCode,cancellationToken);
+            if(assessment is not null)response=response with{QualityAssessment=assessment};
+        }
+        catch(Exception ex)when(!cancellationToken.IsCancellationRequested)
+        {
+            logger.LogWarning(ex,"Search quality scoring failed soft for execution {WideExecutionId}.",response.WideExecutionId);
+        }
         try
         {
             if(request.TenantId!=Guid.Empty&&request.UserId!=Guid.Empty)
@@ -584,8 +595,65 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
         // round 1 even when the caller forgot to increment — round math must never trust the client alone.
         if(!string.IsNullOrWhiteSpace(request.ClarificationAnswer))
         {
-            var clarificationConstraint=string.IsNullOrWhiteSpace(request.ClarificationTarget)?NormalizeQuery(request.ClarificationAnswer):$"{request.ClarificationTarget.Trim()}: {NormalizeQuery(request.ClarificationAnswer)}";
-            request=request with{Query=$"{request.Query} ({clarificationConstraint})",ClarificationRound=Math.Max(request.ClarificationRound,1)};
+            // Conversation-turn follow-up (primary path): a SINGLE prompt receives the prior query, the
+            // prior result set, and the new follow-up, and returns the classified intent PLUS the fully-
+            // bound answer/result. This guarantees the rendered headline/winner/items match the prompt
+            // that produced them (PIVOT keeps the prior entities but re-ranks by the new metric; RESET
+            // answers fresh). Any failure (no parent, LLM/parse error) returns null and degrades to the
+            // legacy transform/constraint-fusion paths below so existing behavior is preserved.
+            if(request.ParentWideExecutionId is{}turnParentId)
+            {
+                var turnResponse=await AnswerFollowUpTurnAsync(request,turnParentId,request.ClarificationAnswer!,timer,cancellationToken);
+                if(turnResponse is not null)return turnResponse;
+            }
+            // Legacy in-place transform (fail-soft fallback): classify the continuation before blindly
+            // fusing it as a constraint. ENRICH ("add date and location") / EXPLAIN ("why these") transform
+            // the SAME prior result set in place (preserving item identity/order) instead of re-running the
+            // pipeline with a narrowing constraint. NARROW/RERANK — or any case where the parent result set
+            // cannot be loaded — fall through to the constraint-fusion path below. Fail-soft throughout.
+            if(request.ParentWideExecutionId is{}enrichParentId)
+            {
+                var classification=await ClassifyFollowUpAsync(request,request.ClarificationAnswer!,cancellationToken);
+                if(classification.Intent is WideFollowUpIntent.Enrich or WideFollowUpIntent.Explain&&classification.Confidence>=0.5m)
+                {
+                    WideSearchResponse? parentResponse=null;
+                    try{parentResponse=await wideRepository.GetWideExecutionResponseAsync(request.TenantId,enrichParentId,cancellationToken);}
+                    catch(Exception)when(!cancellationToken.IsCancellationRequested){/* fail-soft to constraint path */}
+                    if(parentResponse is not null)
+                    {
+                        // Results are surfaced in the UI from BOTH the flat InterpretiveResults and each
+                        // AmbiguityGroups[].InterpretiveResults (grouped view). Transform the union once so the
+                        // LLM sees every displayed item, then merge the proposal back into both projections \u2014
+                        // otherwise a grouped-only parent would return visually unchanged (the user\u0027s \u0022no result\u0022).
+                        var flatResults=parentResponse.InterpretiveResults;
+                        var groupedResults=parentResponse.AmbiguityGroups.SelectMany(group=>group.InterpretiveResults).ToArray();
+                        var unionResults=flatResults.Concat(groupedResults).ToArray();
+                        if(unionResults.Length>0)
+                        {
+                            var proposal=await TransformPriorResultsProposalAsync(request,
+                                new(classification.Intent,request.ClarificationAnswer!,classification.RequestedFacets,unionResults),
+                                cancellationToken);
+                            if(proposal is{Count:>0})
+                            {
+                                var mergedFlat=flatResults.Count>0?MergeTransformedResults(flatResults,proposal):flatResults;
+                                var mergedGroups=parentResponse.AmbiguityGroups
+                                    .Select(group=>group.InterpretiveResults.Count>0
+                                        ?group with{InterpretiveResults=MergeTransformedResults(group.InterpretiveResults,proposal)}
+                                        :group)
+                                    .ToArray();
+                                return parentResponse with
+                                {
+                                    InterpretiveResults=mergedFlat,
+                                    AmbiguityGroups=mergedGroups,
+                                    DurationMilliseconds=timer.ElapsedMilliseconds
+                                };
+                            }
+                            return parentResponse with{DurationMilliseconds=timer.ElapsedMilliseconds};
+                        }
+                    }
+                }
+            }
+            request=request with{Query=WideQueryFusion.Compose(request.Query,request.ClarificationTarget,request.ClarificationAnswer),ClarificationRound=Math.Max(request.ClarificationRound,1)};
         }
         // 'POLOXI Engine' filter disabled: pure LLM answer, no hierarchy, grounding, or elimination.
         if(!request.UsePoloxiEngine)return await SearchLlmOnlyAsync(request,timer,cancellationToken);
@@ -2119,12 +2187,240 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
                 AnswerSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_LLM_RAW",null,request.CorrelationId,"Intelligent Search Wide"),SynthesisModel(request),cancellationToken);
             var answer=JsonSerializer.Deserialize<WideAnswerProposal>(result.Content,JsonOptions);
             var items=(answer?.InterpretiveResults??[]).FirstOrDefault(entry=>entry.Items is{Count:>0})?.Items;
-            return items is null?[]:items.OrderBy(item=>item.RankNumber).Select((item,index)=>new WideInterpretiveResultItemDto(item.RankNumber>0?item.RankNumber:index+1,item.Name.Trim(),item.Detail.Trim(),NormalizeScore(item.Score))).ToArray();
+            return items is null?[]:items.OrderBy(item=>item.RankNumber).Select((item,index)=>new WideInterpretiveResultItemDto(item.RankNumber>0?item.RankNumber:index+1,item.Name.Trim(),item.Detail.Trim(),NormalizeScore(item.Score)){Attributes=MapItemAttributes(item.Attributes)}).ToArray();
         }
         catch
         {
             return [];
         }
+    }
+
+    // ── Follow-up intent routing ───────────────────────────────────────────────────────────────────────
+    // Classifies a continuation (clarification/free-text follow-up) so the pipeline can transform the
+    // prior result set in place (ENRICH/EXPLAIN) instead of blindly re-running as a narrowing constraint.
+    // A deterministic prefilter resolves the obvious ENRICH ("add X") / EXPLAIN ("why") phrasings with no
+    // LLM cost; anything ambiguous falls through to the classifier LLM. Fail-soft: any failure or a
+    // low-confidence verdict degrades to NARROW so existing behavior is preserved.
+    private async Task<WideFollowUpClassification> ClassifyFollowUpAsync(WideSearchRequest request,string followUpText,CancellationToken cancellationToken)
+    {
+        var deterministic=ClassifyFollowUpDeterministic(followUpText);
+        if(deterministic is not null)return deterministic;
+        try
+        {
+            var result=await aiProviderRouter.GenerateAsync(request.TenantId,AnswerFeatureCode(request),
+                await GetWideSystemPromptAsync(request,IntelligencePromptCodes.WideFollowUpClassifier,cancellationToken),
+                $"Follow-up: {followUpText}",
+                FollowUpClassifierSchema,request.CorrelationId,new("Intelligence",null,null,followUpText,"WIDE_FOLLOWUP_CLASSIFIER",null,request.CorrelationId,"Intelligent Search Wide"),SynthesisModel(request),cancellationToken);
+            var proposal=JsonSerializer.Deserialize<WideFollowUpClassifierProposal>(result.Content,JsonOptions);
+            if(proposal is null)return new(WideFollowUpIntent.Narrow,0m);
+            var intent=ParseFollowUpIntent(proposal.Intent);
+            var facets=(proposal.RequestedFacets??[]).Where(facet=>!string.IsNullOrWhiteSpace(facet)).Select(facet=>facet.Trim()).ToArray();
+            return new(intent,Math.Clamp(proposal.Confidence,0,1)){RequestedFacets=facets,RawReason=proposal.Reason?.Trim()};
+        }
+        catch
+        {
+            return new(WideFollowUpIntent.Narrow,0m);
+        }
+    }
+
+    // Conversation-turn follow-up: a SINGLE prompt that receives the prior query, the prior result set,
+    // and the new follow-up, and returns the classified intent PLUS the fully-bound answer/result for the
+    // follow-up. Unlike the legacy constraint-fusion path, the returned response's Query/FinalAnswer/
+    // AnswerContext/InterpretiveResults all reflect the follow-up itself, so the rendered headline always
+    // matches the prompt that produced it (PIVOT keeps the prior entities but re-ranks by the new metric;
+    // RESET answers fresh). Fail-soft: null is returned so the caller can degrade to the legacy path.
+    private async Task<WideSearchResponse?> AnswerFollowUpTurnAsync(WideSearchRequest request,Guid parentExecutionId,string followUpText,Stopwatch timer,CancellationToken cancellationToken)
+    {
+        WideSearchResponse? parentResponse=null;
+        try{parentResponse=await wideRepository.GetWideExecutionResponseAsync(request.TenantId,parentExecutionId,cancellationToken);}
+        catch(Exception)when(!cancellationToken.IsCancellationRequested){return null;}
+        if(parentResponse is null)return null;
+        // The displayed prior result universe is the union of the flat results and every grouped result set
+        // so the turn prompt reasons over exactly what the user saw.
+        var priorResults=parentResponse.InterpretiveResults
+            .Concat(parentResponse.AmbiguityGroups.SelectMany(group=>group.InterpretiveResults))
+            .ToArray();
+        var executionId=await wideRepository.StartWideExecutionAsync(new(request.TenantId,request.UserId,followUpText,request.CorrelationId){ParentWideExecutionId=parentExecutionId},cancellationToken);
+        try
+        {
+            var priorResultsJson=JsonSerializer.Serialize(priorResults,JsonOptions);
+            var userMessage=$"Prior query: {parentResponse.Query}\nPrior result set:\n{priorResultsJson}\nFollow-up: {followUpText}";
+            var result=await aiProviderRouter.GenerateAsync(request.TenantId,AnswerFeatureCode(request),
+                await GetWideSystemPromptAsync(request,IntelligencePromptCodes.WideFollowUpTurn,cancellationToken),
+                userMessage,
+                FollowUpTurnSchema,request.CorrelationId,new("Intelligence",null,null,followUpText,"WIDE_FOLLOWUP_TURN",null,request.CorrelationId,"Intelligent Search Wide"),SynthesisModel(request),cancellationToken);
+            var proposal=JsonSerializer.Deserialize<WideFollowUpTurnProposal>(result.Content,JsonOptions);
+            if(proposal is null)
+            {
+                await wideRepository.CompleteWideExecutionAsync(request.TenantId,request.UserId,executionId,"FAILED","FOLLOWUP_TURN",0,1,0m,"NONE",null,timer.ElapsedMilliseconds,cancellationToken);
+                return null;
+            }
+            var intent=ParseFollowUpIntent(proposal.Intent);
+            var confidence=Math.Clamp(proposal.Confidence,0,1);
+            var effectiveQuery=string.IsNullOrWhiteSpace(proposal.EffectiveQuery)?followUpText:proposal.EffectiveQuery.Trim();
+            var winner=string.IsNullOrWhiteSpace(proposal.WinnerDisplayName)?null:proposal.WinnerDisplayName.Trim();
+            // Binding guard: the model occasionally names the correct winner for the new objective but leaves the
+            // result list in the PRIOR query's order (e.g. headline "Torrance" while items still rank the cheapest
+            // city #1). Promote the winner-named item to rank 1 so the headline and the list can never contradict.
+            var mappedResults=WideFollowUpHeuristics.ReconcileWinner(MapFollowUpTurnResults(proposal.InterpretiveResults),winner);
+            var answerText=string.IsNullOrWhiteSpace(proposal.Answer)?null:proposal.Answer.Trim();
+            var headline=string.IsNullOrWhiteSpace(proposal.Headline)?null:proposal.Headline.Trim();
+            timer.Stop();
+            await wideRepository.CompleteWideExecutionAsync(request.TenantId,request.UserId,executionId,"COMPLETED","FOLLOWUP_TURN",0,1,confidence,"INTERPRETIVE",answerText,timer.ElapsedMilliseconds,cancellationToken);
+            return new(executionId,effectiveQuery,"COMPLETED","FOLLOWUP_TURN",0,1,confidence,"INTERPRETIVE",answerText,[],[],[],timer.ElapsedMilliseconds)
+            {
+                InterpretiveResults=mappedResults,
+                ProviderCodeUsed=result.ProviderCode,
+                ModelCodeUsed=result.ModelCode,
+                ClarificationRound=Math.Max(request.ClarificationRound,1),
+                AnswerContext=new("FOLLOWUP",confidence>=0.66m?"High":confidence>=0.33m?"Moderate":"Low",headline??string.Empty){WinnerDisplayName=winner},
+                FollowUpIntentCode=intent.ToString().ToUpperInvariant()
+            };
+        }
+        catch(Exception)when(!cancellationToken.IsCancellationRequested)
+        {
+            try{await wideRepository.CompleteWideExecutionAsync(request.TenantId,request.UserId,executionId,"FAILED","FOLLOWUP_TURN",0,1,0m,"NONE",null,timer.ElapsedMilliseconds,cancellationToken);}
+            catch(Exception)when(!cancellationToken.IsCancellationRequested){/* best-effort */}
+            return null;
+        }
+    }
+
+    // Projects the conversation-turn proposal's interpretive results onto the public DTO without the
+    // branch-survivor resolution used by the full pipeline (a follow-up turn has no POLOXI branches): each
+    // result keeps its display name/interpretation and the turn confidence flows onto the items.
+    private static WideInterpretiveResultDto[] MapFollowUpTurnResults(IReadOnlyCollection<WideInterpretiveResult>? results)
+        => (results??[]).Where(result=>result.Items is{Count:>0})
+            .Select(result=>new WideInterpretiveResultDto(
+                result.BranchDisplayName.Trim(),
+                result.Interpretation.Trim(),
+                Math.Clamp(result.Items.Max(item=>item.Score??0m),0,1),
+                result.Items.OrderBy(item=>item.RankNumber)
+                    .Select((item,index)=>new WideInterpretiveResultItemDto(item.RankNumber>0?item.RankNumber:index+1,item.Name.Trim(),item.Detail.Trim(),NormalizeScore(item.Score)){Attributes=MapItemAttributes(item.Attributes)})
+                    .ToArray())
+            {
+                DataVolatility=result.DataVolatility?.Trim().ToUpperInvariant()=="TIME_SENSITIVE"?"TIME_SENSITIVE":"STABLE",
+                BranchStateCode=WideBranchStates.Active,
+                LevelNumber=1,
+                ScoreSource="LLM"
+            })
+            .ToArray();
+
+    // Zero-cost heuristic for the unambiguous transform phrasings. Returns null when the text is not an
+    // obvious ENRICH/EXPLAIN so the caller falls through to the LLM classifier.
+    private static WideFollowUpClassification? ClassifyFollowUpDeterministic(string followUpText)
+    {
+        if(string.IsNullOrWhiteSpace(followUpText))return null;
+        var text=followUpText.Trim();
+        var lower=text.ToLowerInvariant();
+        // EXPLAIN: a justification request about the existing items.
+        if(lower.StartsWith("why ")||lower=="why"||lower.StartsWith("explain")||lower.Contains("why these")||lower.Contains("why those")||lower.Contains("justify"))
+            return new(WideFollowUpIntent.Explain,0.9m);
+        // ENRICH: an additive "add/also show/include <facets>" request that augments the SAME items.
+        string[] enrichLeads=["add ","also show ","also add ","include ","show me the ","show the ","with the ","append "];
+        var lead=enrichLeads.FirstOrDefault(prefix=>lower.StartsWith(prefix));
+        if(lead is not null)
+        {
+            var remainder=text[lead.Length..];
+            var facets=ExtractFacetLabels(remainder);
+            if(facets.Count>0)
+                return new(WideFollowUpIntent.Enrich,0.9m){RequestedFacets=facets};
+        }
+        return null;
+    }
+
+    // Splits "date and location" / "date, location, and jurisdiction" into discrete facet labels.
+    private static IReadOnlyCollection<string> ExtractFacetLabels(string text)
+    {
+        if(string.IsNullOrWhiteSpace(text))return [];
+        var cleaned=text.Replace(" to it","",StringComparison.OrdinalIgnoreCase)
+            .Replace(" to them","",StringComparison.OrdinalIgnoreCase)
+            .Replace(" to each","",StringComparison.OrdinalIgnoreCase)
+            .Replace(" next to it","",StringComparison.OrdinalIgnoreCase)
+            .Replace(" column","",StringComparison.OrdinalIgnoreCase)
+            .Replace(" columns","",StringComparison.OrdinalIgnoreCase)
+            .Trim().TrimEnd('.','?','!');
+        return cleaned
+            .Split([",",";"," and "," & "],StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries)
+            .Select(token=>token.Trim().TrimStart("the ".ToCharArray()).Trim())
+            .Where(token=>token.Length is >0 and <=40)
+            .Take(6)
+            .ToArray();
+    }
+
+    private static WideFollowUpIntent ParseFollowUpIntent(string? intent)=>intent?.Trim().ToUpperInvariant() switch
+    {
+        "ENRICH"=>WideFollowUpIntent.Enrich,
+        "EXPLAIN"=>WideFollowUpIntent.Explain,
+        "RERANK"=>WideFollowUpIntent.Rerank,
+        "PIVOT"=>WideFollowUpIntent.Pivot,
+        "RESET"=>WideFollowUpIntent.Reset,
+        _=>WideFollowUpIntent.Narrow
+    };
+
+    // Transforms the parent's prior interpretive results in place for an ENRICH/EXPLAIN follow-up: the SAME
+    // items are returned with requested facets attached (ENRICH) or detail elaborated (EXPLAIN), preserving
+    // identity and order. Fail-soft: any failure returns the prior results unchanged.
+    private async Task<IReadOnlyCollection<WideInterpretiveResultDto>> TransformPriorResultsAsync(WideSearchRequest request,WideFollowUpTransformRequest transform,CancellationToken cancellationToken)
+    {
+        if(transform.PriorResults.Count==0)return transform.PriorResults;
+        var proposal=await TransformPriorResultsProposalAsync(request,transform,cancellationToken);
+        if(proposal is null or{Count:0})return transform.PriorResults;
+        var transformed=MergeTransformedResults(transform.PriorResults,proposal);
+        return transformed.Count>0?transformed:transform.PriorResults;
+    }
+
+    // Runs the transform LLM once and returns the raw proposed interpretive results (not yet merged), so a
+    // single transform can be merged into multiple projections (flat + grouped). Fail-soft: returns null on
+    // empty input or any failure.
+    private async Task<IReadOnlyCollection<WideInterpretiveResult>?> TransformPriorResultsProposalAsync(WideSearchRequest request,WideFollowUpTransformRequest transform,CancellationToken cancellationToken)
+    {
+        if(transform.PriorResults.Count==0)return null;
+        try
+        {
+            var facetLine=transform.RequestedFacets.Count>0?$"Requested facets: {string.Join(", ",transform.RequestedFacets)}.":"Requested facets: (none).";
+            var priorJson=JsonSerializer.Serialize(transform.PriorResults,JsonOptions);
+            var userMessage=$"Intent: {transform.Intent.ToString().ToUpperInvariant()}. Follow-up: {transform.FollowUpText}. {facetLine}\nExisting results to transform in place (do not add, remove, or reorder items):\n{priorJson}";
+            var result=await aiProviderRouter.GenerateAsync(request.TenantId,AnswerFeatureCode(request),
+                await GetWideSystemPromptAsync(request,IntelligencePromptCodes.WideFollowUpTransform,cancellationToken),
+                userMessage,
+                FollowUpTransformSchema,request.CorrelationId,new("Intelligence",null,null,transform.FollowUpText,"WIDE_FOLLOWUP_TRANSFORM",null,request.CorrelationId,"Intelligent Search Wide"),SynthesisModel(request),cancellationToken);
+            var proposal=JsonSerializer.Deserialize<WideAnswerProposal>(result.Content,JsonOptions);
+            return proposal?.InterpretiveResults;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    // Merges the LLM transform output onto the prior results by (branch, rankNumber/name) identity so the
+    // model can never add, drop, or reorder items: only each prior item's attributes and detail are updated.
+    private static IReadOnlyCollection<WideInterpretiveResultDto> MergeTransformedResults(IReadOnlyCollection<WideInterpretiveResultDto> prior,IReadOnlyCollection<WideInterpretiveResult>? transformed)
+    {
+        if(transformed is null or{Count:0})return prior;
+        var transformedByBranch=transformed
+            .GroupBy(result=>NormalizeBranchDisplayKey(result.BranchDisplayName),StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group=>group.Key,group=>group.First(),StringComparer.OrdinalIgnoreCase);
+        return prior.Select(priorResult=>
+        {
+            if(!transformedByBranch.TryGetValue(NormalizeBranchDisplayKey(priorResult.BranchDisplayName),out var match))
+                return priorResult;
+            var transformedItems=match.Items.ToDictionary(item=>item.RankNumber,item=>item);
+            var mergedItems=priorResult.Items.Select(priorItem=>
+            {
+                var replacement=transformedItems.TryGetValue(priorItem.RankNumber,out var byRank)&&string.Equals(byRank.Name.Trim(),priorItem.Name.Trim(),StringComparison.OrdinalIgnoreCase)
+                    ? byRank
+                    : match.Items.FirstOrDefault(item=>string.Equals(item.Name.Trim(),priorItem.Name.Trim(),StringComparison.OrdinalIgnoreCase));
+                if(replacement is null)return priorItem;
+                var mergedAttributes=MapItemAttributes(replacement.Attributes);
+                return priorItem with
+                {
+                    Detail=string.IsNullOrWhiteSpace(replacement.Detail)?priorItem.Detail:replacement.Detail.Trim(),
+                    Attributes=mergedAttributes.Count>0?mergedAttributes:priorItem.Attributes
+                };
+            }).ToArray();
+            return priorResult with{Items=mergedItems};
+        }).ToArray();
     }
 
     // Enterprise grounding: a branch mapped to an approved capability executes a deterministic authorized
@@ -3121,7 +3417,7 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
         var confidenceNarrative=responseMode switch
         {
             WideResponseModes.ClarificationRequired=>"Several distinct matches are possible — one detail from you resolves which one is meant.",
-            WideResponseModes.LimitedEvidence=>$"{winner.DisplayName} leads this analysis, but fewer of the deciding factors are backed by retrieved evidence than POLOXI prefers — treat the ranking as directional.",
+            WideResponseModes.LimitedEvidence=>$"{winner.DisplayName} is the current front-runner in this analysis. It makes a strong directional call while more of the deciding factors are still being corroborated with retrieved evidence.",
             WideResponseModes.AnswerWithRefinement=>$"{winner.DisplayName} leads this analysis, but several candidates scored closely and the ranking could change depending on how the deciding factors are weighted.",
             _=>$"{winner.DisplayName} leads this analysis with clear separation from the alternatives.",
         };
@@ -3509,6 +3805,17 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
 
     private static decimal? NormalizeScore(decimal? score)=>score is null?null:Math.Clamp(score.Value,0,1);
 
+    // Projects the LLM-proposed open-ended item facets (date, location, etc.) onto the public DTO,
+    // dropping blank entries. Shared by the raw-ranking and interpretive mapping paths so any attribute
+    // the model attaches (including via an ENRICH follow-up transform) flows through unchanged.
+    private static IReadOnlyCollection<WideResultItemAttributeDto> MapItemAttributes(IReadOnlyCollection<WideResultItemAttribute>? attributes)
+        => attributes is null or{Count:0}
+            ? []
+            : attributes
+                .Where(attribute=>!string.IsNullOrWhiteSpace(attribute.Label)&&!string.IsNullOrWhiteSpace(attribute.Value))
+                .Select(attribute=>new WideResultItemAttributeDto(attribute.Label.Trim(),attribute.Value.Trim()))
+                .ToArray();
+
     // Interpretive result sets answered by the LLM for the interpretive narrowing paths, arranged with
     // Level 1 branches first, then by POLOXI branch-support confidence (prior + evidence, highest first).
     private static WideInterpretiveResultDto[] MapInterpretiveResults(WideAnswerProposal answer,IReadOnlyCollection<WideBranchRecord> survivors,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge)
@@ -3531,7 +3838,7 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
         }
         var externallyGrounded=externalKnowledge.Count>0;
         return (answer.InterpretiveResults??[]).Where(result=>result.Items is{Count:>0})
-            .Select(result=>new WideInterpretiveResultDto(result.BranchDisplayName.Trim(),result.Interpretation.Trim(),Resolve(result.BranchDisplayName.Trim())?.Confidence??Math.Clamp(answer.Confidence,0,1),result.Items.OrderBy(item=>item.RankNumber).Select((item,index)=>new WideInterpretiveResultItemDto(item.RankNumber>0?item.RankNumber:index+1,item.Name.Trim(),item.Detail.Trim(),NormalizeScore(item.Score))).ToArray()){DataVolatility=result.DataVolatility?.Trim().ToUpperInvariant()=="TIME_SENSITIVE"?"TIME_SENSITIVE":"STABLE",IsExternallyGrounded=externallyGrounded,BranchStateCode=Resolve(result.BranchDisplayName.Trim())?.StateCode??WideBranchStates.Active,LevelNumber=Resolve(result.BranchDisplayName.Trim())?.Level??0,ScoreSource=Resolve(result.BranchDisplayName.Trim()) is null?"LLM":"POLOXI"})
+            .Select(result=>new WideInterpretiveResultDto(result.BranchDisplayName.Trim(),result.Interpretation.Trim(),Resolve(result.BranchDisplayName.Trim())?.Confidence??Math.Clamp(answer.Confidence,0,1),result.Items.OrderBy(item=>item.RankNumber).Select((item,index)=>new WideInterpretiveResultItemDto(item.RankNumber>0?item.RankNumber:index+1,item.Name.Trim(),item.Detail.Trim(),NormalizeScore(item.Score)){Attributes=MapItemAttributes(item.Attributes)}).ToArray()){DataVolatility=result.DataVolatility?.Trim().ToUpperInvariant()=="TIME_SENSITIVE"?"TIME_SENSITIVE":"STABLE",IsExternallyGrounded=externallyGrounded,BranchStateCode=Resolve(result.BranchDisplayName.Trim())?.StateCode??WideBranchStates.Active,LevelNumber=Resolve(result.BranchDisplayName.Trim())?.Level??0,ScoreSource=Resolve(result.BranchDisplayName.Trim()) is null?"LLM":"POLOXI"})
             .OrderBy(result=>Resolve(result.BranchDisplayName)?.Level??int.MaxValue)
             .ThenByDescending(result=>result.Confidence).ToArray();
     }
@@ -6295,6 +6602,137 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
 }
 """;
 
+    private const string FollowUpClassifierSchema="""
+{
+  "type": "object",
+  "properties": {
+    "intent": { "type": "string", "enum": ["NARROW", "RERANK", "ENRICH", "EXPLAIN"] },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "requestedFacets": { "type": "array", "maxItems": 6, "items": { "type": "string" } },
+    "reason": { "type": "string" }
+  },
+  "required": ["intent", "confidence", "requestedFacets", "reason"],
+  "additionalProperties": false
+}
+""";
+
+    private const string FollowUpTransformSchema="""
+{
+  "type": "object",
+  "properties": {
+    "answer": { "type": "string" },
+    "verificationCode": { "type": "string", "enum": ["VERIFIED", "PARTIALLY_VERIFIED", "INTERPRETIVE"] },
+    "confidence": { "type": "number" },
+    "relevantEvidenceNumbers": { "type": "array", "maxItems": 50, "items": { "type": "integer" } },
+    "externalReferences": { "type": "array", "maxItems": 0, "items": { "type": "object", "additionalProperties": false } },
+    "suggestedActions": { "type": "array", "maxItems": 0, "items": { "type": "object", "additionalProperties": false } },
+    "candidateInsights": { "type": "array", "maxItems": 0, "items": { "type": "object", "additionalProperties": false } },
+    "interpretiveResults": {
+      "type": "array",
+      "maxItems": 25,
+      "items": {
+        "type": "object",
+        "properties": {
+          "branchDisplayName": { "type": "string" },
+          "interpretation": { "type": "string" },
+          "dataVolatility": { "type": "string", "enum": ["STABLE", "TIME_SENSITIVE"] },
+          "items": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+              "type": "object",
+              "properties": {
+                "rankNumber": { "type": "integer" },
+                "name": { "type": "string" },
+                "detail": { "type": "string" },
+                "score": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+                "attributes": {
+                  "type": "array",
+                  "maxItems": 12,
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "label": { "type": "string" },
+                      "value": { "type": "string" }
+                    },
+                    "required": ["label", "value"],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": ["rankNumber", "name", "detail", "score", "attributes"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["branchDisplayName", "interpretation", "dataVolatility", "items"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["answer", "verificationCode", "confidence", "relevantEvidenceNumbers", "externalReferences", "suggestedActions", "interpretiveResults", "candidateInsights"],
+  "additionalProperties": false
+}
+""";
+
+    private const string FollowUpTurnSchema="""
+{
+  "type": "object",
+  "properties": {
+    "intent": { "type": "string", "enum": ["NARROW", "RERANK", "ENRICH", "EXPLAIN", "PIVOT", "RESET"] },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "effectiveQuery": { "type": "string" },
+    "headline": { "type": "string" },
+    "winnerDisplayName": { "type": "string" },
+    "answer": { "type": "string" },
+    "interpretiveResults": {
+      "type": "array",
+      "maxItems": 25,
+      "items": {
+        "type": "object",
+        "properties": {
+          "branchDisplayName": { "type": "string" },
+          "interpretation": { "type": "string" },
+          "dataVolatility": { "type": "string", "enum": ["STABLE", "TIME_SENSITIVE"] },
+          "items": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+              "type": "object",
+              "properties": {
+                "rankNumber": { "type": "integer" },
+                "name": { "type": "string" },
+                "detail": { "type": "string" },
+                "score": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+                "attributes": {
+                  "type": "array",
+                  "maxItems": 12,
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "label": { "type": "string" },
+                      "value": { "type": "string" }
+                    },
+                    "required": ["label", "value"],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": ["rankNumber", "name", "detail", "score", "attributes"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["branchDisplayName", "interpretation", "dataVolatility", "items"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["intent", "confidence", "effectiveQuery", "headline", "winnerDisplayName", "answer", "interpretiveResults"],
+  "additionalProperties": false
+}
+""";
+
     private const string AnswerSchema="""
 {
   "type": "object",
@@ -6351,9 +6789,22 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
                 "rankNumber": { "type": "integer" },
                 "name": { "type": "string" },
                 "detail": { "type": "string" },
-                "score": { "type": ["number", "null"], "minimum": 0, "maximum": 1 }
+                "score": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+                "attributes": {
+                  "type": "array",
+                  "maxItems": 12,
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "label": { "type": "string" },
+                      "value": { "type": "string" }
+                    },
+                    "required": ["label", "value"],
+                    "additionalProperties": false
+                  }
+                }
               },
-              "required": ["rankNumber", "name", "detail", "score"],
+              "required": ["rankNumber", "name", "detail", "score", "attributes"],
               "additionalProperties": false
             }
           }

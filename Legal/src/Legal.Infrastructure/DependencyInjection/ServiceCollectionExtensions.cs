@@ -283,6 +283,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<Legal.Application.Abstractions.Intelligence.IAmbiguityModelRouter, Legal.Application.Features.Intelligence.Ambiguity.AmbiguityModelRouter>();
         services.AddScoped<Legal.Application.Abstractions.Intelligence.IAmbiguityResolutionEngine, Legal.Application.Features.Intelligence.Ambiguity.AmbiguityResolutionEngine>();
 
+        services.AddScoped<ISearchQualityScorer, SearchQualityScorer>();
         services.AddScoped<IIntelligenceWideService, IntelligenceWideService>();
         services.AddScoped<IIntelligenceWide2Service, IntelligenceWide2Service>();
 
