@@ -1,5 +1,6 @@
 using Legal.Application.Abstractions.Intelligence;
 using Legal.Application.Features.Intelligence;
+using Legal.Application.Features.Intelligence.Decision;
 
 namespace Legal.Application;
 
@@ -66,6 +67,18 @@ public sealed partial class IntelligenceWideService
     // Deterministic AND-match: every keyword in a concept row must appear in the branch text. The emitted
     // citations flow through the SAME retrieval + mandatory identity gate, so a wrong mapping simply fails
     // verification and is dropped (never inflates confidence). Returns up to three authorities.
+    // /legal/search has no matter, court, or governing-law context, so there is no controlling
+    // jurisdiction to enforce at retrieval. CourtListener REQUIRES a scope and hard-stops on null
+    // (REQUIRED_AUTHORITY_SCOPE_MISSING, no HTTP request). The persuasive role is the lane the
+    // retriever explicitly allows to search unfiltered; the mandatory identity + proposition-support
+    // gates downstream are unchanged, so nothing is admitted as evidence without verification.
+    private static readonly LegalAuthorityScope WideSearchAuthorityScope=new()
+    {
+        AuthorityRoleCode=LegalAuthorityRoles.Persuasive,
+        StatusCode=LegalAuthorityScopeStatuses.Resolved,
+        ProvenanceCode="WIDE_SEARCH_DEFAULT",
+    };
+
     private static IReadOnlyList<LegalAuthorityReference> ResolveConceptAuthorities(string text,IReadOnlyCollection<WideLegalConceptAuthorityDto> conceptMap)
     {
         if(string.IsNullOrWhiteSpace(text)||conceptMap.Count==0)return [];

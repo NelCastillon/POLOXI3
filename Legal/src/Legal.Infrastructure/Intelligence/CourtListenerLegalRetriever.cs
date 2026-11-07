@@ -93,7 +93,10 @@ public sealed class CourtListenerLegalRetriever(HttpClient httpClient,ILogger<Co
                 ?eligibleCourts.Select(court=>court.Slug).Where(slug=>!string.IsNullOrWhiteSpace(slug)).Select(slug=>slug!).ToArray():[];
             var courtQuery=sourceCourtIds.Length>0
                 ?$"&court={Uri.EscapeDataString(string.Join(',',sourceCourtIds))}":string.Empty;
-            var url=$"{baseUrl}/api/rest/v4/search/?type=o&order_by=score%20desc&q={Uri.EscapeDataString(query)}{courtQuery}";
+            // highlight=on makes v4 return the passage that MATCHED the query (e.g. the paragraph citing
+            // "§ 1431.2") instead of the opinion head. The downstream identity gate is unchanged; it simply
+            // now sees the text that the search engine matched on rather than an unrelated lead paragraph.
+            var url=$"{baseUrl}/api/rest/v4/search/?type=o&order_by=score%20desc&highlight=on&q={Uri.EscapeDataString(query)}{courtQuery}";
             // STAGE 3 (CourtListener query): log the exact clean query sent so we can confirm a named
             // authority (e.g. "Raffles v Wichelhaus") is searched, not the whole user prompt.
             logger.LogInformation("LEGAL-TRACE stage=3-courtlistener-query query=\"{Query}\" url={Url}",query,url);

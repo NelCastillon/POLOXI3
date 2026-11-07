@@ -27,6 +27,7 @@ public sealed class WideRunResultRepository(ISqlConnectionFactory connectionFact
             ORDER BY r.CapturedUtc DESC;
             """,
             new { TenantId = tenantId, AnalysisRunId = analysisRunId },
+            commandTimeout: 120,
             cancellationToken: cancellationToken));
 
         if (string.IsNullOrWhiteSpace(detailJson))

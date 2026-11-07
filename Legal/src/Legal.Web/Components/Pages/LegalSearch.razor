@@ -1468,6 +1468,20 @@
                                     @foreach (var result in groupResults)
                                     {
                                         <div class="poloxi-group-result-set">
+                                            @if (!string.IsNullOrWhiteSpace(result.BranchDisplayName))
+                                            {
+                                                <div class="poloxi-branch-level" title="Branch this ranked list answers">
+                                                    <span class="poloxi-branch-chip"><i class="bi bi-diagram-2"></i>@result.BranchDisplayName</span>
+                                                    @if (result.Confidence > 0)
+                                                    {
+                                                        <span class="um-badge um-badge-neutral" title="Branch confidence">@result.Confidence.ToString("P0")</span>
+                                                    }
+                                                </div>
+                                                @if (!string.IsNullOrWhiteSpace(result.Interpretation))
+                                                {
+                                                    <small class="poloxi-muted">@result.Interpretation</small>
+                                                }
+                                            }
                                             <ol>
                                                  @foreach (var item in result.Items)
                                                 {
@@ -1659,6 +1673,12 @@
     // Shared KPI strip: rendered below the Full answer section in Answer view, or standalone in Analysis view.
     private RenderFragment KpiStrip => __builder =>
     {
+        @if (!string.IsNullOrWhiteSpace(_response!.GroundingWarning))
+        {
+            <div class="alert alert-danger" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
+                <i class="bi bi-plug-fill me-1" aria-hidden="true"></i><strong>External grounding unavailable.</strong> @_response.GroundingWarning
+            </div>
+        }
         <section class="poloxi-kpis poloxi-kpis--compact">
             <article><i class="bi bi-activity poloxi-kpi-icon"></i><span>Status</span><strong>@_response!.StatusCode</strong><small>@_response.TerminationReasonCode</small></article>
             <article title="End-to-end execution time of this POLOXI run, measured by the platform from request start to final answer."><i class="bi bi-stopwatch poloxi-kpi-icon"></i><span>Execution time</span><strong>@TimeSpan.FromMilliseconds(_response.DurationMilliseconds).TotalSeconds.ToString("0.0")s</strong><small>@_response.DurationMilliseconds.ToString("N0") ms</small></article>
@@ -2263,10 +2283,12 @@
         if (string.IsNullOrWhiteSpace(displayName))
             return string.Empty;
         var stripped = BranchLevelBracketPrefixPattern.Replace(displayName.Trim(), string.Empty);
+        stripped = BranchConfidenceSuffixPattern.Replace(stripped, string.Empty);
         return StripExistingLevelPrefix(stripped).Trim();
     }
 
     private static readonly System.Text.RegularExpressions.Regex BranchLevelBracketPrefixPattern = new(@"^\[\s*L(?:\d+|N)\s*\]\s*", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+    private static readonly System.Text.RegularExpressions.Regex BranchConfidenceSuffixPattern = new(@"\s*\(\s*\d{1,3}\s*%\s*\)\s*$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
     // Renders an item's open-ended facets (date, location, etc.) as labelled badges. Shared by every
     // item-rendering spot so any attribute an ENRICH follow-up attaches is shown without per-facet code.
     // Builds an external web-search URL for a result name, opened in a new tab so users can quickly
@@ -2554,9 +2576,7 @@
         try { _showPipeline = await Api.GetSearchShowPipelineAsync(); } catch { _showPipeline = false; }
         try
         {
-            _contexts = (await Api.GetIntelligenceSearchContextsAsync())
-                .Where(c => !string.Equals(c.ContextCode, "LEGAL", StringComparison.OrdinalIgnoreCase))
-                .ToList();
+            _contexts = await Api.GetIntelligenceSearchContextsAsync();
             var defaultContext = _contexts.FirstOrDefault(c => c.IsDefault) ?? _contexts.FirstOrDefault();
             if (defaultContext is not null) _selectedContextCode = defaultContext.ContextCode;
         }

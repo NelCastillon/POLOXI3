@@ -13,6 +13,9 @@ namespace Legal.Infrastructure.Intelligence;
 public sealed class TavilyExternalKnowledgeProvider(HttpClient httpClient,ILogger<TavilyExternalKnowledgeProvider> logger):IExternalKnowledgeProvider
 {
     private const string EndpointUrl="https://api.tavily.com/search";
+    private volatile string? _lastFailureReason;
+
+    public string? LastFailureReason=>_lastFailureReason;
 
     public async Task<IReadOnlyCollection<WideExternalKnowledgeSnippet>> SearchAsync(string query,WideExternalGroundingConfiguration configuration,CancellationToken cancellationToken=default)
     {
@@ -29,9 +32,17 @@ public sealed class TavilyExternalKnowledgeProvider(HttpClient httpClient,ILogge
             using var response=await httpClient.SendAsync(request,timeout.Token);
             if(!response.IsSuccessStatusCode)
             {
-                logger.LogWarning("Tavily search returned {StatusCode} for external grounding query.",(int)response.StatusCode);
+                var status=(int)response.StatusCode;
+                _lastFailureReason=status switch
+                {
+                    401 or 403=>$"Web grounding provider (Tavily) rejected the configured API key (HTTP {status}). Check Intelligence.SearchWide.ExternalGrounding.ApiKey.",
+                    429=>"Web grounding provider (Tavily) rate limit or quota exceeded (HTTP 429).",
+                    _=>$"Web grounding provider (Tavily) returned HTTP {status}."
+                };
+                logger.LogWarning("Tavily search returned {StatusCode} for external grounding query.",status);
                 return [];
             }
+            _lastFailureReason=null;
 
             var payload=await response.Content.ReadFromJsonAsync<TavilySearchResponse>(JsonOptions,timeout.Token);
             if(payload?.Results is not{Count:>0}results)return [];
@@ -45,6 +56,9 @@ public sealed class TavilyExternalKnowledgeProvider(HttpClient httpClient,ILogge
         }
         catch(Exception exception)when(exception is not OperationCanceledException||!cancellationToken.IsCancellationRequested)
         {
+            _lastFailureReason=exception is OperationCanceledException
+                ?$"Web grounding provider (Tavily) timed out after {configuration.TimeoutSeconds}s."
+                :$"Web grounding provider (Tavily) call failed: {exception.Message}";
             logger.LogWarning(exception,"Tavily external grounding call failed; continuing without live grounding.");
             return [];
         }

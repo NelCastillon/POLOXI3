@@ -1642,7 +1642,7 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
             timer.Stop();
             await wideRepository.CompleteWideExecutionAsync(request.TenantId,request.UserId,executionId,answerStatus,terminationReason,depth,llmCalls,aggregateConfidence,answer.VerificationCode,finalAnswerText,timer.ElapsedMilliseconds,cancellationToken);
             var response=new WideSearchResponse(executionId,request.Query,answerStatus,terminationReason,depth,llmCalls,aggregateConfidence,answer.VerificationCode,finalAnswerText,allBranches.Select(ToDto).ToArray(),relevantEvidence,answer.SuggestedActions.Select(action=>new WideActionSuggestionDto(action.DisplayName,action.NavigationRoute,action.Rationale)).ToArray(),timer.ElapsedMilliseconds){ExternalReferences=MapExternalReferences(answer),InterpretiveResults=interpretiveResults,ExternalKnowledge=externalKnowledge,ProposedLegalAuthorities=MapProposedLegalAuthorities(proposedLegalAuthorities,externalKnowledge),QueryContract=queryContract,
-            Candidates=candidates,AmbiguityGroups=ambiguityGroups,EvidenceCoverage=evidenceCoverage,DecisionEvidenceCoverage=decisionEvidenceCoverage,ExternalEvidenceCount=externalKnowledge.Count,EnterpriseEvidenceCount=relevantEvidence.Length,
+            Candidates=candidates,AmbiguityGroups=ambiguityGroups,EvidenceCoverage=evidenceCoverage,DecisionEvidenceCoverage=decisionEvidenceCoverage,ExternalEvidenceCount=externalKnowledge.Count,EnterpriseEvidenceCount=relevantEvidence.Length,GroundingWarning=ResolveGroundingWarning(request,externalKnowledge.Count),
             InitialEntropy=initialEntropy.Entropy,FinalEntropy=finalEntropy.Entropy,InitialNormalizedEntropy=initialEntropy.NormalizedEntropy,FinalNormalizedEntropy=finalEntropy.NormalizedEntropy,TotalActualInformationGain=totalActualInformationGain,EntropyBasisCode=finalEntropy.EntropyBasisCode,InformationRounds=informationRounds,
             WinnerStability=winnerStability,TopKStability=topKStability,DecisionConfidence=decisionConfidence,ChallengeOutcome=challengeOutcome,
             ClarificationQuestion=clarificationQuestion,ClarificationTarget=clarificationTarget,ClarificationOptions=clarificationOptions,
@@ -2565,7 +2565,7 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
                 maximumQueries=legalConfiguration.MaximumQueriesPerExecution;
                 maximumSnippets=legalConfiguration.MaximumSnippetsPerQuery;
                 cacheHours=legalConfiguration.CacheHours;
-                retrieve=(query,kind,token)=>legalRetriever.SearchAsync(query,legalConfiguration,kind,token);
+                retrieve=async(query,kind,token)=>(await legalRetriever.SearchScopedAsync(new(query,kind,WideSearchAuthorityScope),legalConfiguration,token)).Snippets;
                 legalConceptMap=await wideRepository.GetLegalConceptAuthoritiesAsync(request.TenantId,cancellationToken);
                 // Loud, explicit signal when the DB-backed concept->authority map is empty in a legal
                 // grounding run: concept-only doctrines (cure, waiver, perfect tender, ...) then resolve
@@ -2576,6 +2576,14 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
                     logger.LogWarning("LEGAL-TRACE stage=0-conceptmap outcome=EMPTY tenantId={TenantId}; POLOXI.Legal_LegalConceptAuthority returned 0 rows. Concept-only legal questions cannot resolve to a citation and will admit zero grounding evidence. Verify migration 0184_IntelligenceWideLegalConceptAuthority.sql has been applied to this database.",request.TenantId);
             }
             sourceResolved:
+            // Identical (query, kind) provider fetches are shared within this execution. Concept/explicit
+            // authorities recur across branches, so without this each branch fired its own concurrent
+            // request for the same citation and CourtListener answered the burst with 429s until the
+            // per-request timeout expired. Retrieval is otherwise unchanged (same query, same provider,
+            // same identity/support gates per branch); only the duplicate network round-trips collapse.
+            var inflight=new System.Collections.Concurrent.ConcurrentDictionary<(string Query,LegalAuthorityKind Kind),Lazy<Task<IReadOnlyCollection<WideExternalKnowledgeSnippet>>>>();
+            var providerRetrieve=retrieve;
+            retrieve=(query,kind,token)=>inflight.GetOrAdd((NormalizeQuery(query).ToLowerInvariant(),kind),_=>new(()=>providerRetrieve(query,kind,token))).Value;
             var notBeforeUtc=DateTime.UtcNow.AddHours(-cacheHours);
             var targets=interpretiveBranches.OrderBy(item=>item.LevelNumber).ThenByDescending(item=>item.Confidence).Take(maximumQueries).ToArray();
             var results=new IReadOnlyCollection<WideExternalKnowledgeSnippet>[targets.Length];
@@ -2653,24 +2661,46 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
                     // decisive doctrine to concrete UCC/U.S. Code citations via the DB-backed concept map,
                     // so concept-only questions still produce verifiable authorities instead of a diluted
                     // web query. Resolved citations route through the same identity/support gate.
+                    var resolvedFromConcept=false;
                     if(useLegalGrounding&&authorities.Count==0)
                     {
                         var resolved=ResolveConceptAuthorities($"{branch.DisplayName}. {branch.Interpretation}. {branch.SearchText}. {request.Query}",legalConceptMap);
                         if(resolved.Count>0)
                         {
                             authorities=resolved;
+                            resolvedFromConcept=true;
                             logger.LogInformation("LEGAL-TRACE stage=1-concept branchId={BranchId} branch=\"{Branch}\" resolvedFromConcept={Count} authorities=[{Authorities}]",branch.WideBranchId,branch.DisplayName,resolved.Count,string.Join(" | ",resolved.Select(a=>$"{a.Query} (kind={a.Kind}, tokens=[{string.Join(",",a.VerificationTokens)}])")));
                         }
                     }
-                    // V3.20: last-resort authority leads. When a legal branch names no citation AND the concept
-                    // map resolved nothing, use the model-PROPOSED authorities as retrieval leads so the branch
-                    // is not left ungrounded. These are UNTRUSTED: they flow through the SAME identity/support
-                    // admission gate in RetrieveStampedAsync (verify: authority), so an unverifiable proposal
-                    // simply yields no admitted snippet and never inflates confidence.
-                    if(useLegalGrounding&&authorities.Count==0&&proposedLegalAuthorities.Count>0)
+                    // V3.20: model-PROPOSED authority leads. Previously used only when BOTH extraction and the
+                    // concept map produced nothing; but the concept map resolves generic statutes (comparative
+                    // fault, limitations) for nearly every branch, so the proposed CASE leads (the authorities
+                    // CourtListener actually resolves) were never retrieved. They are now merged AFTER any
+                    // explicitly cited authority and interleaved ahead of concept-only statutes. These are
+                    // UNTRUSTED: they flow through the SAME identity/support admission gate in
+                    // RetrieveStampedAsync (verify: authority), so an unverifiable proposal simply yields no
+                    // admitted snippet and never inflates confidence.
+                    if(useLegalGrounding&&proposedLegalAuthorities.Count>0)
                     {
-                        authorities=proposedLegalAuthorities;
-                        logger.LogInformation("LEGAL-TRACE stage=1-proposed branchId={BranchId} branch=\"{Branch}\" proposedLeads={Count} authorities=[{Authorities}]",branch.WideBranchId,branch.DisplayName,proposedLegalAuthorities.Count,string.Join(" | ",proposedLegalAuthorities.Select(a=>$"{a.Query} (kind={a.Kind}, tokens=[{string.Join(",",a.VerificationTokens)}])")));
+                        // Every branch previously took the SAME first two leads (Take(2) below), so with N
+                        // branches the remaining proposals were never retrieved at all. Rotate the lead list by
+                        // branch index so the branch set collectively covers every proposed authority, and order
+                        // Case leads first: CourtListener is the source that reliably resolves them, whereas the
+                        // official statute hosts are frequently WAF-blocked (403) from this egress.
+                        var rotated=proposedLegalAuthorities
+                            .OrderBy(a=>a.Kind==LegalAuthorityKind.Case?0:1)
+                            .ToArray();
+                        var offset=(index*2)%rotated.Length;
+                        var leads=rotated.Skip(offset).Concat(rotated.Take(offset)).ToArray();
+                        var explicitAuthorities=resolvedFromConcept?[]:authorities;
+                        var conceptAuthorities=resolvedFromConcept?authorities:[];
+                        authorities=explicitAuthorities
+                            .Concat(leads.Where(a=>a.Kind==LegalAuthorityKind.Case))
+                            .Concat(conceptAuthorities)
+                            .Concat(leads.Where(a=>a.Kind!=LegalAuthorityKind.Case))
+                            .DistinctBy(a=>NormalizeQuery(a.Query).ToLowerInvariant())
+                            .ToArray();
+                        logger.LogInformation("LEGAL-TRACE stage=1-proposed branchId={BranchId} branch=\"{Branch}\" proposedLeads={Count} offset={Offset} authorities=[{Authorities}]",branch.WideBranchId,branch.DisplayName,proposedLegalAuthorities.Count,offset,string.Join(" | ",authorities.Take(2).Select(a=>$"{a.Query} (kind={a.Kind}, tokens=[{string.Join(",",a.VerificationTokens)}])")));
                     }
                     if(useLegalGrounding)
                     {
@@ -2749,10 +2779,26 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
             }
             return deduped;
         }
-        catch(Exception)when(!outerToken.IsCancellationRequested)
+        catch(Exception ex)when(!outerToken.IsCancellationRequested)
         {
+            // Fail-soft by design (grounding is advisory), but never silent: a swallowed exception here is
+            // indistinguishable from "nothing retrieved" and surfaces as 0% evidence support everywhere.
+            logger.LogWarning(ex,"LEGAL-TRACE stage=grounding-error contextCode={ContextCode} budgetExpired={BudgetExpired} elapsedSeconds={Elapsed:F1} message={Message}; grounding phase aborted and zero evidence will be admitted.",request.ContextCode,budgetCts.IsCancellationRequested,phaseStopwatch.Elapsed.TotalSeconds,ex.Message);
             return [];
         }
+    }
+
+    // Explains a zero external-evidence result caused by the web grounding provider itself failing
+    // (e.g. Tavily 401). Only the General context routes through that provider; Legal uses the legal
+    // retrievers, whose per-stage LEGAL-TRACE diagnostics already cover their failures.
+    private string? ResolveGroundingWarning(WideSearchRequest request,int externalEvidenceCount)
+    {
+        if(externalEvidenceCount>0)return null;
+        if(string.Equals(request.ContextCode?.Trim(),WideSearchContexts.Legal,StringComparison.OrdinalIgnoreCase))return null;
+        var reason=externalKnowledgeProvider.LastFailureReason;
+        if(string.IsNullOrWhiteSpace(reason))return null;
+        logger.LogWarning("LEGAL-TRACE stage=0-router outcome=PROVIDER_FAILED contextCode={ContextCode} reason={Reason}",request.ContextCode,reason);
+        return reason+" No external evidence could be retrieved, so LLM-knowledge references remain unverified and the candidate competition could not be grounded.";
     }
 
     private async Task<(WideAnswerProposal Proposal,string ProviderCode,string ModelCode)> ComposeAnswerAsync(WideSearchRequest request,IReadOnlyCollection<WideBranchRecord> survivors,IReadOnlyCollection<PoloxiEvidenceDto> ranked,decimal confidence,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge,WideQueryContract? queryContract,CancellationToken cancellationToken)
@@ -2897,8 +2943,12 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
     private static string NormalizeBranchDisplayKey(string displayName)
     {
         var value=displayName.Trim();
-        value=System.Text.RegularExpressions.Regex.Replace(value,@"^L\d+\s*(?:·|-|:)?\s*",string.Empty,System.Text.RegularExpressions.RegexOptions.IgnoreCase|System.Text.RegularExpressions.RegexOptions.CultureInvariant).Trim();
-        return value;
+        // Answer models may echo the prompt's "[L1] Name (88%)" form verbatim; strip the bracket level tag
+        // and trailing confidence suffix so the result still resolves to its stored branch.
+        value=System.Text.RegularExpressions.Regex.Replace(value,@"^\[\s*L(?:\d+|N)\s*\]\s*",string.Empty,System.Text.RegularExpressions.RegexOptions.IgnoreCase|System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        value=System.Text.RegularExpressions.Regex.Replace(value,@"^L\d+\s*(?:·|-|:)?\s*",string.Empty,System.Text.RegularExpressions.RegexOptions.IgnoreCase|System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        value=System.Text.RegularExpressions.Regex.Replace(value,@"\s*\(\s*\d{1,3}\s*%\s*\)\s*$",string.Empty,System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        return value.Trim();
     }
 
     private static Dictionary<string,WideBranchRecord> BuildBranchDisplayLookup(IReadOnlyCollection<WideBranchRecord> branches)=>
@@ -3734,15 +3784,15 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
         var roots=branchArray.Where(branch=>branch.LevelNumber==1).OrderByDescending(branch=>branch.PoloxiConfidence).ThenBy(branch=>branch.SortOrder).ToArray();
         if(roots.Length==0)return [];
         var byParent=branchArray.Where(branch=>branch.ParentWideBranchId is not null).ToLookup(branch=>branch.ParentWideBranchId!.Value);
-        var resultNames=interpretiveResults.ToLookup(result=>result.BranchDisplayName,StringComparer.OrdinalIgnoreCase);
+        var resultNames=interpretiveResults.ToLookup(result=>NormalizeBranchDisplayKey(result.BranchDisplayName),StringComparer.OrdinalIgnoreCase);
         var groups=new List<WideAmbiguityGroupDto>();
         foreach(var root in roots)
         {
             var groupBranches=GetDescendants(root,byParent).Prepend(root).ToArray();
             var groupBranchIds=groupBranches.Select(branch=>branch.WideBranchId).ToHashSet();
-            var groupBranchNames=groupBranches.Select(branch=>branch.DisplayName).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var groupResults=interpretiveResults.Where(result=>groupBranchNames.Contains(result.BranchDisplayName)).ToArray();
-            if(groupResults.Length==0&&resultNames[root.DisplayName].Any())groupResults=resultNames[root.DisplayName].ToArray();
+            var groupBranchNames=groupBranches.Select(branch=>NormalizeBranchDisplayKey(branch.DisplayName)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var groupResults=interpretiveResults.Where(result=>groupBranchNames.Contains(NormalizeBranchDisplayKey(result.BranchDisplayName))).ToArray();
+            if(groupResults.Length==0&&resultNames[NormalizeBranchDisplayKey(root.DisplayName)].Any())groupResults=resultNames[NormalizeBranchDisplayKey(root.DisplayName)].ToArray();
             var groupCandidateNames=groupResults.SelectMany(result=>result.Items.Select(item=>item.Name)).ToHashSet(StringComparer.OrdinalIgnoreCase);
             var groupCandidates=groupCandidateNames.Count==0?[]:candidates.Where(candidate=>groupCandidateNames.Contains(candidate.DisplayName)).ToArray();
             var groupEvidence=evidence.Where(item=>groupBranchIds.Contains(item.HierarchyBranchId)).ToArray();
@@ -4960,7 +5010,7 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
                 if(!legalConfiguration.Enabled)return [];
                 maximumSnippets=legalConfiguration.MaximumSnippetsPerQuery;
                 cacheHours=legalConfiguration.CacheHours;
-                retrieve=(query,token)=>legalRetriever.SearchAsync(query,legalConfiguration,LegalAuthorityKind.Any,token);
+                retrieve=async(query,token)=>(await legalRetriever.SearchScopedAsync(new(query,LegalAuthorityKind.Any,WideSearchAuthorityScope),legalConfiguration,token)).Snippets;
             }
             else
             {

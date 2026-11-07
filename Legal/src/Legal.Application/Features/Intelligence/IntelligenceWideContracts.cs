@@ -717,6 +717,10 @@ public sealed record WideSearchResponse(Guid WideExecutionId,string Query,string
     public decimal DecisionEvidenceCoverage{get;init;}
     public int ExternalEvidenceCount{get;init;}
     public int EnterpriseEvidenceCount{get;init;}
+    // Human-readable reason when external grounding yielded nothing because the provider itself failed
+    // (rejected credentials, quota, transport). Null when grounding ran normally. Presentation-only:
+    // evidence gates and scoring are unchanged; this only explains a 0 instead of hiding it.
+    public string? GroundingWarning{get;init;}
     // V2.2: deterministic Shannon entropy over ACTIVE/SECONDARY branches (bits) measured at start and end.
     public decimal InitialEntropy{get;init;}
     public decimal FinalEntropy{get;init;}
