@@ -15,7 +15,7 @@
 @inject ActiveMatterContext ActiveMatter
 <LegalWorkspace ExtraClass="intel-compact">
     <div class="poloxi-page">
-@if (_initializing)
+@if (_initializing || _viewingCompleteRun)
 {
     <section class="poloxi-init-overlay" role="status" aria-live="polite">
         <div class="poloxi-init-overlay-inner">
@@ -39,7 +39,7 @@
                     </g>
                 </svg>
             </div>
-            <div class="pid2-loader-text">Loading decision intelligence… waiting for the data service.</div>
+            <div class="pid2-loader-text">@(_viewingCompleteRun ? "Loading the original complete run…" : "Loading decision intelligence… waiting for the data service.")</div>
         </div>
     </section>
 }
@@ -360,7 +360,7 @@
                                     <CitationsTab Owner="this" />
                                     break;
                                             case "Run History":
-                                    <RunHistoryTab MatterId="EffectiveMatterId" />
+                                    <RunHistoryTab MatterId="EffectiveMatterId" OnViewCompleteRun="HandleViewCompleteRunAsync" />
                                     break;
                                             case "Channel Scoring (LPI)":
                                     <ChannelScoringLpiTab Owner="this" />
@@ -7445,6 +7445,8 @@
         }
     }
     private bool _initializing = true;
+    // Enterprise loading overlay shown while the "View Original Complete Run" action rehydrates a saved run.
+    private bool _viewingCompleteRun;
     private bool _showPipeline;
     // Factor inventory: default to hiding broad parent (L1/L2) groupings so only atomic L3 factors show.
     private bool _atomicFactorsOnly = true;
@@ -10301,9 +10303,51 @@
     {
         if (_initializing)
             return;
-        if (RunId is { } runId && runId != Guid.Empty && runId != _loadedRunId)
+        if (RunId is { } runId && runId != Guid.Empty)
         {
-            await LoadSavedRunAsync(runId);
+            if (runId != _loadedRunId)
+                await LoadSavedRunAsync(runId);
+
+            // "View Original Complete Run" (and other Run History deep-links) only change the ?runId query
+            // string; the workspace stays on the Run History tab, so the rehydrated complete run — which
+            // renders in the Overview/workspace region driven by _response — is never shown. Switch to
+            // Overview so the loaded run's full results become visible.
+            if (_dfiTab == "Run History")
+                _dfiTab = "Overview";
+
+            StateHasChanged();
+        }
+    }
+
+    // Invoked by the embedded Run History tab's "View Original Complete Run" button. Because that tab
+    // lives inside this page, the selected run is frequently the one already loaded (?runId matches), so
+    // a URL navigation is a no-op and the workspace stays stuck on the Run History tab. Switch to the
+    // Overview/complete-run view here directly, rehydrating the run only when it differs from the loaded one.
+    private async Task HandleViewCompleteRunAsync(Guid runId)
+    {
+        if (runId == Guid.Empty)
+            return;
+
+        // Surface the enterprise loading overlay while the saved run rehydrates so the transition from
+        // the Run History tab to the complete-run Overview never looks frozen.
+        _viewingCompleteRun = true;
+        StateHasChanged();
+        try
+        {
+            if (runId != _loadedRunId)
+                await LoadSavedRunAsync(runId);
+
+            _dfiTab = "Overview";
+
+            // Keep the URL in sync so a refresh or deep-link still resolves to this run. Navigating to the
+            // identical URL is a harmless no-op; a changed URL re-enters OnParametersSetAsync which repeats
+            // the same switch safely.
+            if (EffectiveMatterId is { } matterId && matterId != Guid.Empty)
+                Navigation.NavigateTo($"/legal/personalinjury_decision2?matterId={matterId}&runId={runId}&readonly=1");
+        }
+        finally
+        {
+            _viewingCompleteRun = false;
             StateHasChanged();
         }
     }

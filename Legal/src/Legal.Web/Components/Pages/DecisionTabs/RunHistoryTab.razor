@@ -132,6 +132,10 @@
                                             <span> · @DurationText(secs)</span>
                                         }
                                         <span> · @PublishStateText(run)</span>
+                                        @if (!string.IsNullOrWhiteSpace(run.InputSnapshot?.ModelCode))
+                                        {
+                                            <span> · @run.InputSnapshot!.ModelCode</span>
+                                        }
                                     </div>
                                     @if (string.Equals(run.TriggerTypeCode, "EVIDENCE_ADDED", StringComparison.Ordinal) && !string.IsNullOrWhiteSpace(run.TriggerText))
                                     {
@@ -162,6 +166,10 @@
                                 @if (!string.IsNullOrWhiteSpace(selected.InputSnapshotLabel))
                                 {
                                     <span> · Input @selected.InputSnapshotLabel</span>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(selected.InputSnapshot?.ModelCode))
+                                {
+                                    <span> · Model @selected.InputSnapshot!.ModelCode</span>
                                 }
                             </div>
                         </div>
@@ -361,6 +369,12 @@
 @code {
     [Parameter] public Guid? MatterId { get; set; }
 
+    // Optional host hook. When this tab is embedded in the decision cockpit, the cockpit owns the
+    // ?runId query and the active workspace tab, so navigating to the same URL is a no-op and nothing
+    // appears to happen. When the host supplies this callback we hand the run off to it (switch to the
+    // Overview/complete-run view and rehydrate) instead of a self-navigation that does nothing.
+    [Parameter] public EventCallback<Guid> OnViewCompleteRun { get; set; }
+
     // Scope the "Full workspace" link to THIS matter. Without the matterId query parameter the
     // RunAssessmentManagement page falls back to the most-recent matter, opening the wrong one.
     private string FullWorkspaceHref => MatterId is { } id && id != Guid.Empty
@@ -511,6 +525,15 @@
     {
         if (_page is null)
             return;
+
+        // Embedded in the decision cockpit: let the host switch to the complete-run view and rehydrate.
+        // A self-navigation here would target the same ?runId URL already loaded and do nothing.
+        if (OnViewCompleteRun.HasDelegate)
+        {
+            _ = OnViewCompleteRun.InvokeAsync(runId);
+            return;
+        }
+
         Navigation.NavigateTo($"/legal/personalinjury_decision2?matterId={_page.MatterId}&runId={runId}&readonly=1");
     }
 
