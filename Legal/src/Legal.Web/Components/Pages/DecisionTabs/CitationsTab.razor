@@ -1,6 +1,7 @@
 @namespace Legal.Web.Components.Pages.DecisionTabs
 @using Legal.Web.Components.Pages
 @inject ApiClient Api
+@inject NavigationManager Navigation
 
 @* ── Citations tab. A consolidated, filterable view of every legal-authority citation
      proposed or verified for this matter's latest decision session. Reuses the same
@@ -205,9 +206,20 @@
                             {
                                 <div class="poloxi-legal-block">
                                     <h4>Key Authorities</h4>
-                                    <ul class="poloxi-legal-authorities">
-                                        @foreach (var authority in legalAnswer.KeyAuthorities)
-                                        {
+                                    @{
+                                        // Resolve each authority's linked matter passage ONCE, deterministically and
+                                        // DISTINCTLY: a matter passage already linked to an earlier authority is not
+                                        // reused for a later one, so three authorities never collapse to the same
+                                        // generic ledger line. Never fabricates — returns null when nothing specific
+                                        // remains unused.
+                                            var keyAuthorityList = legalAnswer.KeyAuthorities as IReadOnlyList<WideLegalAuthorityDto> ?? legalAnswer.KeyAuthorities.ToList();
+                                            var linkedPassages = ResolveDistinctLinkedPassages(keyAuthorityList);
+                                        }
+                                        <ul class="poloxi-legal-authorities">
+                                            @for (var ai = 0; ai < keyAuthorityList.Count; ai++)
+                                            {
+                                                var authority = keyAuthorityList[ai];
+                                            var linkedPassage = linkedPassages[ai];
                                             <li>
                                                 @if (!string.IsNullOrWhiteSpace(authority.Reference))
                                                 {
@@ -218,14 +230,6 @@
                                                     <strong>@authority.Name</strong>
                                                 }
                                                 <span> — @authority.Relevance</span>
-                                                @{
-                                                    // Prefer the composer-produced linked passage (quoted verbatim from
-                                                    // matter context). When null, fall back to a deterministic match
-                                                    // against this matter's factors/evidence — never fabricated.
-                                                    var linkedPassage = !string.IsNullOrWhiteSpace(authority.LinkedMatterPassage)
-                                                        ? authority.LinkedMatterPassage
-                                                        : MatchMatterPassage(authority);
-                                                }
                                                 <div class="cit-passage-pair">
                                                     <div class="cit-passage cit-passage--authority">
                                                         <span class="cit-passage-label"><i class="bi bi-bank"></i> Authority passage</span>
@@ -239,7 +243,7 @@
                                                         }
                                                         else
                                                         {
-                                                            <p class="cit-passage-empty">No matching matter passage in context.</p>
+                                                            <p class="cit-passage-empty">No authority-specific matter passage in context.</p>
                                                         }
                                                     </div>
                                                 </div>
@@ -327,6 +331,25 @@
                                     </div>
                                 }
                             </div>
+                        }
+                        else
+                        {
+                            @* Fallback ranking mirrors /legal/search: whenever the L1 Candidate × Branch
+                               competition produced candidates, always show the deterministic final ranking,
+                               even if the composer emitted no CandidateSummaries. *@
+                            var deepRanked = DeepRankedCandidates(resp);
+                            @if (deepRanked.Count > 0)
+                            {
+                                <div class="poloxi-grounded-branches">
+                                    <small title="Deterministic final ordering from the Candidate × Branch competition — the authoritative POLOXI conclusion, never the pre-competition LLM composition.">Final POLOXI ranking (Candidate × Branch competition):</small>
+                                    <ol class="poloxi-final-ranking">
+                                        @foreach (var candidate in deepRanked)
+                                        {
+                                            <li><strong>@candidate.DisplayName</strong> <span>@candidate.CompositeScore.ToString("P0")</span></li>
+                                        }
+                                    </ol>
+                                </div>
+                            }
                         }
 
                         @if (answerContext.WinnerStrengths.Count > 0 && answerContext.WinnerDisplayName is not null)
@@ -494,9 +517,307 @@
                         </div>
                     </section>
                 }
+
+                @* ── Reasoning hierarchy + Interpretation results (mirrors /legal/search). ── *@
+                @if (resp.Branches.Count > 0 || resp.ExternalReferences.Count > 0 || resp.InterpretiveResults.Count > 0)
+                {
+                    <div class="poloxi-layout">
+                        <section class="poloxi-panel poloxi-hierarchy-panel">
+                            <div class="poloxi-panel-header"><div class="poloxi-panel-title"><span class="poloxi-panel-icon"><i class="bi bi-diagram-3"></i></span><div><span>EPG Engine Logic Applied</span><h2>Reasoning hierarchy</h2></div></div></div>
+                            <div class="poloxi-tree">
+                                @foreach (var level in BranchLevels)
+                                {
+                                    @foreach (var branch in level)
+                                    {
+                                        <article class="poloxi-branch @(branch.IsEliminated ? "poloxi-branch-unsupported" : "poloxi-branch-valid")">
+                                            <span class="poloxi-branch-icon"><i class="bi @(branch.IsEliminated ? "bi-slash-circle" : branch.GroundingStatusCode == "GROUNDED" ? "bi-check2-circle" : "bi-lightbulb")"></i></span>
+                                            <div class="poloxi-branch-body">
+                                                <strong>@BranchDisplayWithLevel(branch)</strong>
+                                                <p>@branch.Interpretation</p>
+                                                <small>@(branch.IsEliminated ? branch.EliminationReason : branch.GroundingStatusCode == "GROUNDED" ? $"Grounded · {branch.EvidenceCount} evidence" : "Interpretive reasoning path (not enterprise-grounded)")@(branch.StopReason is not null ? $" · {branch.StopReason}" : null)</small>
+                                                @if (resp.QueryContract is { } hierarchyContract)
+                                                {
+                                                    var associatedContractEntries = AssociatedContractEntries(branch, hierarchyContract);
+                                                    @if (associatedContractEntries.Count > 0)
+                                                    {
+                                                        <div class="poloxi-branch-contract" aria-label="Query contract entries associated with this hierarchy branch">
+                                                            <span class="poloxi-branch-contract-title"><i class="bi bi-file-earmark-check"></i> Associated query contract</span>
+                                                            @foreach (var entry in associatedContractEntries)
+                                                            {
+                                                                <span title="@entry.Title"><i class="bi @entry.Icon"></i>@entry.Value<em>@entry.Label</em></span>
+                                                            }
+                                                        </div>
+                                                    }
+                                                }
+                                            </div>
+                                            <div class="poloxi-branch-meta"><span>@BranchStateLabel(branch)</span>@if (branch.SemanticTypeCode == "DIMENSION")
+                                                {
+                                                    <span class="um-badge um-badge-neutral" title="Jointly valid evaluation criterion — scored on importance/coverage, excluded from winner-take-all entropy.">Dimension</span>
+                                                }
+                                                else
+                                                {
+                                                    <span class="um-badge um-badge-neutral" title="Mutually exclusive competing interpretation — participates in Shannon entropy.">Alternative</span>
+                                                }<small title="Interpretation prior (LLM) · Evidence support · POLOXI confidence">@(branch.PoloxiConfidence > 0 ? $"{branch.InterpretationPrior:P0} · {branch.EvidenceSupport:P0} · {branch.PoloxiConfidence:P0}" : branch.Confidence.ToString("P0"))</small></div>
+                                        </article>
+                                    }
+                                }
+                            </div>
+                        </section>
+
+                        <section class="poloxi-panel poloxi-evidence-panel">
+                            <div class="poloxi-panel-header"><div class="poloxi-panel-title"><span class="poloxi-panel-icon"><i class="bi bi-collection"></i></span><div><span>LLM knowledge · not enterprise data</span><h2>Results &amp; references</h2></div></div></div>
+                            @if (resp.Evidence.Count == 0 && resp.ExternalReferences.Count == 0 && resp.InterpretiveResults.Count == 0)
+                            {
+                                <div class="poloxi-empty"><i class="bi bi-lightbulb"></i><strong>No result sets returned</strong><p>The LLM did not return interpretive result sets or references for this question.</p></div>
+                            }
+                            @foreach (var evidence in resp.Evidence)
+                            {
+                                var canOpen = !string.IsNullOrWhiteSpace(evidence.NavigationRoute);
+                                <article class="poloxi-evidence @(canOpen ? "poloxi-evidence-clickable" : null)" @ondblclick="() => OpenEvidence(evidence)" title="@(canOpen ? "Double-click to open the source record." : null)">
+                                    <span class="poloxi-rank">@evidence.RankNumber</span>
+                                    <div class="poloxi-evidence-main"><strong>@evidence.Title</strong><small>@evidence.ModuleCode · @evidence.EntityTypeCode</small><p>@evidence.Excerpt</p><div>@foreach (var branch in evidence.MatchedBranches) { <span class="um-badge um-badge-neutral">@Owner.DaBranchNameWithLevel(branch)</span> }</div></div>
+                                    <div class="poloxi-score"><strong>@evidence.RelevanceScore.ToString("P0")</strong><small>Score</small></div>
+                                </article>
+                            }
+                            @if (resp.InterpretiveResults.Count > 0)
+                            {
+                                <div class="poloxi-section-divider"><i class="bi bi-stars"></i><h2>Interpretation results</h2></div>
+                                @if (resp.InterpretiveResults.Any(r => r.DataVolatility == "TIME_SENSITIVE" && !r.IsExternallyGrounded))
+                                {
+                                    <div class="alert alert-warning" role="alert" style="border-left: 4px solid #ffc107;">
+                                        <i class="bi bi-clock-history"></i> Some results below depend on time-sensitive data (prices, rates, rankings). Figures may be outdated &mdash; verify against the referenced sources for current values.
+                                    </div>
+                                }
+                                @foreach (var result in PrioritizedInterpretiveResults)
+                                {
+                                    <article class="poloxi-evidence">
+                                        <span class="poloxi-rank"><i class="bi bi-lightbulb"></i></span>
+                                        <div class="poloxi-evidence-main">
+                                            <strong>@InterpretiveBranchDisplayWithLevel(result)</strong>
+                                            <small>@result.Interpretation</small>
+                                            @foreach (var item in result.Items)
+                                            {
+                                                <p>
+                                                    <strong>@item.RankNumber. <a href="@WebSearchUrl(item.Name)" target="_blank" rel="noopener noreferrer" title="Search the web for @item.Name">@item.Name</a></strong>
+                                                    @if (item.Score.HasValue)
+                                                    {
+                                                        <span class="um-badge um-badge-neutral" title="LLM-assigned strength/likelihood for this item (0-100%).">@item.Score.Value.ToString("P0")</span>
+                                                    }
+                                                    @foreach (var facet in item.Attributes)
+                                                    {
+                                                        <span class="um-badge um-badge-info poloxi-item-attribute" title="@facet.Label">@facet.Label: @facet.Value</span>
+                                                    }
+                                                    &mdash; @item.Detail
+                                                </p>
+                                            }
+                                            <div>
+                                                <span class="um-badge um-badge-neutral">INTERPRETIVE</span>
+                                                @if (result.DataVolatility == "TIME_SENSITIVE")
+                                                {
+                                                    <span class="um-badge um-badge-warning" title="This result depends on facts that change over time; figures may be outdated."><i class="bi bi-clock-history"></i> TIME-SENSITIVE</span>
+                                                }
+                                                @if (result.IsExternallyGrounded)
+                                                {
+                                                    <span class="um-badge um-badge-success" title="Figures were grounded against live external sources."><i class="bi bi-globe2"></i> LIVE-GROUNDED</span>
+                                                }
+                                            </div>
+                                        </div>
+                                        <div class="poloxi-score" title="POLOXI branch-support confidence: interpretation prior blended with evidence support."><strong>@result.Confidence.ToString("P0")</strong><small>POLOXI</small></div>
+                                    </article>
+                                }
+                                @if (SecondaryInterpretiveResults.Count > 0)
+                                {
+                                    <div class="poloxi-secondary-panel">
+                                        <div class="poloxi-secondary-header">
+                                            <i class="bi bi-layers-half"></i>
+                                            <div>
+                                                <span>Not prioritized &middot; secondary analysis</span>
+                                                <h3>Interpretation results for not-prioritized paths</h3>
+                                                <p>These interpretation paths scored below the prioritization threshold or returned no enterprise evidence. They remain part of the answer surface for completeness and can be reactivated by supporting evidence.</p>
+                                            </div>
+                                            <span class="poloxi-secondary-count">@SecondaryInterpretiveResults.Count</span>
+                                        </div>
+                                        @foreach (var result in SecondaryInterpretiveResults)
+                                        {
+                                            <article class="poloxi-evidence poloxi-evidence-secondary">
+                                                <span class="poloxi-rank poloxi-rank-secondary"><i class="bi bi-lightbulb"></i></span>
+                                                <div class="poloxi-evidence-main">
+                                                    <strong>@InterpretiveBranchDisplayWithLevel(result)</strong>
+                                                    <small>@result.Interpretation</small>
+                                                    @foreach (var item in result.Items)
+                                                    {
+                                                        <p>
+                                                            <strong>@item.RankNumber. <a href="@WebSearchUrl(item.Name)" target="_blank" rel="noopener noreferrer" title="Search the web for @item.Name">@item.Name</a></strong>
+                                                            @if (item.Score.HasValue)
+                                                            {
+                                                                <span class="um-badge um-badge-neutral" title="LLM-assigned strength/likelihood for this item (0-100%).">@item.Score.Value.ToString("P0")</span>
+                                                            }
+                                                            @foreach (var facet in item.Attributes)
+                                                            {
+                                                                <span class="um-badge um-badge-info poloxi-item-attribute" title="@facet.Label">@facet.Label: @facet.Value</span>
+                                                            }
+                                                            &mdash; @item.Detail
+                                                        </p>
+                                                    }
+                                                    <div>
+                                                        <span class="um-badge um-badge-neutral" title="This interpretation path was demoted to dormant/secondary — retained for completeness, not driving the primary answer.">NOT PRIORITIZED</span>
+                                                        <span class="um-badge um-badge-neutral">INTERPRETIVE</span>
+                                                        @if (result.DataVolatility == "TIME_SENSITIVE")
+                                                        {
+                                                            <span class="um-badge um-badge-warning" title="This result depends on facts that change over time; figures may be outdated."><i class="bi bi-clock-history"></i> TIME-SENSITIVE</span>
+                                                        }
+                                                        @if (result.IsExternallyGrounded)
+                                                        {
+                                                            <span class="um-badge um-badge-success" title="Figures were grounded against live external sources."><i class="bi bi-globe2"></i> LIVE-GROUNDED</span>
+                                                        }
+                                                    </div>
+                                                </div>
+                                                <div class="poloxi-score" title="POLOXI branch-support confidence: interpretation prior blended with evidence support."><strong>@result.Confidence.ToString("P0")</strong><small>POLOXI</small></div>
+                                            </article>
+                                        }
+                                    </div>
+                                }
+                            }
+                        </section>
+                    </div>
+                }
             </div>
         }
     </section>
+
+    @* ── Shared KPI strip, detailed summary, ranking comparison, and ABV (mirrors /legal/search). ── *@
+    @if (_deepResponse is { } kpiResp)
+    {
+        @if (!string.IsNullOrWhiteSpace(kpiResp.GroundingWarning))
+        {
+            <div class="alert alert-danger" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
+                <i class="bi bi-plug-fill me-1" aria-hidden="true"></i><strong>External grounding unavailable.</strong> @kpiResp.GroundingWarning
+            </div>
+        }
+        <section class="poloxi-kpis poloxi-kpis--compact">
+            <article><i class="bi bi-activity poloxi-kpi-icon"></i><span>Status</span><strong>@kpiResp.StatusCode</strong><small>@kpiResp.TerminationReasonCode</small></article>
+            <article title="End-to-end execution time of this POLOXI run, measured by the platform from request start to final answer."><i class="bi bi-stopwatch poloxi-kpi-icon"></i><span>Execution time</span><strong>@TimeSpan.FromMilliseconds(kpiResp.DurationMilliseconds).TotalSeconds.ToString("0.0")s</strong><small>@kpiResp.DurationMilliseconds.ToString("N0") ms</small></article>
+            @if (!string.IsNullOrWhiteSpace(kpiResp.AnswerKindCode))
+            {
+                <article title="V3.2 answer-kind-aware workflow routing: the Stage 0 classification of what the answer items ARE."><i class="bi bi-signpost-2 poloxi-kpi-icon"></i><span>Answer kind</span><strong>@kpiResp.AnswerKindCode.Replace('_', ' ')</strong><small>@(kpiResp.AnswerKindRoutingApplied ? "tuned budgets" : "full pipeline")</small></article>
+            }
+            @if (!string.IsNullOrWhiteSpace(kpiResp.ModelCodeUsed))
+            {
+                <article title="The AI model that composed the final answer, resolved by the platform router."><i class="bi bi-cpu poloxi-kpi-icon"></i><span>Model used</span><strong>@kpiResp.ModelCodeUsed</strong><small>@(string.IsNullOrWhiteSpace(_deepModelCode) ? "auto-routed" : "user-selected")@(string.IsNullOrWhiteSpace(kpiResp.ProviderCodeUsed) ? "" : $" · {kpiResp.ProviderCodeUsed}")</small></article>
+            }
+            <article><i class="bi bi-diagram-3 poloxi-kpi-icon"></i><span>Depth reached</span><strong>@kpiResp.DepthReached</strong><small>@kpiResp.LlmCallCount LLM calls</small></article>
+            <article><i class="bi bi-signpost-split poloxi-kpi-icon"></i><span>Surviving paths</span><strong>@SurvivingBranches.Count</strong><small>@EliminatedBranches.Count pruned</small></article>
+            <article><i class="bi bi-database-check poloxi-kpi-icon"></i><span>Evidence</span><strong>@(kpiResp.EnterpriseEvidenceCount + kpiResp.ExternalEvidenceCount)</strong><small>@kpiResp.ExternalEvidenceCount external &middot; @kpiResp.EnterpriseEvidenceCount enterprise</small></article>
+            <article title="Hierarchy coverage: share of ALL surviving branches supported by any evidence."><i class="bi bi-bounding-box-circles poloxi-kpi-icon"></i><span>Evidence coverage</span><strong>@kpiResp.EvidenceCoverage.ToString("P0")</strong><small>hierarchy branches supported</small></article>
+            <article title="Decision coverage: share of the dimensions that actually drive the final Candidate × Branch ranking that are supported by evidence."><i class="bi bi-crosshair poloxi-kpi-icon"></i><span>Decision coverage</span><strong>@kpiResp.DecisionEvidenceCoverage.ToString("P0")</strong><small>deciding dimensions supported</small></article>
+            <article title="@(IsEvidenceWeightedConfidence ? "Decision evidence confidence: winner quality, winner-vs-runner-up separation, evidence confidence, ranking stability, and decision-dimension coverage." : "Interpretation confidence: no Candidate × Branch competition ran for this execution, so this value reflects POLOXI's interpretation-prior confidence and is NOT weighted by retrieved evidence.")"><i class="bi bi-shield-check poloxi-kpi-icon"></i><span>@ConfidenceLabel</span><strong>@kpiResp.FinalConfidence.ToString("P0")</strong><small>@ConfidenceCaption</small></article>
+            <article title="Challenge-the-Winner (watch mode): when the leader-vs-runner-up margin is thin, one adversarial LLM assessment argues against the leader and records its verdict for audit. Diagnostic only."><i class="bi bi-lightning-charge poloxi-kpi-icon"></i><span>Winner challenge</span><strong>@(kpiResp.ChallengeOutcome is null ? "NOT FIRED" : kpiResp.ChallengeOutcome.VerdictCode.Replace('_', ' '))</strong><small>@(kpiResp.ChallengeOutcome is null ? "margin above threshold or disabled" : $"{kpiResp.ChallengeOutcome.ChallengedCandidate} vs {kpiResp.ChallengeOutcome.ChallengerCandidate} · margin {kpiResp.ChallengeOutcome.Margin:P0}")</small></article>
+            @if (kpiResp.WinnerStability is { } winnerStability)
+            {
+                <article title="Deterministic ranking stability across information rounds."><i class="bi bi-graph-up-arrow poloxi-kpi-icon"></i><span>Ranking stability</span><strong>@winnerStability.ToString("P0")</strong><small>winner &middot; top-3 @(kpiResp.TopKStability?.ToString("P0") ?? "—")</small></article>
+            }
+            @if (kpiResp.InformationRounds.Count > 0)
+            {
+                <article title="Deterministic Shannon entropy — 0% = fully resolved, 100% = maximal uncertainty. Measured by POLOXI math, never the LLM."><i class="bi bi-thermometer-half poloxi-kpi-icon"></i><span>Uncertainty</span><strong>@kpiResp.InitialNormalizedEntropy.ToString("P0") &rarr; @kpiResp.FinalNormalizedEntropy.ToString("P0")</strong><small>@kpiResp.TotalActualInformationGain.ToString("0.###") bits gained &middot; @(kpiResp.EntropyBasisCode ?? "BRANCH") basis@(string.Equals(kpiResp.EntropyBasisCode, "CANDIDATE", StringComparison.OrdinalIgnoreCase) ? $" &middot; candidate uncertainty {CandidateUncertaintyDisplay}" : "")</small></article>
+            }
+        </section>
+
+        @if (kpiResp.InformationRounds.Count > 0)
+        {
+            <section class="poloxi-panel">
+                <div class="poloxi-panel-header"><div class="poloxi-panel-title"><span class="poloxi-panel-icon"><i class="bi bi-radar"></i></span><div><span>V2.2 information-directed exploration · the LLM predicts, POLOXI measures</span><h2>Information rounds</h2></div></div><span class="poloxi-status" title="Rounds executed · targets evaluated · total measured uncertainty reduction (bits)">@kpiResp.InformationRounds.Count rounds · @kpiResp.TotalActualInformationGain.ToString("0.###") bits</span></div>
+                @foreach (var round in kpiResp.InformationRounds)
+                {
+                    <article class="poloxi-info-round">
+                        <div class="poloxi-info-round-head">
+                            <strong>Round @round.RoundNumber</strong>
+                            <span title="Normalized uncertainty before → after this round (deterministic Shannon entropy).">@round.NormalizedEntropyBefore.ToString("P0") → @(round.NormalizedEntropyAfter?.ToString("P0") ?? "—") · @round.EntropyBasisCode</span>
+                            @if (round.RawEntropyDelta is { } rawDelta)
+                            {
+                                <span class="um-badge um-badge-neutral" title="Raw measured entropy change (EntropyBefore − EntropyAfter) — the single measured fact for this round. Measured by POLOXI math, never the LLM.">Information change: @((rawDelta >= 0m ? "+" : "\u2212") + Math.Abs(rawDelta).ToString("0.###")) bits</span>
+                                <span class="um-badge @(rawDelta > 0m ? "um-badge-success" : rawDelta < 0m ? "um-badge-warning" : "um-badge-neutral")">Outcome: @(rawDelta > 0m ? "Uncertainty reduced" : rawDelta < 0m ? "Uncertainty increased" : "No measurable change")</span>
+                            }
+                            else if (round.ActualInformationGain is { } gain)
+                            {
+                                <span class="um-badge @(gain > 0m ? "um-badge-success" : "um-badge-neutral")" title="Actual information gain measured by POLOXI after targeted retrieval — never estimated by the LLM.">@gain.ToString("0.###") bits</span>
+                            }
+                        </div>
+                        @foreach (var target in round.Targets)
+                        {
+                            <div class="poloxi-info-target @(target.WasSelected ? null : "poloxi-info-target-skipped")">
+                                <span class="poloxi-rank" title="@(target.WasSelected ? "Selected for targeted retrieval." : "Evaluated but not selected — kept for audit.")">@(target.SelectionRank?.ToString() ?? "–")</span>
+                                <div class="poloxi-evidence-main">
+                                    <strong>@target.BranchDisplayName</strong>
+                                    @if (!string.IsNullOrWhiteSpace(target.EvidenceTarget))
+                                    {
+                                        <p>@target.EvidenceTarget</p>
+                                    }
+                                    <div>
+                                        <span class="um-badge um-badge-neutral" title="How unresolved this interpretation dimension is (LLM categorical estimate).">Uncertainty @target.UncertaintyCode</span>
+                                        <span class="um-badge um-badge-neutral" title="How likely new evidence here changes the final ranking (LLM categorical estimate).">Impact @target.RankingImpactCode</span>
+                                        <span class="um-badge um-badge-neutral" title="How well evidence here separates close candidates (LLM categorical estimate).">Discrimination @target.CandidateDiscriminationCode</span>
+                                    </div>
+                                </div>
+                                <div class="poloxi-score"><strong>@target.AdjustedInformationValue.ToString("P0")</strong><small>Info value</small></div>
+                            </div>
+                        }
+                    </article>
+                }
+            </section>
+        }
+
+        @if (kpiResp.Candidates.Count > 0)
+        {
+            <section class="poloxi-panel">
+                <div class="poloxi-panel-header"><div class="poloxi-panel-title"><span class="poloxi-panel-icon"><i class="bi bi-trophy"></i></span><div><h2>POLOXI Answer ranking</h2></div></div><span class="poloxi-status" title="POLOXI Journey: interpretations explored → evidence-supported → final dimensions → ranked candidates">@kpiResp.Branches.Count → @SurvivingBranches.Count → @ActiveBranchCount → @kpiResp.Candidates.Count</span></div>
+                @foreach (var candidate in kpiResp.Candidates)
+                {
+                    <article class="poloxi-evidence @(candidate.IsConstraintViolation ? "poloxi-branch-unsupported" : null)">
+                        <span class="poloxi-rank">@candidate.RankNumber</span>
+                        <div class="poloxi-evidence-main">
+                            <strong>@candidate.DisplayName</strong>
+                            <p>@candidate.Detail</p>
+                            <div>
+                                @if (candidate.IsConstraintViolation)
+                                {
+                                    <span class="um-badge um-badge-danger" title="Failed a hard query constraint; kept visible, never hidden."><i class="bi bi-slash-circle"></i> RULED OUT</span>
+                                }
+                                else if (candidate.EvidenceCoverage < .5m)
+                                {
+                                    <span class="um-badge um-badge-warning" title="This candidate has evidence on only some interpretation dimensions; its ranking is discounted accordingly."><i class="bi bi-exclamation-triangle"></i> LOW COVERAGE @candidate.EvidenceCoverage.ToString("P0")</span>
+                                }
+                                @foreach (var score in candidate.BranchScores)
+                                {
+                                    @if (score.ChildScores.Count > 0)
+                                    {
+                                        <span class="um-badge um-badge-neutral" title="@RollUpTooltip(score)"><i class="bi bi-diagram-2" aria-hidden="true"></i> @score.BranchDisplayName @score.EvidenceScore.ToString("P0")</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="um-badge um-badge-neutral" title="Candidate quality score for this interpretation dimension.">@score.BranchDisplayName @score.EvidenceScore.ToString("P0")</span>
+                                    }
+                                }
+                            </div>
+                            @if (candidate.BranchScores.Any(score => score.ChildScores.Count > 0))
+                            {
+                                <div class="poloxi-rollup">
+                                    @foreach (var score in candidate.BranchScores.Where(score => score.ChildScores.Count > 0))
+                                    {
+                                        <small class="poloxi-rollup-line"><strong>@score.BranchDisplayName</strong> = 50% direct @((score.DirectScore ?? score.EvidenceScore).ToString("P0")) + 50% sub-criteria: @string.Join(" · ", score.ChildScores.OrderByDescending(child => child.EvidenceScore).Select(child => $"{child.BranchDisplayName} {child.EvidenceScore:P0}"))</small>
+                                    }
+                                </div>
+                            }
+                        </div>
+                        <div class="poloxi-score"><strong>@candidate.QualityScore.ToString("P0")</strong><small>Quality</small></div>
+                        <div class="poloxi-score" title="How well the evidence supports the quality score: independent-source diversity and dimension coverage."><strong>@candidate.EvidenceConfidence.ToString("P0")</strong><small>Evidence</small></div>
+                    </article>
+                }
+            </section>
+        }
+
+        @ComparisonPanel
+        @AbvActionPanel
+    }
 
     @* ── External sources, live grounding, and AI-suggested authorities (mirrors the main answer page). ── *@
     @if (Owner.DaExternalReferences.Count > 0)
@@ -672,6 +993,355 @@
     private WideSearchResponse? _deepResponse;
     private bool _modelsLoaded;
 
+    // Deterministic final ranking (mirrors /legal/search): filter constraint violations, order by rank, take 10.
+    private static IReadOnlyList<WideCandidateDto> DeepRankedCandidates(WideSearchResponse resp)
+        => resp.Candidates
+            .Where(c => !c.IsConstraintViolation)
+            .OrderBy(c => c.RankNumber)
+            .Take(10)
+            .ToArray();
+
+    // ── /legal/search result-parity helpers (bound to _deepResponse) ──
+    private IReadOnlyCollection<WideBranchDto> SurvivingBranches => _deepResponse?.Branches.Where(x => !x.IsEliminated).ToArray() ?? [];
+    private IReadOnlyCollection<WideBranchDto> EliminatedBranches => _deepResponse?.Branches.Where(x => x.IsEliminated).ToArray() ?? [];
+    private int ActiveBranchCount => SurvivingBranches.Count(x => x.BranchStateCode == "ACTIVE");
+
+    private bool HasEnterpriseEvidence => _deepResponse?.EnterpriseEvidenceCount > 0;
+    private int TotalEvidenceCount => _deepResponse is null ? 0 : _deepResponse.EnterpriseEvidenceCount + _deepResponse.ExternalEvidenceCount;
+    private bool HasAnyEvidence => TotalEvidenceCount > 0;
+    private bool IsEvidenceWeightedConfidence => _deepResponse?.DecisionConfidence is not null;
+    private string ConfidenceLabel => IsEvidenceWeightedConfidence ? "Decision evidence confidence" : "Interpretation confidence";
+    private string ConfidenceCaption => IsEvidenceWeightedConfidence ? "evidence-backed decision confidence" : "not evidence-weighted";
+    private string SurvivalVerb => HasAnyEvidence ? "survived grounding" : "survived interpretive narrowing";
+    private string CandidateUncertaintyDisplay => (HasAnyEvidence && IsEvidenceWeightedConfidence)
+        ? _deepResponse!.FinalNormalizedEntropy.ToString("P0")
+        : "NOT_APPLICABLE";
+
+    // V2.4: the final visible ranking deterministically follows the Candidate × Branch competition.
+    private IReadOnlyList<WideCandidateDto> FinalRankedCandidates => _deepResponse is null ? []
+        : _deepResponse.Candidates.Where(c => !c.IsConstraintViolation).OrderBy(c => c.RankNumber).Take(10).ToArray();
+
+    private bool ShouldShowComparisonPanel => _deepResponse is not null
+        && (FinalRankedCandidates.Count > 0
+            || BaselineRankedCandidates.Count > 0
+            || LlmRawItems.Count > 0
+            || string.Equals(_deepResponse.AnswerKindCode, "ENTITY_RANKING", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(_deepResponse.QueryContract?.OutputShape, "ranked_list", StringComparison.OrdinalIgnoreCase));
+
+    // Naive baseline ranking: mention frequency first, then a PLAIN unweighted average of the per-dimension
+    // scores as tie-break — never POLOXI's RankNumber.
+    private IReadOnlyList<WideCandidateDto> BaselineRankedCandidates => _deepResponse is null ? []
+        : _deepResponse.Candidates
+            .Where(c => !c.IsConstraintViolation && c.InterpretiveSupportCount > 0)
+            .OrderByDescending(c => c.InterpretiveSupportCount)
+            .ThenByDescending(c => c.BranchScores.Count > 0 ? c.BranchScores.Average(s => s.EvidenceScore) : 0m)
+            .ThenBy(c => c.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .Take(Math.Max(FinalRankedCandidates.Count, 1)).ToArray();
+
+    private IReadOnlyList<WideInterpretiveResultItemDto> LlmRawItems => _deepResponse is null ? []
+        : _deepResponse.LlmRawItems.OrderBy(x => x.RankNumber).ToArray();
+
+    private string PoloxiUnavailableReason => _deepResponse switch
+    {
+        null => "no response loaded",
+        { Candidates.Count: > 0 } when _deepResponse.Candidates.All(c => c.IsConstraintViolation) => "all candidate rows were ruled out by constraints or admission gates",
+        { InterpretiveResults.Count: 0 } => "no interpretive ranked candidate items were returned to seed competition",
+        { AnswerKindCode: not "ENTITY_RANKING" } when _deepResponse.QueryContract?.OutputShape != "ranked_list" => $"answer kind was routed as {_deepResponse.AnswerKindCode?.Replace('_', ' ') ?? "unclassified"}, so final candidate ranking was not required",
+        { ExternalEvidenceCount: 0, EnterpriseEvidenceCount: 0 } => "no enterprise or external evidence was available to score candidates against branches",
+        { DecisionEvidenceCoverage: 0 } => "candidate matrix did not resolve usable scored decision dimensions",
+        { Candidates.Count: 0 } => "candidate normalization, matrix scoring, or LLM structured output produced no admissible candidates",
+        _ => "no final non-violating candidate ranking was available"
+    };
+
+    private string BaselineUnavailableReason => _deepResponse switch
+    {
+        null => "no response loaded",
+        { Candidates.Count: 0 } => "no normalized POLOXI candidate pool was produced",
+        _ when !_deepResponse.Candidates.Any(c => !c.IsConstraintViolation) => "all candidates were ruled out before baseline ranking",
+        _ when !_deepResponse.Candidates.Any(c => c.InterpretiveSupportCount > 0) => "candidate rows have no interpretive mention counts to rank by frequency",
+        _ => "no baseline candidates remained after filtering"
+    };
+
+    private static string MentionBreakdown(WideCandidateDto candidate) => candidate.BranchScores.Count == 0
+        ? $"Named by {candidate.InterpretiveSupportCount} interpretive dimension(s); per-dimension scores unavailable for this candidate."
+        : $"Named by {candidate.InterpretiveSupportCount} interpretive dimension(s):\n" + string.Join("\n",
+            candidate.BranchScores.OrderByDescending(s => s.EvidenceScore).Select(s => $"• {s.BranchDisplayName}: {s.EvidenceScore:P0} quality score"));
+
+    private static string RollUpTooltip(WideCandidateBranchScoreDto score) =>
+        $"Rolled up from progressive narrowing (50% direct + 50% sub-criteria).\nDirect judgment: {(score.DirectScore ?? score.EvidenceScore):P0}\n" + string.Join("\n",
+            score.ChildScores.OrderByDescending(child => child.EvidenceScore).Select(child => $"• {child.BranchDisplayName}: {child.EvidenceScore:P0} (weight {child.Confidence:P0})"));
+
+    // Where a raw-LLM entry landed in the POLOXI ranking (1-based), or null when POLOXI excluded it.
+    private int? FindPoloxiRank(string rawName)
+    {
+        var rawCode = ParentheticalCode(rawName);
+        var rawPrimary = PrimaryName(rawName);
+        for (var index = 0; index < FinalRankedCandidates.Count; index++)
+        {
+            var candidate = FinalRankedCandidates[index].DisplayName;
+            if (candidate.Equals(rawName, StringComparison.OrdinalIgnoreCase)) return index + 1;
+            if (rawCode is not null && rawCode.Equals(ParentheticalCode(candidate), StringComparison.OrdinalIgnoreCase)) return index + 1;
+            if (candidate.Contains(rawName, StringComparison.OrdinalIgnoreCase)
+                || rawName.Contains(candidate, StringComparison.OrdinalIgnoreCase)) return index + 1;
+            if (rawPrimary.Length >= 4 && rawPrimary.Equals(PrimaryName(candidate), StringComparison.OrdinalIgnoreCase)) return index + 1;
+        }
+        return null;
+    }
+
+    private static string? ParentheticalCode(string name)
+    {
+        var open = name.LastIndexOf('(');
+        var close = name.LastIndexOf(')');
+        return open >= 0 && close > open + 1 ? name[(open + 1)..close].Trim() : null;
+    }
+
+    private static string PrimaryName(string name)
+    {
+        var primary = name.Split(',', '(', '\u2013', '\u2014')[0].Trim();
+        foreach (var suffix in new[] { " Inc.", " Inc", " Corporation", " Corp.", " Corp", " Co.", " Company", " Ltd.", " Ltd", " PLC", " LLC" })
+            if (primary.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)) { primary = primary[..^suffix.Length].Trim(); break; }
+        return primary;
+    }
+
+    private RenderFragment ComparisonPanel =>@<text>
+        @if (ShouldShowComparisonPanel)
+        {
+            <section class="poloxi-panel poloxi-reveal">
+                <div class="poloxi-panel-header">
+                    <div class="poloxi-panel-title"><span class="poloxi-panel-icon"><i class="bi bi-columns-gap"></i></span><div><span>Ranking comparison</span><h2>POLOXI vs. raw model vs. unweighted baseline</h2></div></div>
+                    <span class="poloxi-status">diagnostic</span>
+                </div>
+                <p><strong>LLM Raw</strong> is the model's single-shot answer. <strong>Mention-frequency baseline</strong> ranks POLOXI-discovered candidates by mentions and unweighted average scores. Missing cells mean that diagnostic input was unavailable, not that the POLOXI result failed.</p>
+                <div class="poloxi-table-scroll">
+                <table class="poloxi-compare-table">
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>With POLOXI <small>(Candidate × Branch)</small></th>
+                            <th>LLM Raw <small>(single-shot)</small></th>
+                            <th>Mention-frequency baseline <small>(unweighted)</small></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @{ var compareRowCount = Math.Max(1, Math.Max(Math.Max(FinalRankedCandidates.Count, BaselineRankedCandidates.Count), LlmRawItems.Count)); }
+                        @for (var i = 0; i < compareRowCount; i++)
+                        {
+                            var poloxi = i < FinalRankedCandidates.Count ? FinalRankedCandidates[i] : null;
+                            var raw = i < LlmRawItems.Count ? LlmRawItems[i] : null;
+                            var baseline = i < BaselineRankedCandidates.Count ? BaselineRankedCandidates[i] : null;
+                            var moved = raw is not null && poloxi is not null && FindPoloxiRank(raw.Name) != i + 1;
+                            <tr class="@(moved ? "poloxi-compare-diff" : null)">
+                                <td>@(i + 1)</td>
+                                <td>
+                                    @if (poloxi is not null)
+                                    {
+                                        <strong>@poloxi.DisplayName</strong> <span>@poloxi.CompositeScore.ToString("P0") quality score</span>
+                                    }
+                                    else
+                                    {
+                                        <em title="@PoloxiUnavailableReason">POLOXI unavailable — @PoloxiUnavailableReason</em>
+                                    }
+                                </td>
+                                <td class="poloxi-compare-raw">
+                                    @if (raw is not null)
+                                    {
+                                        var poloxiPosition = FindPoloxiRank(raw.Name);
+                                            @raw.Name
+                                            @if (raw.Score is decimal rawScore)
+                                            {
+                                                <span>@rawScore.ToString("P0") raw score</span>
+                                            }
+                                        @if (poloxiPosition is int position && position != i + 1)
+                                        {
+                                            <span>POLOXI #@position</span>
+                                        }
+                                        else if (poloxiPosition is null)
+                                        {
+                                            <span>not in POLOXI ranking</span>
+                                        }
+                                    }
+                                    else
+                                    {
+                                        <em>Raw LLM comparison unavailable</em>
+                                    }
+                                </td>
+                                <td>
+                                    @if (baseline is not null)
+                                    {
+                                        @baseline.DisplayName <span class="poloxi-mention-detail" title="@MentionBreakdown(baseline)">@baseline.InterpretiveSupportCount mention@(baseline.InterpretiveSupportCount == 1 ? "" : "s")@(baseline.BranchScores.Count > 0 ? $" · avg {baseline.BranchScores.Average(s => s.EvidenceScore):P0}" : "") <i class="bi bi-info-circle" aria-hidden="true"></i></span>
+                                    }
+                                    else
+                                    {
+                                        <em title="@BaselineUnavailableReason">Baseline unavailable — @BaselineUnavailableReason</em>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+                </div>
+            </section>
+        }
+    </text>;
+
+    private RenderFragment AbvActionPanel =>@<text>
+        @if (_deepResponse?.AbvAction is { } abv)
+        {
+            <div class="poloxi-answer-section poloxi-reveal">
+                <h3><i class="bi bi-flag"></i> ABV (Action Business Plan)</h3>
+                @if (string.Equals(abv.StatusCode, "Resolved", StringComparison.OrdinalIgnoreCase))
+                {
+                    <p class="poloxi-abv-narrative">@AbvNarrative(abv)</p>
+                    <ol class="poloxi-abv-plan">
+                        <li>
+                            <strong>Confirm the decision.</strong>
+                            POLOXI reads this request as an intent to
+                            <em>@((abv.IntentName ?? abv.IntentCode ?? "act").ToLowerInvariant())</em>.
+                            @if (!string.IsNullOrWhiteSpace(abv.IntentRationale))
+                            {
+                                <span>Rationale: @abv.IntentRationale</span>
+                            }
+                        </li>
+                        <li>
+                            <strong>Weigh the exposure.</strong>
+                            This decision carries a <em>@(abv.ImpactTierCode ?? "n/a")</em> business impact@(abv.MetricAtRisk is not null ? $" against {abv.MetricAtRisk}" : "")@(abv.EstimatedExposure is { } exp ? $", with an estimated exposure of {exp:C0}" : ", with no monetary exposure quantified from admitted evidence").
+                        </li>
+                        <li>
+                            <strong>Respect the clock.</strong>
+                            Treat this as <em>@(abv.PriorityCode ?? "standard")</em> priority@(abv.SlaHours is { } sla ? $" and resolve within the {sla}-hour SLA" : "")@(abv.UrgencyPolicyCode is not null ? $" (policy {abv.UrgencyPolicyCode})" : "").
+                        </li>
+                        <li>
+                            <strong>Assign ownership.</strong>
+                            Route this to the <em>@(abv.OwnerRole ?? "responsible owner")</em>@(abv.OwnerRole is null ? " (no owner mapping configured for this intent/impact)" : "") for action.
+                        </li>
+                        <li>
+                            <strong>Execute the next action.</strong>
+                            @(abv.NextStep ?? abv.ActionCode ?? "Proceed per standard operating procedure.")
+                            @if (!string.IsNullOrWhiteSpace(abv.PlaybookCode))
+                            {
+                                <span>Follow playbook <strong>@abv.PlaybookCode</strong>.</span>
+                            }
+                        </li>
+                        <li>
+                            <strong>Governance gate.</strong>
+                            @(abv.ExecutionAllowed ? "Automated execution is permitted for this action." : "Automated execution is not permitted — this action must be carried out manually.")
+                            @(abv.HumanApprovalRequired ? " A human approval is required before it proceeds." : " No additional approval step is configured.")
+                        </li>
+                    </ol>
+                    <div class="poloxi-abv-grid">
+                        @if (abv.IntentName is not null || abv.IntentCode is not null)
+                        {
+                            <div class="poloxi-abv-item">
+                                <span class="poloxi-abv-label"><i class="bi bi-bullseye"></i> Intent</span>
+                                <span class="poloxi-abv-value">@(abv.IntentName ?? abv.IntentCode)@(abv.IntentCode is not null && abv.IntentName is not null ? $" ({abv.IntentCode})" : "")</span>
+                                @if (abv.IntentSourceCode is not null)
+                                {
+                                    <span class="poloxi-abv-source" title="Provenance">@abv.IntentSourceCode</span>
+                                }
+                            </div>
+                        }
+                        @if (abv.ImpactTierCode is not null)
+                        {
+                            <div class="poloxi-abv-item">
+                                <span class="poloxi-abv-label"><i class="bi bi-graph-up-arrow"></i> Impact</span>
+                                <span class="poloxi-abv-value">@abv.ImpactTierCode@(abv.MetricAtRisk is not null ? $" · {abv.MetricAtRisk}" : "")@(abv.EstimatedExposure is { } exposure ? $" · {exposure:C0}" : "")</span>
+                                @if (abv.ImpactSourceCode is not null)
+                                {
+                                    <span class="poloxi-abv-source" title="Provenance">@abv.ImpactSourceCode</span>
+                                }
+                            </div>
+                        }
+                        @if (abv.PriorityCode is not null)
+                        {
+                            <div class="poloxi-abv-item">
+                                <span class="poloxi-abv-label"><i class="bi bi-alarm"></i> Urgency</span>
+                                <span class="poloxi-abv-value">@abv.PriorityCode@(abv.SlaHours is { } slaHours ? $" · SLA {slaHours}h" : "")@(abv.UrgencyPolicyCode is not null ? $" · {abv.UrgencyPolicyCode}" : "")</span>
+                                @if (abv.UrgencySourceCode is not null)
+                                {
+                                    <span class="poloxi-abv-source" title="Provenance">@abv.UrgencySourceCode</span>
+                                }
+                            </div>
+                        }
+                        @if (abv.OwnerRole is not null)
+                        {
+                            <div class="poloxi-abv-item">
+                                <span class="poloxi-abv-label"><i class="bi bi-person-badge"></i> Owner</span>
+                                <span class="poloxi-abv-value">@abv.OwnerRole</span>
+                                @if (abv.OwnerSourceCode is not null)
+                                {
+                                    <span class="poloxi-abv-source" title="Provenance">@abv.OwnerSourceCode</span>
+                                }
+                            </div>
+                        }
+                        @if (abv.NextStep is not null || abv.ActionCode is not null)
+                        {
+                            <div class="poloxi-abv-item">
+                                <span class="poloxi-abv-label"><i class="bi bi-arrow-right-circle"></i> Next action</span>
+                                <span class="poloxi-abv-value">@(abv.NextStep ?? abv.ActionCode)@(abv.ActionCode is not null && abv.NextStep is not null ? $" ({abv.ActionCode})" : "")</span>
+                                @if (abv.ExecutionSourceCode is not null)
+                                {
+                                    <span class="poloxi-abv-source" title="Provenance">@abv.ExecutionSourceCode</span>
+                                }
+                            </div>
+                        }
+                        @if (!string.IsNullOrWhiteSpace(abv.PlaybookCode))
+                        {
+                            <div class="poloxi-abv-item">
+                                <span class="poloxi-abv-label"><i class="bi bi-journal-text"></i> Playbook</span>
+                                <span class="poloxi-abv-value">@abv.PlaybookCode</span>
+                            </div>
+                        }
+                        <div class="poloxi-abv-item">
+                            <span class="poloxi-abv-label"><i class="bi bi-shield-check"></i> Governance</span>
+                            <span class="poloxi-abv-value">@(abv.ExecutionAllowed ? "Auto-execute allowed" : "Manual execution")@(abv.HumanApprovalRequired ? " · Human approval required" : " · No approval gate")</span>
+                            <span class="poloxi-abv-source" title="Actionability">@abv.ActionabilityStatusCode</span>
+                        </div>
+                    </div>
+                    <p class="poloxi-abv-note"><i class="bi bi-shield-lock"></i> Review only — POLOXI proposes; a human approves. Every business value above resolves deterministically from Domain-Pack configuration with explicit provenance, and is never invented.</p>
+                }
+                else
+                {
+                    <p class="poloxi-abv-note"><i class="bi bi-info-circle"></i> No actionable business value was resolved for this answer (@abv.ActionabilityStatusCode)@(abv.FailureMessage is not null ? $": {abv.FailureMessage}" : ".")</p>
+                }
+            </div>
+        }
+    </text>;
+
+    // Composes the ABV into a single, readable executive-summary paragraph.
+    private static string AbvNarrative(WideAbvActionDto abv)
+    {
+        var sb = new System.Text.StringBuilder();
+        var intent = abv.IntentName ?? abv.IntentCode ?? "act on this decision";
+        sb.Append($"POLOXI recommends a business response to {intent.ToLowerInvariant()}. ");
+        if (abv.ImpactTierCode is not null)
+        {
+            sb.Append($"The decision is assessed as {abv.ImpactTierCode.ToLowerInvariant()} impact");
+            if (abv.MetricAtRisk is not null) sb.Append($" to {abv.MetricAtRisk}");
+            if (abv.EstimatedExposure is { } exp) sb.Append($", with an estimated exposure of {exp:C0}");
+            sb.Append(". ");
+        }
+        if (abv.PriorityCode is not null)
+        {
+            sb.Append($"It should be handled at {abv.PriorityCode.ToLowerInvariant()} priority");
+            if (abv.SlaHours is { } sla) sb.Append($" within a {sla}-hour SLA");
+            sb.Append(". ");
+        }
+        if (abv.OwnerRole is not null)
+            sb.Append($"Ownership sits with the {abv.OwnerRole}. ");
+        var next = abv.NextStep ?? abv.ActionCode;
+        if (!string.IsNullOrWhiteSpace(next))
+            sb.Append($"The recommended next action is: {next}. ");
+        if (!string.IsNullOrWhiteSpace(abv.PlaybookCode))
+            sb.Append($"Execute using playbook {abv.PlaybookCode}. ");
+        sb.Append(abv.ExecutionAllowed
+            ? "Automated execution is permitted"
+            : "This action must be executed manually");
+        sb.Append(abv.HumanApprovalRequired
+            ? ", but only after a human approves it."
+            : ", with no further approval gate configured.");
+        return sb.ToString();
+    }
+
     protected override async Task OnInitializedAsync()
     {
         if (_modelsLoaded)
@@ -833,6 +1503,37 @@
     // token overlap with the authority's name + relevance. Never fabricates: returns null when no
     // candidate shares meaningful terms with the authority.
     private string? MatchMatterPassage(WideLegalAuthorityDto authority)
+        => MatchMatterPassage(authority, null);
+
+    // Resolves a DISTINCT linked matter passage for every authority in order. The composer-produced
+    // passage is preferred when present; otherwise a deterministic token-overlap match is used. A passage
+    // already assigned to an earlier authority is excluded from later matches, so three authorities that
+    // share generic terms ("premises", "liability") no longer collapse onto the same ledger line.
+    private IReadOnlyList<string?> ResolveDistinctLinkedPassages(IReadOnlyList<WideLegalAuthorityDto> authorities)
+    {
+        var resolved = new string?[authorities.Count];
+        var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < authorities.Count; i++)
+        {
+            var authority = authorities[i];
+            string? passage = !string.IsNullOrWhiteSpace(authority.LinkedMatterPassage)
+                ? authority.LinkedMatterPassage!.Trim()
+                : MatchMatterPassage(authority, used);
+            if (!string.IsNullOrWhiteSpace(passage) && !used.Add(passage))
+            {
+                // A composer-supplied passage duplicates an earlier one — try a distinct deterministic
+                // match instead so the card is not an exact repeat.
+                var alternative = MatchMatterPassage(authority, used);
+                passage = !string.IsNullOrWhiteSpace(alternative) ? alternative : null;
+                if (!string.IsNullOrWhiteSpace(passage))
+                    used.Add(passage);
+            }
+            resolved[i] = passage;
+        }
+        return resolved;
+    }
+
+    private string? MatchMatterPassage(WideLegalAuthorityDto authority, HashSet<string>? exclude)
     {
         var query = $"{authority.Name} {authority.Relevance}";
         var queryTerms = Tokenize(query);
@@ -847,6 +1548,8 @@
             var passage = BuildFactorPassage(factor);
             if (string.IsNullOrWhiteSpace(passage))
                 continue;
+            if (exclude is not null && exclude.Contains(passage))
+                continue;
             var score = Overlap(queryTerms, Tokenize(passage));
             if (score > bestScore)
             {
@@ -859,6 +1562,8 @@
         {
             var passage = string.IsNullOrWhiteSpace(snippet.Snippet) ? snippet.Title : snippet.Snippet;
             if (string.IsNullOrWhiteSpace(passage))
+                continue;
+            if (exclude is not null && exclude.Contains(passage))
                 continue;
             var score = Overlap(queryTerms, Tokenize(passage));
             if (score > bestScore)
@@ -1097,4 +1802,64 @@
 
         return enterprise.Concat(external).Distinct(StringComparer.OrdinalIgnoreCase).Count();
     }
+
+    // ── Reasoning hierarchy + Interpretation results helpers (mirrors /legal/search). ──
+    private IEnumerable<IGrouping<int, WideBranchDto>> BranchLevels
+        => (_deepResponse?.Branches ?? []).OrderBy(x => x.SortOrder).GroupBy(x => x.LevelNumber).OrderBy(group => group.Key);
+
+    private IReadOnlyCollection<WideInterpretiveResultDto> PrioritizedInterpretiveResults
+        => _deepResponse?.InterpretiveResults.Where(x => x.BranchStateCode != "DORMANT").ToArray() ?? [];
+    private IReadOnlyCollection<WideInterpretiveResultDto> SecondaryInterpretiveResults
+        => _deepResponse?.InterpretiveResults.Where(x => x.BranchStateCode == "DORMANT").ToArray() ?? [];
+
+    private void OpenEvidence(PoloxiEvidenceDto evidence)
+    {
+        if (!string.IsNullOrWhiteSpace(evidence.NavigationRoute)) Navigation.NavigateTo(evidence.NavigationRoute);
+    }
+
+    private static string BranchStateLabel(WideBranchDto branch) => branch.BranchStateCode switch
+    {
+        "PRUNED" => "RULED OUT",
+        "DORMANT" => "NOT PRIORITIZED",
+        "SECONDARY" => "ALSO RELEVANT",
+        _ => branch.IsEliminated ? "RULED OUT" : branch.GroundingStatusCode
+    };
+
+    private static readonly System.Text.RegularExpressions.Regex BranchLevelPrefixPattern =
+        new(@"^L\d+\s*(?:·|-|:)?\s+", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+    private static string LevelPrefix(int levelNumber) => levelNumber > 0 ? $"L{levelNumber}" : "LN";
+    private static string StripExistingLevelPrefix(string displayName) => string.IsNullOrWhiteSpace(displayName) ? displayName : BranchLevelPrefixPattern.Replace(displayName.Trim(), string.Empty);
+    private static string BranchDisplayWithLevel(WideBranchDto branch) => $"{LevelPrefix(branch.LevelNumber)} · {StripExistingLevelPrefix(branch.DisplayName)}";
+    private string InterpretiveBranchDisplayWithLevel(WideInterpretiveResultDto result) => $"{LevelPrefix(result.LevelNumber)} · {StripExistingLevelPrefix(result.BranchDisplayName)}";
+
+    private static readonly HashSet<string> ContractAssociationStopwords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "a","an","and","are","as","at","be","best","by","criteria","criterion","for","from","in","is","of","on","or","places","ranking","the","to","used","with"
+    };
+    private sealed record BranchContractEntry(string Value, string Label, string Icon, string Title);
+    private static IReadOnlyCollection<BranchContractEntry> AssociatedContractEntries(WideBranchDto branch, WideQueryContract contract)
+    {
+        var branchTokens = ContractAssociationTokens($"{branch.DisplayName} {branch.Interpretation}");
+        if (branchTokens.Count == 0) return [];
+        var entries = new List<BranchContractEntry>();
+        Add(contract.TargetObject ?? contract.EntityType, "UNIT", "bi-bullseye", "Comparison unit fixed by the query contract.");
+        Add(contract.GeographicConstraint, "FIXED", "bi-geo-alt", "Geographic scope fixed by the query contract.");
+        foreach (var constraint in contract.HardConstraints) Add(constraint, "FIXED", "bi-lock", "Hard constraint fixed by the query contract.");
+        Add(contract.RankingConcept, "RANKING", "bi-sliders", "Evaluative concept this branch helps operationalize.");
+        foreach (var concept in contract.AmbiguousConcepts) Add(concept, "AMBIGUOUS", "bi-question-circle", "Ambiguous concept this branch helps disambiguate.");
+        return entries;
+
+        void Add(string? value, string label, string icon, string title)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return;
+            var entryTokens = ContractAssociationTokens(value);
+            if (entryTokens.Count == 0 || !entryTokens.Overlaps(branchTokens)) return;
+            entries.Add(new(value.Trim(), label, icon, title));
+        }
+    }
+    private static HashSet<string> ContractAssociationTokens(string value) => System.Text.RegularExpressions.Regex.Matches(value, @"[\p{L}\p{N}]+")
+        .Select(match => match.Value.ToLowerInvariant())
+        .Where(token => token.Length > 2 && !ContractAssociationStopwords.Contains(token))
+        .Select(token => token.Length > 4 && token.EndsWith('s') ? token[..^1] : token)
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
 }

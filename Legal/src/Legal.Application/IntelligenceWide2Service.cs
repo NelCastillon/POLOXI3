@@ -275,6 +275,14 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             ?"gpt-6-astra"
             :request.ModelCode.Trim();
 
+    // Deep Citation search (Legal Answer composer) synthesis model. DB-backed via
+    // WideConfiguration.DeepCitationModelCode (migration 0490); an explicit model selection in the
+    // page's Model dropdown still overrides it per-run so the user's pick is never downgraded.
+    private static string? DeepCitationModel(WideConfiguration configuration,WideSearchRequest request)=>
+        request.ForceRequestedModelAllStages||IsExplicitModelSelection(request)
+            ?ModelOverride(request)
+            :string.IsNullOrWhiteSpace(configuration.DeepCitationModelCode)?"gpt-5.5":configuration.DeepCitationModelCode.Trim();
+
     public Task<IReadOnlyCollection<WideModelOptionDto>> GetWideModelsAsync(Guid tenantId,CancellationToken cancellationToken=default)=>wideRepository.GetWideModelsAsync(tenantId,cancellationToken);
 
     public Task<IReadOnlyCollection<WideSearchContextDto>> GetSearchContextsAsync(Guid tenantId,CancellationToken cancellationToken=default)=>wideRepository.GetSearchContextsAsync(tenantId,cancellationToken);
@@ -2355,7 +2363,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             if(string.Equals(request.ContextCode?.Trim(),WideSearchContexts.Legal,StringComparison.OrdinalIgnoreCase)&&answerStatus!="USER_CLARIFICATION_REQUIRED"&&!string.IsNullOrWhiteSpace(finalAnswerText))
             {
                 llmCalls++;
-                legalAnswer=await ComposeLegalAnswerAsync(request,finalAnswerText,answerContext?.WinnerDisplayName,resolutionDeliverable,externalKnowledge,interpretiveResults,decisionConfidence,decisionEvidenceCoverage,evidenceCoverage,finalEntropy,candidates,relevantEvidence,cancellationToken);
+                legalAnswer=await ComposeLegalAnswerAsync(request,configuration,finalAnswerText,answerContext?.WinnerDisplayName,resolutionDeliverable,externalKnowledge,interpretiveResults,decisionConfidence,decisionEvidenceCoverage,evidenceCoverage,finalEntropy,candidates,relevantEvidence,cancellationToken);
             }
             // Candidate Landscape Narrative Composer (PRESENTATION ONLY, legal context + POLOXI engine).
             // One fail-soft LLM call explains the WHOLE candidate competition and produces a per-candidate
@@ -2780,7 +2788,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     // never changes the conclusion, and its result is discarded entirely if the deterministic output
     // guard finds an invented authority or a contradicted conclusion. Any failure returns null and the
     // standard POLOXI answer stands. Never touches ranking, confidence, answer status, or persistence.
-    private async Task<WideLegalAnswerDto?> ComposeLegalAnswerAsync(WideSearchRequest request,string poloxiConclusion,string? winnerDisplayName,WideResolutionDeliverableDto? resolutionDeliverable,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge,IReadOnlyCollection<WideInterpretiveResultDto> interpretiveResults,decimal? decisionConfidence,decimal decisionEvidenceCoverage,decimal evidenceCoverage,WideEntropyResult finalEntropy,IReadOnlyCollection<WideCandidateDto> candidates,IReadOnlyCollection<PoloxiEvidenceDto> relevantEvidence,CancellationToken cancellationToken)
+    private async Task<WideLegalAnswerDto?> ComposeLegalAnswerAsync(WideSearchRequest request,WideConfiguration configuration,string poloxiConclusion,string? winnerDisplayName,WideResolutionDeliverableDto? resolutionDeliverable,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge,IReadOnlyCollection<WideInterpretiveResultDto> interpretiveResults,decimal? decisionConfidence,decimal decisionEvidenceCoverage,decimal evidenceCoverage,WideEntropyResult finalEntropy,IReadOnlyCollection<WideCandidateDto> candidates,IReadOnlyCollection<PoloxiEvidenceDto> relevantEvidence,CancellationToken cancellationToken)
     {
         try
         {
@@ -2804,7 +2812,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             var result=await aiProviderRouter.GenerateAsync(request.TenantId,AnswerFeatureCode(request),
                 await GetWideSystemPromptAsync(request,IntelligencePromptCodes.WideLegalAnswer,cancellationToken),
                 userPrompt,
-                LegalAnswerSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_LEGAL_ANSWER",null,request.CorrelationId,"Intelligent Search Wide"),SynthesisModel(request),cancellationToken);
+                LegalAnswerSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_LEGAL_ANSWER",null,request.CorrelationId,"Intelligent Search Wide"),DeepCitationModel(configuration,request),cancellationToken);
             var proposal=JsonSerializer.Deserialize<LegalAnswerProposal>(result.Content,JsonOptions);
             return ValidateLegalAnswer(proposal,verifiedAuthorities,winnerDisplayName,resolutionDeliverable,interpretationStatus);
         }
@@ -3726,7 +3734,11 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         if(string.IsNullOrWhiteSpace(proposal.Conclusion)||string.IsNullOrWhiteSpace(proposal.Analysis)||string.IsNullOrWhiteSpace(proposal.Application)||string.IsNullOrWhiteSpace(proposal.BottomLine))
             return null;
         // Authority whitelist: a cited authority name must be a substring-match (either direction) of a
-        // verified authority title. If the composer cited anything unverified, discard the whole answer.
+        // verified authority title. An unverified/invented citation is DROPPED from the Key Authorities
+        // list rather than discarding the entire attorney answer — the conclusion/analysis/application and
+        // the ranking still render (they are the POLOXI decision, not the citation). This keeps the answer
+        // present when retrieval verified few or zero authorities, while never surfacing an unverified
+        // citation as if it were verified.
         var authorities=new List<WideLegalAuthorityDto>();
         foreach(var cited in proposal.KeyAuthorities??[])
         {
@@ -3735,7 +3747,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             var matched=verifiedAuthorities.Any(authority=>
                 authority.Title.Contains(citedName,StringComparison.OrdinalIgnoreCase)||
                 citedName.Contains(authority.Title,StringComparison.OrdinalIgnoreCase));
-            if(!matched)return null; // invented authority → discard entirely
+            if(!matched)continue; // unverified/invented authority → drop this citation, keep the answer
             authorities.Add(new(citedName,cited.Relevance.Trim(),string.IsNullOrWhiteSpace(cited.Reference)?null:cited.Reference.Trim())
             {
                 // Presentation-only: a null/blank linked passage simply renders no matter passage; never a discard.

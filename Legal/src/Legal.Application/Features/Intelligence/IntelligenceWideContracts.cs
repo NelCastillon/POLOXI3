@@ -1447,6 +1447,11 @@ public sealed record WideConfiguration(decimal TargetConfidence,decimal MinimumB
     // Fast-tier model code used by mechanical stages when EnableTieredModelRouting is on. Must be an
     // active CHAT deployment with feature routes for the wide mechanical features. Also the Auto default.
     public string FastModelCode{get;init;}="gpt-4.1-mini";
+    // DB-backed model code for the Deep Citation search (Legal Answer composer) synthesis call. Under
+    // Auto this is the model that renders the final senior-attorney Deep Citations prose. An explicit
+    // model selection in the page's Model dropdown still overrides this. Must be an active CHAT
+    // deployment with feature routes for the wide synthesis features (DB-seeded; see migration 0490).
+    public string DeepCitationModelCode{get;init;}="gpt-5.5";
     // V3.11 Guardrail-Constrained Weighted Utility: ordinary preference scores remain compensatory,
     // but guardrail criteria apply a deterministic veto-inspired penalty when performance is below
     // an acceptable floor. The LLM may describe criteria; POLOXI owns these thresholds and math.
