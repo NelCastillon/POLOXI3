@@ -50,6 +50,22 @@ public sealed partial class IntelligenceWide2Service
         @"\bCal(?:ifornia|\.)?\s+(?:Code\s+(?:of\s+)?Civ(?:il)?\.?\s+Proc(?:edure)?\.?|Civ(?:il)?\.?\s+Proc(?:edure)?\.?\s+Code|Civ(?:il)?\.?\s+Code|Pen(?:al)?\.?\s+Code|Prob(?:ate)?\.?\s+Code|Evid(?:ence)?\.?\s+Code|Veh(?:icle)?\.?\s+Code|Corp(?:orations)?\.?\s+Code|Fam(?:ily)?\.?\s+Code|Gov(?:ernment|t)?\.?'?\s+Code|Lab(?:or)?\.?\s+Code|Ins(?:urance)?\.?\s+Code|Bus(?:iness)?\.?\s*(?:and|&)?\s*Prof(?:essions)?\.?\s+Code|Health\s*(?:and|&)?\s*Saf(?:ety)?\.?\s+Code)\s*(?:§+|section|sec\.?)?\s*\d[\dA-Za-z.:\-]*",
         System.Text.RegularExpressions.RegexOptions.Compiled|System.Text.RegularExpressions.RegexOptions.IgnoreCase|System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
+    // Matches NON-California US-state statutory citations in their common Bluebook/abbreviated and
+    // spelled-out forms so New York, Texas, Florida, and every other state are extracted the same way
+    // California already is (e.g. "N.Y. C.P.L.R. § 1411", "New York Gen. Oblig. Law § 5-1501",
+    // "Fla. Stat. § 768.81", "Tex. Civ. Prac. & Rem. Code § 33.001", "Mich. Comp. Laws § 600.2957",
+    // "Ohio Rev. Code § 2315.33", "N.J. Stat. Ann. § 2A:15-5.1"). A jurisdiction token (a Bluebook
+    // abbreviation such as "N.Y."/"Fla."/"Tex." OR a spelled-out state name) must be followed by a
+    // DISTINCTIVE statute-indicator phrase (Stat./Stat. Ann./Rev. Stat./Rev. Code/Comp. Laws/Gen. Laws/
+    // Gen. Oblig. Law/Code Ann./C.P.L.R.) and a trailing section number — the statute indicator plus the
+    // required number keep the match from capturing ordinary prose. Fail-soft: the existing sovereign
+    // filter and the mandatory identity gate still drop any out-of-state or mis-resolved snippet, and the
+    // bare named-"Code § N" shapes (routed via the concept map / detector) are intentionally excluded here
+    // so this regex never competes with the precise California matcher above.
+    private static readonly System.Text.RegularExpressions.Regex LegalStateStatuteCitationRegex=new(
+        @"\b(?:[A-Z][A-Za-z]{1,2}\.(?:\s?[A-Z]\.){0,3}|[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\s+(?:[A-Z][A-Za-z.&'\-]+\s+(?:&\s+)?){0,4}(?:Rev(?:ised)?\.?\s+Stat(?:utes?)?(?:\.?\s+Ann(?:otated)?)?\.?|Rev(?:ised)?\.?\s+Code(?:\.?\s+Ann(?:otated)?)?\.?|Comp(?:iled)?\.?\s+Laws?(?:\.?\s+Ann(?:otated)?)?\.?|Gen(?:eral)?\.?\s+Laws?(?:\.?\s+Ann(?:otated)?)?\.?|Gen(?:eral)?\.?\s+Oblig(?:ations?)?\.?\s+Law|C\.?\s?P\.?\s?L\.?\s?R\.?|Stat(?:utes?)?\.?\s+Ann(?:otated)?\.?|Stat(?:utes?)?\.|Code\s+Ann(?:otated)?\.?)\s*(?:§+|section|sec\.?)?\s*\d[\dA-Za-z.:\-]*",
+        System.Text.RegularExpressions.RegexOptions.Compiled|System.Text.RegularExpressions.RegexOptions.IgnoreCase|System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
     // Generic corporate/legal-entity tokens that never distinguish one party from another; excluded
     // from case verification tokens so matching relies on the distinctive party names.
     private static readonly HashSet<string> CaseTokenStopwords=new(StringComparer.OrdinalIgnoreCase)
@@ -76,6 +92,8 @@ public sealed partial class IntelligenceWide2Service
         foreach(System.Text.RegularExpressions.Match match in LegalStatuteCitationRegex.Matches(text))
             Add(match.Value,LegalAuthorityKind.Statute,CitationVerificationTokens(match.Value));
         foreach(System.Text.RegularExpressions.Match match in LegalCaliforniaStatuteCitationRegex.Matches(text))
+            Add(match.Value,LegalAuthorityKind.Statute,CitationVerificationTokens(match.Value));
+        foreach(System.Text.RegularExpressions.Match match in LegalStateStatuteCitationRegex.Matches(text))
             Add(match.Value,LegalAuthorityKind.Statute,CitationVerificationTokens(match.Value));
         foreach(System.Text.RegularExpressions.Match match in LegalRegulationCitationRegex.Matches(text))
             Add(match.Value,LegalAuthorityKind.Regulation,CitationVerificationTokens(match.Value));

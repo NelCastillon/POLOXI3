@@ -89,6 +89,7 @@ public interface ISaasRepository
     Task CreateSubscriptionAsync(Guid tenantId, Guid planId, CancellationToken ct = default);
     Task<Guid?> GetActiveSubscriptionPlanIdAsync(Guid tenantId, CancellationToken ct = default);
     Task<IReadOnlyList<EntitlementResolution>> ResolveEntitlementsAsync(Guid tenantId, CancellationToken ct = default);
+    Task<bool> UpsertTenantEntitlementLimitAsync(Guid tenantId, string entitlementCode, long limitValue, Guid? actorUserId, CancellationToken ct = default);
 
     // Capability registry ---------------------------------------------------------
     Task<CapabilityDefinition?> GetCapabilityAsync(string code, CancellationToken ct = default);

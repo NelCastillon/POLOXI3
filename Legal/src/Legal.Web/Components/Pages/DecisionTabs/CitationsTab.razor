@@ -1,5 +1,6 @@
 @namespace Legal.Web.Components.Pages.DecisionTabs
 @using Legal.Web.Components.Pages
+@inject ApiClient Api
 
 @* ── Citations tab. A consolidated, filterable view of every legal-authority citation
      proposed or verified for this matter's latest decision session. Reuses the same
@@ -90,9 +91,18 @@
                         {
                             <tr>
                                 <td>
-                                    <a href="@CitationSearchUrl(c.Name)" target="_blank" rel="noopener noreferrer" class="cit-link" title="Look up this citation">
-                                        <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> @c.Name
-                                    </a>
+                                    @{ var cLink = ResolveCitationLink(c.Name); }
+                                    <button type="button" class="cit-link cit-link--btn" @onclick="() => OpenCitationViewer(c)" title="View the matter passages mapped to this citation">
+                                        <i class="bi bi-quote" aria-hidden="true"></i> @c.Name
+                                    </button>
+                                    @if (cLink.IsRetrieved)
+                                    {
+                                        <a href="@cLink.Url" target="_blank" rel="noopener noreferrer" class="um-badge um-badge-success cit-source-badge" title="Open the retrieved source for this citation"><i class="bi bi-box-arrow-up-right"></i> Source</a>
+                                    }
+                                    else
+                                    {
+                                        <a href="@cLink.Url" target="_blank" rel="noopener noreferrer" class="um-badge um-badge-neutral cit-source-badge" title="No retrieved source matched; open a web lookup"><i class="bi bi-search"></i> Web search</a>
+                                    }
                                 </td>
                                 <td><span class="cit-kind">@c.Kind</span></td>
                                 <td class="cit-relevance">@c.Relevance</td>
@@ -104,7 +114,548 @@
             }
         </div>
     }
+
+    @* ── Deep Citations: build a legal prompt from the box below and run it through the same
+         /legal/search "Legal" pipeline (CourtListener/GovInfo grounding), then render the
+         attorney-ready legal answer result right here under the Citations content. ── *@
+    <section class="cit-deep">
+        <div class="cit-deep-head">
+            <span class="cit-topbar-icon"><i class="bi bi-stars" aria-hidden="true"></i></span>
+            <div>
+                <h4>Deep Citations</h4>
+                <p class="dfi-panel-sub">Describe what you need and run a grounded legal-authority search for this matter. The prompt is sent through the same POLOXI <strong>Legal</strong> search pipeline used on <code>/legal/search</code>, using the model you select below. Results appear underneath.</p>
+            </div>
+        </div>
+
+        <div class="cit-deep-controls">
+            <textarea class="cit-deep-input"
+                      rows="3"
+                      placeholder="Add context for the citation search (e.g. jurisdiction, claim type, key facts)…"
+                      @bind="_deepText"
+                      @bind:event="oninput"
+                      disabled="@_deepLoading"></textarea>
+
+            <div class="cit-deep-actions">
+                <label class="cit-deep-model" title="Choose the language model used for this search. Auto lets the platform route to the best available model.">
+                    <i class="bi bi-cpu" aria-hidden="true"></i>
+                    <select @bind="_deepModelCode" disabled="@_deepLoading" aria-label="Model">
+                        <option value="">Auto</option>
+                        @foreach (var model in _models)
+                        {
+                            <option value="@model.ModelCode">@model.ModelCode</option>
+                        }
+                    </select>
+                </label>
+                <button type="button" class="um-btn um-btn-primary" @onclick="RunDeepCitationsAsync" disabled="@(_deepLoading || string.IsNullOrWhiteSpace(_deepText))">
+                    @if (_deepLoading)
+                    {
+                        <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                        <span>Running…</span>
+                    }
+                    else
+                    {
+                        <i class="bi bi-stars" aria-hidden="true"></i>
+                        <span>Run Deep Citations</span>
+                    }
+                </button>
+            </div>
+        </div>
+
+        @if (_deepError is not null)
+        {
+            <div class="alert alert-danger" role="alert" style="border-left: 4px solid #dc3545;">
+                <i class="bi bi-exclamation-triangle" aria-hidden="true"></i> @_deepError
+            </div>
+        }
+
+        @if (_deepLoading)
+        {
+            <div class="cit-deep-loading" role="status" aria-live="polite">
+                <div class="cit-deep-loading-spinner"></div>
+                <div class="cit-deep-loading-text">
+                    <strong>Running grounded legal-authority search…</strong>
+                    <span>POLOXI is proposing candidate authorities, verifying them against configured legal sources, and composing an attorney-ready, ranked citation set. This can take a moment.</span>
+                </div>
+            </div>
+        }
+
+        @if (_deepResponse is { } resp)
+        {
+            <div class="cit-deep-results">
+                @if (resp.LegalAnswer is { } legalAnswer)
+                {
+                    <section class="poloxi-answer-card poloxi-reveal">
+                        <div class="poloxi-answer-head">
+                            <div>
+                                <span class="poloxi-answer-kicker">Deep Citations — Legal Authority Search</span>
+                                <h2>Attorney-ready citations for this matter</h2>
+                            </div>
+                        </div>
+                        <div class="poloxi-answer-section poloxi-reveal poloxi-legal-answer">
+                            <h3><i class="bi bi-briefcase"></i> Attorney-ready answer</h3>
+                            <div class="poloxi-legal-block">
+                                <h4>Conclusion</h4>
+                                <p>@legalAnswer.Conclusion</p>
+                            </div>
+                            <div class="poloxi-legal-block">
+                                <h4>Analysis</h4>
+                                <p>@legalAnswer.Analysis</p>
+                            </div>
+                            @if (legalAnswer.KeyAuthorities.Count > 0)
+                            {
+                                <div class="poloxi-legal-block">
+                                    <h4>Key Authorities</h4>
+                                    <ul class="poloxi-legal-authorities">
+                                        @foreach (var authority in legalAnswer.KeyAuthorities)
+                                        {
+                                            <li>
+                                                @if (!string.IsNullOrWhiteSpace(authority.Reference))
+                                                {
+                                                    <a href="@authority.Reference" target="_blank" rel="noopener"><strong>@authority.Name</strong></a>
+                                                }
+                                                else
+                                                {
+                                                    <strong>@authority.Name</strong>
+                                                }
+                                                <span> — @authority.Relevance</span>
+                                                @{
+                                                    // Prefer the composer-produced linked passage (quoted verbatim from
+                                                    // matter context). When null, fall back to a deterministic match
+                                                    // against this matter's factors/evidence — never fabricated.
+                                                    var linkedPassage = !string.IsNullOrWhiteSpace(authority.LinkedMatterPassage)
+                                                        ? authority.LinkedMatterPassage
+                                                        : MatchMatterPassage(authority);
+                                                }
+                                                <div class="cit-passage-pair">
+                                                    <div class="cit-passage cit-passage--authority">
+                                                        <span class="cit-passage-label"><i class="bi bi-bank"></i> Authority passage</span>
+                                                        <p>@authority.Relevance</p>
+                                                    </div>
+                                                    <div class="cit-passage cit-passage--matter">
+                                                        <span class="cit-passage-label"><i class="bi bi-folder2-open"></i> Linked matter passage</span>
+                                                        @if (!string.IsNullOrWhiteSpace(linkedPassage))
+                                                        {
+                                                            <p>@linkedPassage</p>
+                                                        }
+                                                        else
+                                                        {
+                                                            <p class="cit-passage-empty">No matching matter passage in context.</p>
+                                                        }
+                                                    </div>
+                                                </div>
+                                            </li>
+                                        }
+                                    </ul>
+                                </div>
+                            }
+                            <div class="poloxi-legal-block">
+                                <h4>Application</h4>
+                                <p>@legalAnswer.Application</p>
+                            </div>
+                            @if (!string.IsNullOrWhiteSpace(legalAnswer.Counterargument))
+                            {
+                                <div class="poloxi-legal-block">
+                                    <h4>Counterargument</h4>
+                                    <p>@legalAnswer.Counterargument</p>
+                                </div>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(legalAnswer.RemainingUncertainty))
+                            {
+                                <div class="poloxi-legal-block">
+                                    <h4>Remaining Uncertainty</h4>
+                                    <p>@legalAnswer.RemainingUncertainty</p>
+                                </div>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(legalAnswer.DecisiveMissingFact))
+                            {
+                                <div class="poloxi-legal-block poloxi-legal-decisive">
+                                    <h4><i class="bi bi-key"></i> Decisive missing fact</h4>
+                                    <p>@legalAnswer.DecisiveMissingFact</p>
+                                </div>
+                            }
+                            <div class="poloxi-legal-block poloxi-legal-bottomline">
+                                <h4>Bottom Line</h4>
+                                <p>@legalAnswer.BottomLine</p>
+                            </div>
+                        </div>
+                    }
+
+                    @if (!string.IsNullOrWhiteSpace(resp.FinalAnswer))
+                    {
+                        <div class="poloxi-answer-section poloxi-reveal poloxi-full-answer-primary">
+                            <h3><i class="bi bi-card-text"></i> Full answer</h3>
+                            <p>@resp.FinalAnswer</p>
+                        </div>
+                    }
+
+                    @if (resp.AnswerContext is { } answerContext)
+                    {
+                        @if (answerContext.CandidateSummaries.Count > 0)
+                        {
+                            <div class="poloxi-rank-table">
+                                @foreach (var (summary, index) in answerContext.CandidateSummaries.Select((item, i) => (item, i)))
+                                {
+                                    <div class="poloxi-rank-row poloxi-reveal" style="animation-delay:@($"{index * 70}ms")">
+                                        <span class="poloxi-rank-medal @(index == 0 ? "poloxi-rank-medal--gold" : index == 1 ? "poloxi-rank-medal--silver" : index == 2 ? "poloxi-rank-medal--bronze" : null)">@(index switch { 0 => "🥇", 1 => "🥈", 2 => "🥉", _ => (index + 1).ToString() })</span>
+                                        <div class="poloxi-rank-main">
+                                            <strong>@summary.DisplayName</strong>
+                                            @if (summary.SupportTierCode != "STRONG")
+                                            {
+                                                <span class="poloxi-tier-badge @(summary.SupportTierCode == "MODERATE" ? "poloxi-tier-badge--moderate" : "poloxi-tier-badge--limited")" title="@(summary.SupportTierCode == "MODERATE" ? "Moderate support — backed by fewer independent evidence signals than the top results" : "Limited support — provisional result backed by a single credible evidence signal")">@(summary.SupportTierCode == "MODERATE" ? "Moderate support" : "Limited support")</span>
+                                            }
+                                            @{ var hasInsights = summary.BestFor is not null || summary.PraisedFor.Count > 0 || summary.WatchOutFor.Count > 0; }
+                                            @if (hasInsights)
+                                            {
+                                                <div class="poloxi-rank-facts">
+                                                    @if (summary.BestFor is not null)
+                                                    {
+                                                        <span class="poloxi-fact-chip poloxi-fact-chip--bestfor">🎯 Best for: @summary.BestFor</span>
+                                                    }
+                                                    @if (summary.PraisedFor.Count > 0)
+                                                    {
+                                                        <span class="poloxi-fact-chip poloxi-fact-chip--praise">👍 Praised for: @string.Join(" · ", summary.PraisedFor)</span>
+                                                    }
+                                                    @if (summary.WatchOutFor.Count > 0)
+                                                    {
+                                                        <span class="poloxi-fact-chip poloxi-fact-chip--watch">⚠ Watch out: @string.Join(" · ", summary.WatchOutFor)</span>
+                                                    }
+                                                </div>
+                                            }
+                                            <div class="poloxi-score-track"><span class="poloxi-score-fill" style="--score:@summary.CompositeScore.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)"></span></div>
+                                        </div>
+                                        <span class="poloxi-rank-score" title="Match score — how well this candidate fits the decision criteria relative to the alternatives">@summary.CompositeScore.ToString("P0")<small class="poloxi-rank-score-label">match</small></span>
+                                    </div>
+                                }
+                            </div>
+                        }
+
+                        @if (answerContext.WinnerStrengths.Count > 0 && answerContext.WinnerDisplayName is not null)
+                        {
+                            <div class="poloxi-answer-section poloxi-reveal">
+                                <h3><i class="bi bi-trophy"></i> Why @answerContext.WinnerDisplayName won</h3>
+                                <div class="poloxi-dimension-bars">
+                                    @foreach (var strength in answerContext.WinnerStrengths)
+                                    {
+                                        <div class="poloxi-dimension-bar">
+                                            <span>@strength.DimensionName</span>
+                                            <div class="poloxi-score-track"><span class="poloxi-score-fill" style="--score:@strength.Score.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)"></span></div>
+                                            <em>@strength.Score.ToString("P0")</em>
+                                        </div>
+                                    }
+                                    @foreach (var weakness in answerContext.WinnerWeaknesses)
+                                    {
+                                        <div class="poloxi-dimension-bar poloxi-dimension-bar--weak">
+                                            <span>@weakness.DimensionName</span>
+                                            <div class="poloxi-score-track"><span class="poloxi-score-fill" style="--score:@weakness.Score.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)"></span></div>
+                                            <em>@weakness.Score.ToString("P0")</em>
+                                        </div>
+                                    }
+                                </div>
+                            </div>
+                        }
+
+                        @if (answerContext.CandidateContrasts.Count > 0 && answerContext.WinnerDisplayName is not null)
+                        {
+                            <div class="poloxi-answer-section poloxi-reveal">
+                                <h3><i class="bi bi-arrow-left-right"></i> Why not the others?</h3>
+                                @foreach (var contrast in answerContext.CandidateContrasts)
+                                {
+                                    <p class="poloxi-contrast">
+                                        <strong>vs @contrast.AlternativeDisplayName (@contrast.AlternativeScore.ToString("P0"))</strong> —
+                                        @if (contrast.AlternativeLeadsOn.Count > 0)
+                                        {
+                                            <span>competitive on @string.Join(", ", contrast.AlternativeLeadsOn.Select(d => d.ToLowerInvariant()))</span>
+                                        }
+                                        else
+                                        {
+                                            <span>close overall</span>
+                                        }
+                                        @if (contrast.WinnerLeadsOn.Count > 0)
+                                        {
+                                            <span>, but @answerContext.WinnerDisplayName led on @string.Join(", ", contrast.WinnerLeadsOn.Select(d => d.ToLowerInvariant())).</span>
+                                        }
+                                        else
+                                        {
+                                            <span>; the composite balance decided it.</span>
+                                        }
+                                    </p>
+                                }
+                            </div>
+                        }
+                    }
+                    </section>
+                }
+                else if (!string.IsNullOrWhiteSpace(resp.FinalAnswer))
+                {
+                    <section class="poloxi-answer-card poloxi-reveal">
+                        <div class="poloxi-answer-head">
+                            <div>
+                                <span class="poloxi-answer-kicker">Deep Citations — Legal Authority Search</span>
+                                <h2>Result</h2>
+                            </div>
+                        </div>
+                        <div class="poloxi-answer-section poloxi-reveal">
+                            <p class="poloxi-answer-narrative">@resp.FinalAnswer</p>
+                        </div>
+                    </section>
+                }
+                else
+                {
+                    <div class="dfi-panel-card">
+                        <p class="dfi-panel-sub"><i class="bi bi-info-circle" aria-hidden="true"></i> The search completed but did not return an attorney-ready legal answer. Try refining the context above or selecting a different model.</p>
+                    </div>
+                }
+
+                @if (resp.AmbiguityGroups.Count > 1)
+                {
+                    <section class="poloxi-panel poloxi-panel--embedded poloxi-reveal">
+                        <div class="poloxi-panel-header">
+                            <div class="poloxi-panel-title"><span class="poloxi-panel-icon"><i class="bi bi-diagram-2"></i></span><div><span>Ambiguity-first grouped execution</span><h2>Possible meanings and result groups</h2></div></div>
+                            <span class="poloxi-status">@resp.AmbiguityGroups.Count groups</span>
+                        </div>
+                        <div class="poloxi-ambiguity-groups">
+                            @foreach (var group in resp.AmbiguityGroups)
+                            {
+                                <article class="poloxi-ambiguity-group">
+                                    <div class="poloxi-ambiguity-group-head">
+                                        <div><span>@group.GroupCode</span><h3>@group.DisplayName</h3></div>
+                                        <strong>@group.Confidence.ToString("P0")</strong>
+                                    </div>
+                                    @{ var breakdown = AmbiguityGroupScoreBreakdown(group); }
+                                    <small class="poloxi-muted" title="POLOXI confidence formula for this group.">
+                                        POLOXI confidence = 0.45 × @breakdown.InterpretationPrior.ToString("P0") + 0.55 × @breakdown.EvidenceSupport.ToString("P0") = @breakdown.PoloxiConfidence.ToString("P0")
+                                    </small>
+                                    <p>@group.Summary</p>
+                                    <div class="poloxi-branch-level">
+                                        @if (!string.IsNullOrWhiteSpace(group.AnswerKindCode))
+                                        {
+                                            <span class="poloxi-branch-chip"><i class="bi bi-signpost-2"></i>@group.AnswerKindCode.Replace('_', ' ')</span>
+                                        }
+                                        @if (!string.IsNullOrWhiteSpace(group.CandidateKindCode))
+                                        {
+                                            <span class="poloxi-branch-chip"><i class="bi bi-ui-checks-grid"></i>@group.CandidateKindCode.Replace('_', ' ')</span>
+                                        }
+                                        @if (!string.IsNullOrWhiteSpace(group.SafetyRiskCode) && group.SafetyRiskCode != "NONE")
+                                        {
+                                            <span class="poloxi-branch-chip" title="Safety-sensitive interpretation group."><i class="bi bi-shield-exclamation"></i>@(group.SafetyRiskCode == "MEDIUM" ? "POSSIBLE SAFETY RISK" : group.SafetyRiskCode)</span>
+                                        }
+                                        <span class="poloxi-branch-chip"><i class="bi bi-diagram-3"></i>@group.Branches.Count branch@(group.Branches.Count == 1 ? "" : "es")</span>
+                                        <span class="poloxi-branch-chip"><i class="bi bi-database-check"></i>@AmbiguityGroupEvidenceCount(group) evidence</span>
+                                    </div>
+                                    @{ var groupResults = GroupInterpretiveResults(group); }
+                                    @if (groupResults.Count > 0)
+                                    {
+                                        <div class="poloxi-group-results">
+                                            @foreach (var result in groupResults)
+                                            {
+                                                <div class="poloxi-group-result-set">
+                                                    @if (!string.IsNullOrWhiteSpace(result.BranchDisplayName))
+                                                    {
+                                                        <div class="poloxi-branch-level" title="Branch this ranked list answers">
+                                                            <span class="poloxi-branch-chip"><i class="bi bi-diagram-2"></i>@result.BranchDisplayName</span>
+                                                            @if (result.Confidence > 0)
+                                                            {
+                                                                <span class="um-badge um-badge-neutral" title="Branch confidence">@result.Confidence.ToString("P0")</span>
+                                                            }
+                                                        </div>
+                                                        @if (!string.IsNullOrWhiteSpace(result.Interpretation))
+                                                        {
+                                                            <small class="poloxi-muted">@result.Interpretation</small>
+                                                        }
+                                                    }
+                                                    <ol>
+                                                        @foreach (var item in result.Items)
+                                                        {
+                                                            <li>
+                                                                @{ var itemLink = ResolveCitationLink(item.Name); }
+                                                                <a href="@itemLink.Url" target="_blank" rel="noopener noreferrer" title="@(itemLink.IsRetrieved ? $"Open the retrieved source for {item.Name}" : $"Search the web for {item.Name}")">@item.Name</a>
+                                                                @if (itemLink.IsRetrieved)
+                                                                {
+                                                                    <span class="um-badge um-badge-success" title="A retrieved external source matched this citation."><i class="bi bi-link-45deg"></i> Source</span>
+                                                                }
+                                                                @if (item.Score.HasValue)
+                                                                {
+                                                                    <span class="um-badge um-badge-neutral" title="LLM-assigned strength/likelihood for this item (0-100%).">@item.Score.Value.ToString("P0")</span>
+                                                                }
+                                                                @foreach (var facet in item.Attributes)
+                                                                {
+                                                                    <span class="um-badge um-badge-info poloxi-item-attribute" title="@facet.Label">@facet.Label: @facet.Value</span>
+                                                                }
+                                                                <small>@item.Detail</small>
+                                                            </li>
+                                                        }
+                                                    </ol>
+                                                </div>
+                                            }
+                                        </div>
+                                    }
+                                </article>
+                            }
+                        </div>
+                    </section>
+                }
+            </div>
+        }
+    </section>
+
+    @* ── External sources, live grounding, and AI-suggested authorities (mirrors the main answer page). ── *@
+    @if (Owner.DaExternalReferences.Count > 0)
+    {
+        <div class="poloxi-answer-section poloxi-reveal">
+            <h3><i class="bi bi-globe2"></i> External sources <small class="poloxi-section-note">Real-world references · LLM knowledge (not enterprise-verified)</small></h3>
+            @foreach (var reference in Owner.DaExternalReferences)
+            {
+                <article class="poloxi-evidence poloxi-evidence-clickable" @ondblclick="() => Owner.DaOpenExternal(reference.Url)" title="Double-click to open @reference.Url in a new tab.">
+                    <span class="poloxi-rank"><i class="bi bi-globe2"></i></span>
+                    <div class="poloxi-evidence-main">
+                        <strong>@reference.Title</strong>
+                        <small>@reference.Source</small>
+                        <p>@reference.Summary</p>
+                        <div><span class="um-badge um-badge-neutral">@Owner.DaBranchNameWithLevel(reference.BranchDisplayName)</span> <a href="@reference.Url" target="_blank" rel="noopener noreferrer" @onclick:stopPropagation="true">@reference.Url <i class="bi bi-box-arrow-up-right"></i></a></div>
+                    </div>
+                </article>
+            }
+        </div>
+    }
+    @if (Owner.DaExternalKnowledge.Count > 0)
+    {
+        <div class="poloxi-answer-section poloxi-reveal">
+            <h3><i class="bi bi-broadcast"></i> Live grounding sources <small class="poloxi-section-note">Live web sources · retrieved for time-sensitive grounding</small></h3>
+            @foreach (var snippet in Owner.DaExternalKnowledge)
+            {
+                var corpusVersionId = snippet.LegalDocumentVersionId;
+                var corpusDocUrl = corpusVersionId is { } cv ? Api.LegalDocumentVersionContentUrl(cv) : null;
+                <article class="poloxi-evidence poloxi-evidence-clickable" @ondblclick="() => Owner.DaOpenExternal(corpusDocUrl ?? snippet.Url)" title="@(corpusDocUrl is not null ? "Double-click to open the source document." : $"Double-click to open {snippet.Url} in a new tab.")">
+                    <span class="poloxi-rank"><i class="bi bi-broadcast"></i></span>
+                    <div class="poloxi-evidence-main">
+                        <strong>@snippet.Title</strong>
+                        <small>Retrieved @snippet.RetrievedDateUtc.ToString("yyyy-MM-dd HH:mm") UTC</small>
+                        <p>@snippet.Snippet</p>
+                        @if (corpusDocUrl is not null)
+                        {
+                            <div><span class="um-badge um-badge-neutral"><i class="bi bi-file-earmark-text"></i> MATTER DOCUMENT</span> <button type="button" class="poloxi-doc-link" @onclick="() => Owner.OpenDocumentPreview(corpusVersionId!.Value, string.IsNullOrWhiteSpace(snippet.LegalDocumentFileName) ? snippet.Title : snippet.LegalDocumentFileName)" @onclick:stopPropagation="true"><i class="bi bi-file-earmark-pdf"></i> @(string.IsNullOrWhiteSpace(snippet.LegalDocumentFileName) ? "Open document" : snippet.LegalDocumentFileName)</button></div>
+                        }
+                        else
+                        {
+                            <div><span class="um-badge um-badge-success"><i class="bi bi-globe2"></i> LIVE</span> <a href="@snippet.Url" target="_blank" rel="noopener noreferrer" @onclick:stopPropagation="true">@snippet.Url <i class="bi bi-box-arrow-up-right"></i></a></div>
+                        }
+                    </div>
+                </article>
+            }
+        </div>
+    }
+    @if (Owner.DaAuthorities.Count > 0)
+    {
+        <div class="poloxi-answer-section poloxi-reveal poloxi-proposed-authorities">
+            <h3><i class="bi bi-lightbulb"></i> AI-suggested authorities <small class="poloxi-section-note">Not evidence &middot; unverified AI leads used only to guide retrieval</small></h3>
+            <p class="poloxi-proposed-caution"><i class="bi bi-exclamation-triangle"></i> These authorities were proposed by the AI model as likely-relevant leads. They are <strong>not evidence</strong> and are not enterprise-verified. A <span class="um-badge um-badge-success">Confirmed by source</span> badge means a retrieved external source matched the citation; <span class="um-badge um-badge-warning">Unconfirmed lead</span> means retrieval did not confirm it.</p>
+            @foreach (var authority in Owner.DaAuthorities)
+            {
+                <article class="poloxi-evidence poloxi-proposed-authority">
+                    <span class="poloxi-rank"><i class="bi bi-lightbulb"></i></span>
+                    <div class="poloxi-evidence-main">
+                        <strong>@authority.Name</strong>
+                        <small>@authority.Kind</small>
+                        @if (!string.IsNullOrWhiteSpace(authority.Relevance))
+                        {
+                            <p>@authority.Relevance</p>
+                        }
+                        <div>
+                            @if (authority.VerificationStatus == "VERIFIED")
+                            {
+                                <span class="um-badge um-badge-success"><i class="bi bi-check-circle"></i> Confirmed by source</span>
+                            }
+                            else
+                            {
+                                <span class="um-badge um-badge-warning"><i class="bi bi-question-circle"></i> Unconfirmed lead</span>
+                            }
+                        </div>
+                    </div>
+                </article>
+            }
+        </div>
+    }
 </div>
+
+@* ── Premium citation passage viewer. Opens when a citation name is clicked and highlights every
+     matter passage (factor, admitted evidence with its matched dimensions/propositions, and live
+     grounding snippet) whose text maps to the citation. Never fabricates — only passages that share
+     meaningful terms with the citation are shown, each with the overlapping terms highlighted. ── *@
+@if (_viewerCitation is { } vc)
+{
+    var matches = ExtractCitationPassages(vc);
+    <div class="cit-viewer-backdrop" @onclick="CloseCitationViewer">
+        <div class="cit-viewer" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
+            <header class="cit-viewer-head">
+                <div class="cit-viewer-head-main">
+                    <span class="cit-viewer-icon"><i class="bi bi-quote" aria-hidden="true"></i></span>
+                    <div>
+                        <span class="cit-viewer-kicker">Citation passage viewer</span>
+                        <h3>@vc.Name</h3>
+                        <div class="cit-viewer-meta">
+                            @if (!string.IsNullOrWhiteSpace(vc.Kind))
+                            {
+                                <span class="um-badge um-badge-neutral">@vc.Kind</span>
+                            }
+                            <span class="um-badge @(IsVerified(vc.VerificationStatus) ? "um-badge-success" : "um-badge-warning")">
+                                <i class="bi @(IsVerified(vc.VerificationStatus) ? "bi-check-circle" : "bi-question-circle")"></i> @vc.VerificationStatus
+                            </span>
+                            @{ var vcLink = ResolveCitationLink(vc.Name); }
+                            <a href="@vcLink.Url" target="_blank" rel="noopener noreferrer" class="um-badge @(vcLink.IsRetrieved ? "um-badge-success" : "um-badge-neutral")" title="@(vcLink.IsRetrieved ? "Open the retrieved source" : "Open a web lookup")">
+                                <i class="bi bi-box-arrow-up-right"></i> @(vcLink.IsRetrieved ? "Source" : "Web search")
+                            </a>
+                        </div>
+                    </div>
+                </div>
+                <button type="button" class="cit-viewer-close" @onclick="CloseCitationViewer" aria-label="Close"><i class="bi bi-x-lg"></i></button>
+            </header>
+
+            <div class="cit-viewer-body">
+                @if (!string.IsNullOrWhiteSpace(vc.Relevance))
+                {
+                    <section class="cit-viewer-section">
+                        <span class="cit-viewer-section-label"><i class="bi bi-bank"></i> Why this authority matters</span>
+                        <p class="cit-viewer-relevance">@vc.Relevance</p>
+                    </section>
+                }
+
+                <section class="cit-viewer-section">
+                    <span class="cit-viewer-section-label"><i class="bi bi-folder2-open"></i> Mapped matter passages <span class="cit-viewer-count">@matches.Count</span></span>
+                    @if (matches.Count == 0)
+                    {
+                        <p class="cit-viewer-empty"><i class="bi bi-info-circle"></i> No matter passage in this session shares meaningful terms with this citation. Nothing is fabricated — the citation remains an external-authority lead only.</p>
+                    }
+                    else
+                    {
+                        @foreach (var m in matches)
+                        {
+                            <article class="cit-match cit-match--@m.Kind.ToLowerInvariant()">
+                                <div class="cit-match-head">
+                                    <span class="cit-match-tag"><i class="bi @m.Icon"></i> @m.KindLabel</span>
+                                    <strong class="cit-match-title">@m.Title</strong>
+                                </div>
+                                <p class="cit-match-passage">@HighlightPassage(m.Passage, m.Terms)</p>
+                                @if (m.Mappings.Count > 0)
+                                {
+                                    <div class="cit-match-mappings">
+                                        @foreach (var map in m.Mappings)
+                                        {
+                                            <span class="cit-match-chip" title="Mapped @map.Kind"><i class="bi @map.Icon"></i> @map.Label</span>
+                                        }
+                                    </div>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(m.NavigationRoute))
+                                {
+                                    <a href="@m.NavigationRoute" class="cit-match-open" @onclick:stopPropagation="true"><i class="bi bi-arrow-up-right-circle"></i> Open source record</a>
+                                }
+                            </article>
+                        }
+                    }
+                </section>
+            </div>
+        </div>
+    </div>
+}
 
 @code {
     [Parameter, EditorRequired] public LegalPersonalInjuryDecision2 Owner { get; set; } = default!;
@@ -112,9 +663,438 @@
     private string _filter = "ALL";
     private string _search = string.Empty;
 
+    // ── Deep Citations state ──
+    private IReadOnlyCollection<WideModelOptionDto> _models = [];
+    private string _deepText = string.Empty;
+    private string _deepModelCode = string.Empty;
+    private bool _deepLoading;
+    private string? _deepError;
+    private WideSearchResponse? _deepResponse;
+    private bool _modelsLoaded;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (_modelsLoaded)
+            return;
+        _modelsLoaded = true;
+
+        // Default the Deep Citations context to the matter's serialized context block
+        // (the same [SUPPLIED] PERSONAL INJURY CONTEXT / FACT AND EVIDENCE STATUS text shown on Overview).
+        if (string.IsNullOrWhiteSpace(_deepText) && Owner.DaMatterContextText is { Length: > 0 } ctx)
+            _deepText = ctx;
+
+        try { _models = await Api.GetIntelligenceWideModelsAsync(); }
+        catch { _models = []; }
+
+        // The Deep Citations result lives in component state, so switching tabs disposes it. Rehydrate the
+        // most recent saved run for THIS matter from Search History so the result persists across tab
+        // switches (the run was already saved to /legal/search history, linked by MatterId).
+        await RehydrateLatestDeepCitationsAsync();
+    }
+
+    // Reloads the newest matter-scoped Deep Citations run from Search History into _deepResponse so the
+    // bottom-of-tab result survives navigation. Fail-soft: any error simply leaves the panel empty.
+    private async Task RehydrateLatestDeepCitationsAsync()
+    {
+        if (_deepResponse is not null || _deepLoading)
+            return;
+        if (Owner.DaMatterId is not { } matterId || matterId == Guid.Empty)
+            return;
+        try
+        {
+            var history = await Api.GetSearchRunHistoryAsync(page: 1, pageSize: 1, matterId: matterId);
+            var latest = history.Items.FirstOrDefault();
+            if (latest is null)
+                return;
+            var detail = await Api.GetSearchRunResultAsync(latest.WideSearchRunResultId);
+            if (detail?.Response is { } response)
+                _deepResponse = response;
+        }
+        catch
+        {
+            // Advisory rehydration only — never block the tab if history is unavailable.
+        }
+    }
+
+
+    // Build the prompt from the box above, run it through the same POLOXI "Legal" search pipeline used by
+    // /legal/search (CourtListener/GovInfo grounding) with the chosen model, and render the result below.
+    private async Task RunDeepCitationsAsync()
+    {
+        var context = _deepText?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(context) || _deepLoading)
+            return;
+
+        const string promptPrefix = "Rank the best legal citations for this matter case as a ranked list of authorities (entity ranking), ";
+        const int maxPromptLength = 4000;
+        // The API caps Query at 4000 chars. Trim the context so prefix + context never exceeds it.
+        var budget = maxPromptLength - promptPrefix.Length;
+        if (context.Length > budget)
+            context = context[..budget];
+        var prompt = promptPrefix + context;
+
+        _deepLoading = true;
+        _deepError = null;
+        _deepResponse = null;
+        try
+        {
+            _deepResponse = await Api.IntelligentSearchWideDynamicAsync(
+                new(Guid.Empty, Guid.Empty, prompt, 50, Guid.NewGuid().ToString("N"))
+                {
+                    ModelCode = string.IsNullOrWhiteSpace(_deepModelCode) ? "gpt-4.1-mini" : _deepModelCode,
+                    ContextCode = "Legal",
+                    ConversationId = Guid.NewGuid(),
+                    // Link this Deep Citations run to the current matter so the saved /legal/search run
+                    // history row relates back to this Matter instead of being an ad-hoc search.
+                    MatterId = Owner.DaMatterId is { } dcMatterId && dcMatterId != Guid.Empty ? dcMatterId : null
+                });
+        }
+        catch (Exception ex)
+        {
+            _deepError = $"Deep Citations search failed: {ex.Message}";
+        }
+        finally
+        {
+            _deepLoading = false;
+        }
+    }
+
     private static bool IsVerified(string? status)
         => string.Equals(status, "VERIFIED", StringComparison.OrdinalIgnoreCase);
 
     private static string CitationSearchUrl(string authorityName)
         => LegalPersonalInjuryDecision2.OvCitationSearchUrl(authorityName);
+
+    private static string WebSearchUrl(string name)
+        => $"https://www.google.com/search?q={Uri.EscapeDataString(name ?? string.Empty)}";
+
+    // Resolves the actual source-site URL for a citation name by matching it against the real URLs
+    // retrieved by the Deep/Wide pipeline (external references, live grounding snippets) and the
+    // matter's existing external sources. Returns the retrieved URL plus IsRetrieved=true when a
+    // real source matched; otherwise falls back to a web-search lookup with IsRetrieved=false so the
+    // UI can label it honestly. Never fabricates: only URLs that are present on retrieved sources are
+    // treated as actual sources.
+    private (string Url, bool IsRetrieved) ResolveCitationLink(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return (WebSearchUrl(name ?? string.Empty), false);
+
+        var terms = Tokenize(name);
+
+        string? bestUrl = null;
+        var bestScore = 0;
+
+        void Consider(string? title, string? url)
+        {
+            if (string.IsNullOrWhiteSpace(url) || !IsHttpUrl(url))
+                return;
+            var haystack = $"{title} {url}";
+            var score = Overlap(terms, Tokenize(haystack));
+            // A citation name embedded verbatim in the title/url is a strong match even when the
+            // tokenizer drops short/stop words, so treat a substring hit as a baseline score of 1.
+            if (score == 0 && !string.IsNullOrWhiteSpace(title) &&
+                title.Contains(name, StringComparison.OrdinalIgnoreCase))
+                score = 1;
+            if (score > bestScore)
+            {
+                bestScore = score;
+                bestUrl = url;
+            }
+        }
+
+        if (_deepResponse is not null)
+        {
+            foreach (var reference in _deepResponse.ExternalReferences)
+                Consider(reference.Title, reference.Url);
+            foreach (var snippet in _deepResponse.ExternalKnowledge)
+                Consider(snippet.Title, snippet.Url);
+        }
+
+        foreach (var reference in Owner.DaExternalReferences)
+            Consider(reference.Title, reference.Url);
+        foreach (var snippet in Owner.DaExternalKnowledge)
+            Consider(snippet.Title, snippet.Url);
+
+        // Require at least one shared meaningful term (or a verbatim substring hit) so an unrelated
+        // source is never presented as the citation's actual site.
+        return bestScore >= 1 && bestUrl is not null
+            ? (bestUrl, true)
+            : (CitationSearchUrl(name), false);
+    }
+
+    private static bool IsHttpUrl(string? url)
+        => !string.IsNullOrWhiteSpace(url)
+           && Uri.TryCreate(url, UriKind.Absolute, out var uri)
+           && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
+
+    // Deterministic matter-passage fallback. When the Legal Answer Composer did not quote a linked
+    // matter passage for an authority, surface the best-matching passage that already exists on this
+    // matter — a factor (name/requirement/actual value) or an admitted-evidence excerpt — chosen by
+    // token overlap with the authority's name + relevance. Never fabricates: returns null when no
+    // candidate shares meaningful terms with the authority.
+    private string? MatchMatterPassage(WideLegalAuthorityDto authority)
+    {
+        var query = $"{authority.Name} {authority.Relevance}";
+        var queryTerms = Tokenize(query);
+        if (queryTerms.Count == 0)
+            return null;
+
+        string? bestPassage = null;
+        var bestScore = 0;
+
+        foreach (var factor in Owner.DaFactors)
+        {
+            var passage = BuildFactorPassage(factor);
+            if (string.IsNullOrWhiteSpace(passage))
+                continue;
+            var score = Overlap(queryTerms, Tokenize(passage));
+            if (score > bestScore)
+            {
+                bestScore = score;
+                bestPassage = passage;
+            }
+        }
+
+        foreach (var snippet in Owner.DaExternalKnowledge)
+        {
+            var passage = string.IsNullOrWhiteSpace(snippet.Snippet) ? snippet.Title : snippet.Snippet;
+            if (string.IsNullOrWhiteSpace(passage))
+                continue;
+            var score = Overlap(queryTerms, Tokenize(passage));
+            if (score > bestScore)
+            {
+                bestScore = score;
+                bestPassage = passage;
+            }
+        }
+
+        // Require at least two shared meaningful terms so a weak/incidental overlap never fabricates a link.
+        return bestScore >= 2 ? bestPassage : null;
+    }
+
+    private static string? BuildFactorPassage(WideFactorDto factor)
+    {
+        var parts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(factor.FactorName)) parts.Add(factor.FactorName);
+        if (!string.IsNullOrWhiteSpace(factor.ActualValue)) parts.Add(factor.ActualValue!);
+        else if (!string.IsNullOrWhiteSpace(factor.Requirement)) parts.Add(factor.Requirement);
+        return parts.Count == 0 ? null : string.Join(" — ", parts);
+    }
+
+    // ── Premium citation passage viewer ──
+    private WideProposedAuthorityDto? _viewerCitation;
+
+    private void OpenCitationViewer(WideProposedAuthorityDto citation) => _viewerCitation = citation;
+    private void CloseCitationViewer() => _viewerCitation = null;
+
+    private sealed record CitationMappingChip(string Kind, string Icon, string Label);
+
+    private sealed record CitationPassageMatch(
+        string Kind,
+        string KindLabel,
+        string Icon,
+        string Title,
+        string Passage,
+        IReadOnlyList<string> Terms,
+        IReadOnlyList<CitationMappingChip> Mappings,
+        string? NavigationRoute,
+        int Score);
+
+    // Extracts every matter passage whose text maps to this citation and records which decision
+    // dimensions/propositions (via matched branches) and evidence/factor records back it. Deterministic
+    // and non-fabricating: only passages sharing >= 2 meaningful terms with the citation name + relevance
+    // are returned, ordered by overlap strength.
+    private IReadOnlyList<CitationPassageMatch> ExtractCitationPassages(WideProposedAuthorityDto citation)
+    {
+        var queryTerms = Tokenize($"{citation.Name} {citation.Relevance}");
+        if (queryTerms.Count == 0)
+            return [];
+
+        var matches = new List<CitationPassageMatch>();
+
+        // Factors (matter requirements and their actual values).
+        foreach (var factor in Owner.DaFactors)
+        {
+            var passage = BuildFactorPassage(factor);
+            if (string.IsNullOrWhiteSpace(passage))
+                continue;
+            var hits = MatchingTerms(queryTerms, passage);
+            if (hits.Count < 2)
+                continue;
+            var chips = new List<CitationMappingChip>
+            {
+                new("factor", "bi-diagram-3", string.IsNullOrWhiteSpace(factor.FactorType) ? "Factor" : factor.FactorType)
+            };
+            if (!string.IsNullOrWhiteSpace(factor.Availability))
+                chips.Add(new("availability", "bi-clipboard-check", factor.Availability));
+            matches.Add(new("factor", "Matter factor", "bi-diagram-3-fill",
+                string.IsNullOrWhiteSpace(factor.FactorName) ? "Factor" : factor.FactorName,
+                passage, hits, chips, factor.SourceLocation, hits.Count));
+        }
+
+        // Admitted evidence (with its matched decision dimensions / propositions via MatchedBranches).
+        foreach (var ev in Owner.DaEvidence)
+        {
+            var passage = string.IsNullOrWhiteSpace(ev.Excerpt) ? ev.Title : ev.Excerpt;
+            if (string.IsNullOrWhiteSpace(passage))
+                continue;
+            var hits = MatchingTerms(queryTerms, $"{ev.Title} {ev.Excerpt}");
+            if (hits.Count < 2)
+                continue;
+            var chips = new List<CitationMappingChip>();
+            if (!string.IsNullOrWhiteSpace(ev.ModuleCode))
+                chips.Add(new("module", "bi-collection", ev.ModuleCode));
+            foreach (var branch in ev.MatchedBranches.Where(b => !string.IsNullOrWhiteSpace(b)).Take(4))
+                chips.Add(new("dimension", "bi-signpost-split", NormalizeBranchKey(branch)));
+            matches.Add(new("evidence", "Admitted evidence", "bi-shield-check",
+                string.IsNullOrWhiteSpace(ev.Title) ? "Evidence" : ev.Title,
+                passage!, hits, chips, ev.NavigationRoute, hits.Count + 1));
+        }
+
+        // Live grounding snippets retrieved for this matter.
+        foreach (var snippet in Owner.DaExternalKnowledge)
+        {
+            var passage = string.IsNullOrWhiteSpace(snippet.Snippet) ? snippet.Title : snippet.Snippet;
+            if (string.IsNullOrWhiteSpace(passage))
+                continue;
+            var hits = MatchingTerms(queryTerms, $"{snippet.Title} {snippet.Snippet}");
+            if (hits.Count < 2)
+                continue;
+            matches.Add(new("grounding", "Live grounding", "bi-broadcast",
+                string.IsNullOrWhiteSpace(snippet.Title) ? "Source" : snippet.Title,
+                passage!, hits, [], snippet.Url, hits.Count));
+        }
+
+        return matches
+            .OrderByDescending(m => m.Score)
+            .ThenBy(m => m.Title, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    // Returns the distinct meaningful terms that the passage shares with the query, preserving order.
+    private static List<string> MatchingTerms(List<string> queryTerms, string passage)
+    {
+        var passageSet = new HashSet<string>(Tokenize(passage), StringComparer.OrdinalIgnoreCase);
+        return queryTerms
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(passageSet.Contains)
+            .ToList();
+    }
+
+    // Wraps each overlapping term in the passage with a highlight span. HTML-encodes the passage first
+    // so no raw matter text can inject markup; only the <mark> wrappers we add are rendered.
+    private static MarkupString HighlightPassage(string passage, IReadOnlyList<string> terms)
+    {
+        var encoded = System.Net.WebUtility.HtmlEncode(passage ?? string.Empty);
+        if (terms.Count == 0)
+            return (MarkupString)encoded;
+
+        var pattern = string.Join("|", terms
+            .Where(t => !string.IsNullOrWhiteSpace(t))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(System.Text.RegularExpressions.Regex.Escape));
+        if (pattern.Length == 0)
+            return (MarkupString)encoded;
+
+        var highlighted = System.Text.RegularExpressions.Regex.Replace(
+            encoded,
+            $@"\b({pattern})\b",
+            "<mark class=\"cit-hl\">$1</mark>",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        return (MarkupString)highlighted;
+    }
+
+    private static readonly HashSet<string> PassageStopWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "the","and","for","with","that","this","from","under","over","into","upon","when","whether",
+        "california","authority","case","claim","law","legal","matter","must","should","may","not",
+        "per","its","are","was","were","has","have","had","a","an","of","to","in","on","or","by","is"
+    };
+
+    private static List<string> Tokenize(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return [];
+        var terms = new List<string>();
+        foreach (var raw in text.Split(new[] { ' ', ',', '.', ';', ':', '/', '(', ')', '-', '\n', '\r', '\t' }, StringSplitOptions.RemoveEmptyEntries))
+        {
+            var term = raw.Trim().ToLowerInvariant();
+            if (term.Length < 4 || PassageStopWords.Contains(term))
+                continue;
+            terms.Add(term);
+        }
+        return terms;
+    }
+
+    private static int Overlap(List<string> a, List<string> b)
+    {
+        if (a.Count == 0 || b.Count == 0)
+            return 0;
+        var set = new HashSet<string>(b, StringComparer.OrdinalIgnoreCase);
+        return a.Distinct(StringComparer.OrdinalIgnoreCase).Count(set.Contains);
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex BranchLevelBracketPrefixPattern =
+        new(@"^\[\s*L(?:\d+|N)\s*\]\s*", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+    private static readonly System.Text.RegularExpressions.Regex BranchConfidenceSuffixPattern =
+        new(@"\s*\(\s*\d{1,3}\s*%\s*\)\s*$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+    private static readonly System.Text.RegularExpressions.Regex BranchLevelWordPrefixPattern =
+        new(@"^L\d+\s*[·\-]\s*", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    private static string NormalizeBranchKey(string? displayName)
+    {
+        if (string.IsNullOrWhiteSpace(displayName))
+            return string.Empty;
+        var stripped = BranchLevelBracketPrefixPattern.Replace(displayName.Trim(), string.Empty);
+        stripped = BranchConfidenceSuffixPattern.Replace(stripped, string.Empty);
+        stripped = BranchLevelWordPrefixPattern.Replace(stripped, string.Empty);
+        return stripped.Trim();
+    }
+
+    private IReadOnlyCollection<WideInterpretiveResultDto> GroupInterpretiveResults(WideAmbiguityGroupDto group)
+    {
+        var groupKeys = group.Branches.Count > 0
+            ? group.Branches.Select(branch => NormalizeBranchKey(branch.DisplayName))
+                .Where(key => key.Length > 0)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase)
+            : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        groupKeys.Add(NormalizeBranchKey(group.DisplayName));
+
+        bool InGroup(WideInterpretiveResultDto result) => groupKeys.Contains(NormalizeBranchKey(result.BranchDisplayName));
+
+        var scoped = group.InterpretiveResults.Where(InGroup).ToArray();
+        if (scoped.Length > 0)
+            return scoped;
+
+        var all = _deepResponse?.InterpretiveResults ?? [];
+        var matched = all.Where(InGroup).ToArray();
+        if (matched.Length > 0)
+            return matched;
+
+        return group.InterpretiveResults;
+    }
+
+    private (decimal InterpretationPrior, decimal EvidenceSupport, decimal PoloxiConfidence) AmbiguityGroupScoreBreakdown(WideAmbiguityGroupDto group)
+    {
+        if (group.InterpretationPrior > 0 || group.EvidenceSupport > 0 || group.PoloxiConfidence > 0)
+            return (group.InterpretationPrior, group.EvidenceSupport, group.PoloxiConfidence > 0 ? group.PoloxiConfidence : group.Confidence);
+        var root = _deepResponse?.Branches.FirstOrDefault(branch => branch.WideBranchId == group.RootWideBranchId)
+            ?? _deepResponse?.Branches.FirstOrDefault(branch => branch.LevelNumber == 1 && branch.DisplayName.Equals(group.DisplayName, StringComparison.OrdinalIgnoreCase));
+        return root is null ? (0m, 0m, group.Confidence) : (root.InterpretationPrior, root.EvidenceSupport, root.PoloxiConfidence > 0 ? root.PoloxiConfidence : group.Confidence);
+    }
+
+    private static int AmbiguityGroupEvidenceCount(WideAmbiguityGroupDto group)
+    {
+        var enterprise = group.Evidence
+            .Select(e => $"ENT:{e.EntityTypeCode}:{e.EntityId}")
+            .Where(key => !string.IsNullOrWhiteSpace(key));
+
+        var external = group.ExternalKnowledge
+            .Select(k => k.LegalDocumentVersionId is { } v
+                ? $"DOC:{v}"
+                : !string.IsNullOrWhiteSpace(k.Url) ? $"URL:{k.Url}" : $"TTL:{k.Title}")
+            .Where(key => !string.IsNullOrWhiteSpace(key));
+
+        return enterprise.Concat(external).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+    }
 }

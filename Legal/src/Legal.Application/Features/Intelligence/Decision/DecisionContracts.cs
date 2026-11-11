@@ -1105,6 +1105,22 @@ public sealed record DecisionSessionSummaryDto(
     int CriticalFlipPointCount,
     DateTime CreatedDateUtc);
 
+// ── Matter-wide connected run-history bundle (migration 0486 convergence). ────────────────────────
+// Everything produced under a matter, reachable in one tenant-scoped read: the matter aggregate, all
+// of its runs (sessions), and the per-result-type record/run counts that hang off those runs via the
+// enforced MatterId relationship. DB is the source of truth; nothing is computed from mock data.
+public sealed record MatterRunHistoryBundleDto(
+    DecisionMatterDto Matter,
+    IReadOnlyCollection<DecisionSessionSummaryDto> Sessions,
+    IReadOnlyCollection<MatterResultCountDto> ResultCounts);
+
+// One row per converged result table: how many live records exist for the matter and across how many
+// distinct runs they were produced. Drives the "connected graph" overview without loading every row.
+public sealed record MatterResultCountDto(
+    string ResultType,
+    int RecordCount,
+    int RunCount);
+
 // Distinct free-form facet values already stored across matters (tenant-scoped) used to
 // pre-populate the create/edit matter dropdowns. DB is the source of truth; no hardcoded lists.
 public sealed record DecisionMatterFacetsDto(

@@ -8,6 +8,7 @@ using Legal.Application.Features.Intelligence.Decision.Lpi;
 using Legal.Application.Features.Saas;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Legal.Infrastructure.Configuration;
 
@@ -17,7 +18,7 @@ namespace Legal.Api.Controllers;
 // (/legal/decision). Evolves independently from the Intelligence Wide (/legal/search) controller.
 [ApiController]
 [Route("api/legal_decision")]
-public sealed class LegalDecisionController(ILegalDecisionService service,IIntelligenceExecutionService executionService,ILegalDocumentCorpusRepository documentCorpusRepository,IAttorneyDecisionInputRepository attorneyDecisionInputRepository,IAttorneyDecisionInputService attorneyDecisionInputService,ILegalDecisionContractService decisionContractService,ILegalDocumentIntakeService documentIntakeService,ILegalMatterCorpusActivationService corpusActivationService,IDecisionIntegrityRepository integrityRepository,IMatterPropositionInformationValueService propositionInformationValueService,INextBestActionService nextBestActionService,IWhatToResolveNextService whatToResolveNextService,IPropositionIntegrationService propositionIntegrationService,IRetrievalPropositionReviewService retrievalReviewService,IRetrievalOrchestrationService retrievalOrchestrationService,ILegalAuthorityOrchestrationService legalAuthorityOrchestrationService,IDecisionRevisionResolver decisionRevisionResolver,Legal.Application.Features.Intelligence.Decision.Channels.IChannelScoringLpiService channelScoringLpiService,Legal.Application.Features.Intelligence.Decision.Channels.IMatterScoringTraceReader matterScoringTraceReader,ILegalDocumentBinaryStore documentBinaryStore,IOptions<DocumentIntelligenceOptions> documentOptions) : ControllerBase
+public sealed class LegalDecisionController(ILegalDecisionService service,IIntelligenceExecutionService executionService,ILegalDocumentCorpusRepository documentCorpusRepository,IAttorneyDecisionInputRepository attorneyDecisionInputRepository,IAttorneyDecisionInputService attorneyDecisionInputService,ILegalDecisionContractService decisionContractService,ILegalDocumentIntakeService documentIntakeService,ILegalMatterCorpusActivationService corpusActivationService,IDecisionIntegrityRepository integrityRepository,IMatterPropositionInformationValueService propositionInformationValueService,INextBestActionService nextBestActionService,IWhatToResolveNextService whatToResolveNextService,IPropositionIntegrationService propositionIntegrationService,IRetrievalPropositionReviewService retrievalReviewService,IRetrievalOrchestrationService retrievalOrchestrationService,ILegalAuthorityOrchestrationService legalAuthorityOrchestrationService,IDecisionRevisionResolver decisionRevisionResolver,Legal.Application.Features.Intelligence.Decision.Channels.IChannelScoringLpiService channelScoringLpiService,Legal.Application.Features.Intelligence.Decision.Channels.IMatterScoringTraceReader matterScoringTraceReader,ILegalDocumentBinaryStore documentBinaryStore,IOptions<DocumentIntelligenceOptions> documentOptions,ILogger<LegalDecisionController> logger) : ControllerBase
 {
     private const string CapabilityCode = JudzCapabilities.LegalDecision;
     private Guid TenantId => AuthenticatedRequestContext.GetTenantId(User) ?? throw new UnauthorizedAccessException("An authenticated tenant context is required.");
@@ -285,7 +286,18 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
     [HttpGet("matters")]
     [Authorize(Policy = IntelligencePolicies.Search)]
     public async Task<IActionResult> Matters(CancellationToken cancellationToken)
-        => Ok(await service.GetMattersAsync(TenantId, AuthenticatedRequestContext.IsSystemAdmin(User), cancellationToken));
+    {
+        // Lightweight timing so matter-list latency can be measured from logs without a profiler.
+        // Logs the wall-clock duration of GetMattersAsync (the OUTER APPLY latest-session +
+        // per-row critical-flip-point COUNT query) plus the row count, scoped to the tenant.
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var matters = await service.GetMattersAsync(TenantId, AuthenticatedRequestContext.IsSystemAdmin(User), cancellationToken);
+        stopwatch.Stop();
+        logger.LogInformation(
+            "Matter list loaded: {MatterCount} matters in {ElapsedMs} ms (tenant {TenantId}).",
+            matters.Count, stopwatch.ElapsedMilliseconds, TenantId);
+        return Ok(matters);
+    }
 
     // Distinct free-form facet values (matter type / jurisdiction / posture) to pre-populate dropdowns.
     [HttpGet("matters/facets")]
@@ -499,6 +511,15 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
     [Authorize(Policy = IntelligencePolicies.Search)]
     public async Task<IActionResult> MatterSessions(Guid matterId, CancellationToken cancellationToken)
         => Ok(await service.GetMatterSessionsAsync(TenantId, matterId, cancellationToken));
+
+    // Migration 0486: one connected read of the whole matter graph — aggregate, all runs, result counts.
+    [HttpGet("matters/{matterId:guid}/run-history-bundle")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> MatterRunHistoryBundle(Guid matterId, CancellationToken cancellationToken)
+    {
+        var bundle = await service.GetMatterRunHistoryBundleAsync(TenantId, matterId, cancellationToken);
+        return bundle is null ? NotFound() : Ok(bundle);
+    }
 
     // Composed, DB-backed Candidate Full Analysis read model for one candidate (1-based rank index).
     [HttpGet("matters/{matterId:guid}/candidate-analysis/{candidateIndex:int}")]

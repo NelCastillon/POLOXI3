@@ -72,8 +72,8 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
     public Task SaveShowPipelineAsync(bool showPipeline,CancellationToken cancellationToken=default)=>wideRepository.SaveShowPipelineAsync(showPipeline,cancellationToken);
 
     // /legal/search Run History (per-user). Isolated from Decision2.
-    public Task<WideSearchRunHistoryPage> GetSearchRunHistoryAsync(Guid tenantId,Guid userId,int page,int pageSize,CancellationToken cancellationToken=default)
-        =>wideRepository.GetWideSearchRunHistoryAsync(tenantId,userId,page,pageSize,cancellationToken);
+    public Task<WideSearchRunHistoryPage> GetSearchRunHistoryAsync(Guid tenantId,Guid userId,int page,int pageSize,Guid? matterId=null,CancellationToken cancellationToken=default)
+        =>wideRepository.GetWideSearchRunHistoryAsync(tenantId,userId,page,pageSize,matterId,cancellationToken);
 
     public Task<WideSearchRunDetailDto?> GetSearchRunResultAsync(Guid tenantId,Guid userId,Guid wideSearchRunResultId,CancellationToken cancellationToken=default)
         =>wideRepository.GetWideSearchRunResultAsync(tenantId,userId,wideSearchRunResultId,cancellationToken);
@@ -661,7 +661,7 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
         // Wide search is knowledge-only: it never grounds branches against AMS enterprise records.
         // An empty capability catalog forces every branch onto the INTERPRETIVE reasoning path.
         var capabilities=Array.Empty<PoloxiCapabilityDto>();
-        var executionId=await wideRepository.StartWideExecutionAsync(new(request.TenantId,request.UserId,request.Query,request.CorrelationId){ParentWideExecutionId=continuationState?.WideExecutionId},cancellationToken);
+        var executionId=await wideRepository.StartWideExecutionAsync(new(request.TenantId,request.UserId,request.Query,request.CorrelationId){ParentWideExecutionId=continuationState?.WideExecutionId,MatterId=request.MatterId},cancellationToken);
         var llmCalls=0;
         var allBranches=new List<WideBranchRecord>();
         var evidence=new List<PoloxiEvidenceDto>();
@@ -1777,13 +1777,13 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
         "properties": {
           "name": { "type": "string" },
           "relevance": { "type": "string" },
-          "reference": { "type": ["string", "null"] }
+          "reference": { "type": ["string", "null"] },
+          "linkedMatterPassage": { "type": ["string", "null"] }
         },
         "required": ["name", "relevance"],
         "additionalProperties": false
       }
     },
-    "application": { "type": "string" },
     "counterargument": { "type": ["string", "null"] },
     "remainingUncertainty": { "type": ["string", "null"] },
     "decisiveMissingFact": { "type": ["string", "null"] },
@@ -1795,7 +1795,7 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
 """;
 
     // LLM proposal shape for the Legal Answer Composer (deserialized from LegalAnswerSchema).
-    private sealed record LegalAnswerAuthorityProposal(string? Name,string? Relevance,string? Reference);
+    private sealed record LegalAnswerAuthorityProposal(string? Name,string? Relevance,string? Reference,string? LinkedMatterPassage=null);
     private sealed record LegalAnswerProposal(string? Conclusion,string? Analysis,IReadOnlyList<LegalAnswerAuthorityProposal>? KeyAuthorities,string? Application,string? Counterargument,string? RemainingUncertainty,string? DecisiveMissingFact,string? BottomLine);
 
     // Builds the deterministic user prompt for the Legal Answer Composer from state POLOXI already
@@ -1838,15 +1838,99 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
         }
         if(verifiedAuthorities.Count==0)
         {
-            builder.Append("VERIFIED AUTHORITIES: (none independently verified — return an empty keyAuthorities array and do NOT cite any authority as verified; you MAY still explain the POLOXI interpretation, clearly stating the supporting authority has not yet been independently verified)\n");
+            builder.Append(BuildVerifiedAuthorityTable(verifiedAuthorities));
         }
         else
         {
-            builder.Append("VERIFIED AUTHORITIES (cite ONLY these, echo the name verbatim):\n");
-            foreach(var authority in verifiedAuthorities.Take(8))
-                builder.Append("- ").Append(Truncate(authority.Title,200)).Append(" (").Append(authority.Url).Append("): ").Append(Truncate(authority.Snippet,400)).Append('\n');
+            builder.Append(BuildVerifiedAuthorityTable(verifiedAuthorities));
+            builder.Append(BuildCitationControlRules());
+        }
+        // PASSAGE LINKING: for each key authority, quote the single matter passage it grounds (a matter
+        // factor, profile/PI detail, evidence line, or proposition) VERBATIM from the QUESTION / matter
+        // context above into the authority's "linkedMatterPassage" field, so the UI can render the
+        // authority rationale and the matched matter passage SIDE BY SIDE. Never invent a passage: if no
+        // matching matter material exists in the supplied context, set linkedMatterPassage to null.
+        builder.Append("PASSAGE LINKING: for every authority you place in keyAuthorities, also populate its \"linkedMatterPassage\" with the exact matter passage it grounds (a matter factor, personal-injury profile detail, evidence line, or proposition), quoted VERBATIM from the QUESTION / matter context above. If no matching matter material exists in context, set linkedMatterPassage to null \u2014 never fabricate a passage.\n");
+        return builder.ToString();
+    }
+
+    // Matches the immutable [AUTH-xx] token anchors the composer assigns to each supplied verified
+    // authority. Used by post-validation to strip any dangling anchor outside the supplied range.
+    // [MISSING_AUTHORITY: ...] markers use a different shape and are intentionally preserved.
+    private static readonly System.Text.RegularExpressions.Regex AuthTokenAnchorRegex=
+        new(@"\[AUTH-(\d{1,3})\]",System.Text.RegularExpressions.RegexOptions.Compiled|System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    // Builds the structured, closed-universe AUTHORITY TABLE for the Deep Citations composer. Deep Citations
+    // has no bound matter sovereign, so tier is characterized without a target sovereign (federal primary law
+    // still binding within its domain; otherwise tier unknown). Each verified authority receives an immutable
+    // [AUTH-xx] token anchor, verbatim citation text, jurisdiction, verbatim quote pool (retrieved snippet),
+    // and a proposition limit derived from PropositionSupportStatus.
+    private static string BuildVerifiedAuthorityTable(IReadOnlyList<WideExternalKnowledgeSnippet> verifiedAuthorities)
+    {
+        if(verifiedAuthorities.Count==0)
+        {
+            return "VERIFIED AUTHORITY TABLE: (none independently verified — return an empty keyAuthorities array and do NOT cite any authority as verified; you MAY still explain the POLOXI interpretation, clearly stating the supporting authority has not yet been independently verified. If a legal transition in your prose genuinely requires an authority that is not in this table, insert the placeholder token [MISSING_AUTHORITY: <describe the required legal rule>] rather than inventing a citation.)\n";
+        }
+        var builder=new StringBuilder();
+        builder.Append("VERIFIED AUTHORITY TABLE (CLOSED UNIVERSE — these are the ONLY authorities you may cite; each row is immutable):\n");
+        var index=0;
+        foreach(var authority in verifiedAuthorities.Take(8))
+        {
+            index++;
+            var tier=DeriveAuthorityTier(authority);
+            builder.Append("  [AUTH-").Append(index.ToString("D2")).Append("]\n");
+            builder.Append("    CITATION (copy verbatim, do not reformat): ").Append(Truncate(authority.Title,240)).Append('\n');
+            if(!string.IsNullOrWhiteSpace(authority.AuthorityKind))
+                builder.Append("    TYPE: ").Append(authority.AuthorityKind).Append('\n');
+            builder.Append("    WEIGHT OF AUTHORITY: ").Append(tier).Append('\n');
+            if(!string.IsNullOrWhiteSpace(authority.Jurisdiction))
+                builder.Append("    JURISDICTION: ").Append(Truncate(authority.Jurisdiction,120)).Append('\n');
+            if(!string.IsNullOrWhiteSpace(authority.Url))
+                builder.Append("    SOURCE URL (echo as reference, never a different link): ").Append(authority.Url).Append('\n');
+            if(!string.IsNullOrWhiteSpace(authority.Snippet))
+                builder.Append("    VERBATIM QUOTE POOL (quote ONLY from this text; never paraphrase into quotation marks): \"").Append(Truncate(authority.Snippet,600)).Append("\"\n");
+            var supportStatus=authority.PropositionSupportStatus switch
+            {
+                "VERIFIED_SUPPORT"=>"The retrieved source supports the proposition it was retrieved for; use it ONLY for that narrow proposition.",
+                "AUTHORITY_FOUND_BUT_SUPPORT_UNCLEAR"=>"The authority exists but the retrieved text does not clearly support the proposition; cite it cautiously and do NOT overstate its holding.",
+                _=>"Use strictly for the narrow proposition the retrieved text establishes; do NOT over-generalize the holding."
+            };
+            builder.Append("    PROPOSITION LIMIT: ").Append(supportStatus).Append('\n');
         }
         return builder.ToString();
+    }
+
+    // Emits the explicit prompt guardrails that reduce citation hallucination to zero: the closed-universe
+    // mandate, the token-anchor mapping discipline, verbatim quotes, and the Stop-and-Flag fail-safe.
+    private static string BuildCitationControlRules()
+        =>"\nCONTROL RULES (MANDATORY — these govern how you may use the AUTHORITY TABLE above):\n"
+         +"  1. CLOSED-UNIVERSE MANDATE: You operate strictly in a closed universe. You are FORBIDDEN from using outside legal knowledge, memory, or external research tools to introduce, name, quote, or characterize any authority that is not an [AUTH-xx] row in the table above.\n"
+         +"  2. TOKEN-ANCHOR MAPPING: Before writing any citation, map your reasoning to the specific [AUTH-xx] token for that authority, then copy its CITATION text verbatim. keyAuthorities entries MUST copy the CITATION text exactly and echo the SOURCE URL (or null). Never cite an authority that lacks an [AUTH-xx] token.\n"
+         +"  3. VERBATIM QUOTES ONLY: Any quoted language must be copied verbatim from that authority's VERBATIM QUOTE POOL. Never generate, reconstruct, or paraphrase a quotation from memory.\n"
+         +"  4. STOP-AND-FLAG FAIL-SAFE: If an argument or narrative transition requires a legal citation that is NOT present as an [AUTH-xx] row above, do NOT invent one. Instead insert the placeholder token [MISSING_AUTHORITY: <describe the required legal rule>] in your prose and continue.\n";
+
+    // Deterministically characterizes a verified authority's weight for the matter-less Deep Citations path.
+    // Federal primary statutes/regulations are binding within their domain; otherwise tier is left unknown so
+    // the composer never overstates weight. This only labels the table; it never changes verification.
+    private static string DeriveAuthorityTier(WideExternalKnowledgeSnippet authority)
+    {
+        var isStatuteOrReg=string.Equals(authority.AuthorityKind,"Statute",StringComparison.OrdinalIgnoreCase)
+            ||string.Equals(authority.AuthorityKind,"Regulation",StringComparison.OrdinalIgnoreCase);
+        var jurisdiction=authority.Jurisdiction;
+        if(isStatuteOrReg&&!string.IsNullOrWhiteSpace(jurisdiction)
+            &&(jurisdiction.Contains("federal",StringComparison.OrdinalIgnoreCase)||jurisdiction.Contains("United States",StringComparison.OrdinalIgnoreCase)||jurisdiction.Contains("U.S.",StringComparison.OrdinalIgnoreCase)))
+            return "Binding (federal primary law)";
+        return "Tier unknown (verify weight before relying)";
+    }
+
+    // Conservative closed-universe cleanup: removes any [AUTH-xx] token anchor whose number does not map to a
+    // supplied verified authority. Preserves in-range anchors and [MISSING_AUTHORITY: ...] markers.
+    private static string StripDanglingAuthorityTokens(string text,int suppliedCount)
+    {
+        if(string.IsNullOrEmpty(text)||!text.Contains("[AUTH-",StringComparison.OrdinalIgnoreCase))return text;
+        var cleaned=AuthTokenAnchorRegex.Replace(text,match=>
+            int.TryParse(match.Groups[1].Value,out var n)&&n>=1&&n<=suppliedCount?match.Value:string.Empty);
+        return System.Text.RegularExpressions.Regex.Replace(cleaned,@"[ \t]{2,}"," ").Trim();
     }
 
     // Legal Answer Composer (PRESENTATION ONLY, fail-soft — mirrors the ABV stage). One fast LLM call
@@ -1910,7 +1994,12 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
                 authority.Title.Contains(citedName,StringComparison.OrdinalIgnoreCase)||
                 citedName.Contains(authority.Title,StringComparison.OrdinalIgnoreCase));
             if(!matched)return null; // invented authority → discard entirely
-            authorities.Add(new(citedName,cited.Relevance.Trim(),string.IsNullOrWhiteSpace(cited.Reference)?null:cited.Reference.Trim()));
+            authorities.Add(new(citedName,cited.Relevance.Trim(),string.IsNullOrWhiteSpace(cited.Reference)?null:cited.Reference.Trim())
+            {
+                // Presentation-only: a null/blank linked passage simply renders no matter passage; it is
+                // never a discard condition (keeps the output guard additive and guard-safe).
+                LinkedMatterPassage=string.IsNullOrWhiteSpace(cited.LinkedMatterPassage)?null:cited.LinkedMatterPassage.Trim()
+            });
         }
         // Conclusion-consistency guard: only when POLOXI genuinely reached NO interpretation (UNRESOLVED)
         // does a definitive conclusion contradict POLOXI. A BLOCKED determinacy driven purely by absent
@@ -1928,13 +2017,13 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
             return null;
         return new(
             proposal.Conclusion!.Trim(),
-            proposal.Analysis!.Trim(),
+            StripDanglingAuthorityTokens(proposal.Analysis!.Trim(),verifiedAuthorities.Count),
             authorities,
-            proposal.Application!.Trim(),
-            string.IsNullOrWhiteSpace(proposal.Counterargument)?null:proposal.Counterargument.Trim(),
-            string.IsNullOrWhiteSpace(proposal.RemainingUncertainty)?null:proposal.RemainingUncertainty.Trim(),
-            string.IsNullOrWhiteSpace(proposal.DecisiveMissingFact)?null:proposal.DecisiveMissingFact.Trim(),
-            proposal.BottomLine!.Trim());
+            StripDanglingAuthorityTokens(proposal.Application!.Trim(),verifiedAuthorities.Count),
+            string.IsNullOrWhiteSpace(proposal.Counterargument)?null:StripDanglingAuthorityTokens(proposal.Counterargument.Trim(),verifiedAuthorities.Count),
+            string.IsNullOrWhiteSpace(proposal.RemainingUncertainty)?null:StripDanglingAuthorityTokens(proposal.RemainingUncertainty.Trim(),verifiedAuthorities.Count),
+            string.IsNullOrWhiteSpace(proposal.DecisiveMissingFact)?null:StripDanglingAuthorityTokens(proposal.DecisiveMissingFact.Trim(),verifiedAuthorities.Count),
+            StripDanglingAuthorityTokens(proposal.BottomLine!.Trim(),verifiedAuthorities.Count));
     }
 
     // Heuristic: does the conclusion assert a definite outcome? Used only by the BLOCKED-determinacy
@@ -2152,7 +2241,7 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
     // enterprise data. Execution is still audited in POLOXI.WideExecution for governance.
     private async Task<WideSearchResponse> SearchLlmOnlyAsync(WideSearchRequest request,Stopwatch timer,CancellationToken cancellationToken)
     {
-        var executionId=await wideRepository.StartWideExecutionAsync(new(request.TenantId,request.UserId,request.Query,request.CorrelationId),cancellationToken);
+        var executionId=await wideRepository.StartWideExecutionAsync(new(request.TenantId,request.UserId,request.Query,request.CorrelationId){MatterId=request.MatterId},cancellationToken);
         try
         {
             var result=await aiProviderRouter.GenerateAsync(request.TenantId,AnswerFeatureCode(request),
@@ -2240,7 +2329,7 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
         var priorResults=parentResponse.InterpretiveResults
             .Concat(parentResponse.AmbiguityGroups.SelectMany(group=>group.InterpretiveResults))
             .ToArray();
-        var executionId=await wideRepository.StartWideExecutionAsync(new(request.TenantId,request.UserId,followUpText,request.CorrelationId){ParentWideExecutionId=parentExecutionId},cancellationToken);
+        var executionId=await wideRepository.StartWideExecutionAsync(new(request.TenantId,request.UserId,followUpText,request.CorrelationId){ParentWideExecutionId=parentExecutionId,MatterId=request.MatterId},cancellationToken);
         try
         {
             var priorResultsJson=JsonSerializer.Serialize(priorResults,JsonOptions);
@@ -2718,7 +2807,23 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
                     }
                     if(authorities.Count>0)
                     {
-                        var authorityTargets=authorities.Take(2).ToArray();
+                        // Honor the SHARED per-branch cap (MaximumAuthoritiesPerBranch) so the dispatch
+                        // loop never discards an authority the producer already admitted. The authority
+                        // sequence is Case-first by design (CourtListener resolves cases reliably; official
+                        // statute hosts are frequently WAF-blocked), but a hardcoded 2-slot cap starved
+                        // statutes: when two case leads lead the list, extracted statutes such as
+                        // "California Code of Civil Procedure section 581" were dropped before retrieval and
+                        // could never earn Verified. We take the capped prefix, then guarantee at least one
+                        // statute/regulation authority is present when the branch has one, swapping it into
+                        // the last slot so cases keep priority without monopolizing every slot.
+                        var authorityTargets=authorities.Take(MaximumAuthoritiesPerBranch).ToList();
+                        var hasNonCase=authorityTargets.Any(a=>a.Kind!=LegalAuthorityKind.Case);
+                        if(!hasNonCase)
+                        {
+                            var firstNonCase=authorities.FirstOrDefault(a=>a.Kind!=LegalAuthorityKind.Case);
+                            if(firstNonCase.Query is not null&&firstNonCase.Query.Length>0&&authorityTargets.Count>0)
+                                authorityTargets[^1]=firstNonCase;
+                        }
                         var perAuthority=await Task.WhenAll(authorityTargets.Select(authority=>
                         {
                             var attributionQuery=NormalizeQuery($"{authority.Query} {branch.DisplayName}").ToLowerInvariant();

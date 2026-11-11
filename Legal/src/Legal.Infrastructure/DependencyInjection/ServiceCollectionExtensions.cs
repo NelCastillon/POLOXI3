@@ -60,6 +60,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IIntelligenceRepository, IntelligenceRepository>();
         services.AddScoped<IIntelligenceWideRepository, IntelligenceWideRepository>();
         services.AddScoped<IIntelligenceWide2Repository, IntelligenceWide2Repository>();
+        services.AddScoped<IChatJudzRepository, ChatJudzRepository>();
         services.AddScoped<IMathReasoningRepository, MathReasoningRepository>();
         services.AddScoped<IAiProviderRouteRepository, AiProviderRouteRepository>();
         services.AddScoped<IEpistemicClaimRepository, EpistemicClaimRepository>();

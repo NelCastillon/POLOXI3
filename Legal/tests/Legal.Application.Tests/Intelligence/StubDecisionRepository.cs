@@ -43,6 +43,7 @@ internal abstract class StubDecisionRepository : ILegalDecisionRepository
     public Task<Guid> CreateMatterAsync(Guid tenantId, Guid userId, DecisionMatterCreateRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     public Task<IReadOnlyCollection<DecisionTimelineEventDto>> GetSessionTimelineAsync(Guid tenantId, Guid decisionSessionId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     public Task<IReadOnlyCollection<DecisionSessionSummaryDto>> GetMatterSessionsAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<MatterRunHistoryBundleDto?> GetMatterRunHistoryBundleAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     public Task<bool> UpdateMatterAsync(Guid tenantId, Guid userId, Guid decisionMatterId, DecisionMatterUpdateRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     public Task<bool> UpdateMatterStatusAsync(Guid tenantId, Guid userId, Guid decisionMatterId, string statusCode, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     public Task<bool> UpdateMatterAdditionalNarrativeAsync(Guid tenantId, Guid userId, Guid decisionMatterId, string? additionalNarrative, CancellationToken cancellationToken = default) => throw new NotSupportedException();

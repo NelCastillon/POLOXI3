@@ -767,12 +767,12 @@ WHERE Rn=1 ORDER BY AnswerKindCode;
     {
         const string sql="""
 DECLARE @WideExecutionId UNIQUEIDENTIFIER=NEWID();
-INSERT POLOXI.Legal_WideExecution(WideExecutionId,TenantId,UserId,QueryText,CorrelationId,StatusCode,ParentWideExecutionId,CreatedDateUtc,CreatedByUserId,IsDeleted)
-VALUES(@WideExecutionId,@TenantId,@UserId,@QueryText,@CorrelationId,N'RUNNING',@ParentWideExecutionId,SYSUTCDATETIME(),@UserId,0);
+INSERT POLOXI.Legal_WideExecution(WideExecutionId,TenantId,UserId,QueryText,CorrelationId,StatusCode,ParentWideExecutionId,MatterId,CreatedDateUtc,CreatedByUserId,IsDeleted)
+VALUES(@WideExecutionId,@TenantId,@UserId,@QueryText,@CorrelationId,N'RUNNING',@ParentWideExecutionId,@MatterId,SYSUTCDATETIME(),@UserId,0);
 SELECT @WideExecutionId;
 """;
         using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        return await connection.ExecuteScalarAsync<Guid>(new CommandDefinition(sql,new{start.TenantId,start.UserId,start.QueryText,start.CorrelationId,start.ParentWideExecutionId},cancellationToken:cancellationToken));
+        return await connection.ExecuteScalarAsync<Guid>(new CommandDefinition(sql,new{start.TenantId,start.UserId,start.QueryText,start.CorrelationId,start.ParentWideExecutionId,start.MatterId},cancellationToken:cancellationToken));
     }
 
     public async Task SaveWideBranchesAsync(IReadOnlyCollection<WideBranchRecord> branches,Guid userId,CancellationToken cancellationToken=default)
@@ -1137,27 +1137,29 @@ VALUES
         },cancellationToken:cancellationToken));
     }
 
-    public async Task<WideSearchRunHistoryPage> GetWideSearchRunHistoryAsync(Guid tenantId,Guid userId,int page,int pageSize,CancellationToken cancellationToken=default)
+    public async Task<WideSearchRunHistoryPage> GetWideSearchRunHistoryAsync(Guid tenantId,Guid userId,int page,int pageSize,Guid? matterId=null,CancellationToken cancellationToken=default)
     {
         if(page<1)page=1;
         if(pageSize<1)pageSize=20;
         if(pageSize>100)pageSize=100;
         const string sql="""
 SELECT COUNT(1)
-FROM POLOXI.Legal_WideSearchRunResult
-WHERE TenantId=@TenantId AND CreatedByUserId=@UserId AND IsDeleted=0;
+FROM POLOXI.Legal_WideSearchRunResult r
+WHERE r.TenantId=@TenantId AND r.CreatedByUserId=@UserId AND r.IsDeleted=0
+  AND (@MatterId IS NULL OR EXISTS(SELECT 1 FROM POLOXI.Legal_WideExecution e WHERE e.WideExecutionId=r.WideExecutionId AND e.MatterId=@MatterId));
 
-SELECT WideSearchRunResultId,WideExecutionId,Query,StatusCode,TerminationReasonCode,AnswerKindCode,FinalAnswer,
-       FinalConfidence,DecisionConfidence,DepthReached,LlmCallCount,BranchCount,CandidateCount,
-       ExternalEvidenceCount,EnterpriseEvidenceCount,EvidenceCoverage,ProviderCodeUsed,ModelCodeUsed,ContextCode,
-       DurationMilliseconds,CreatedDateUtc,ConversationId,QualityScore,QualityGrade
-FROM POLOXI.Legal_WideSearchRunResult
-WHERE TenantId=@TenantId AND CreatedByUserId=@UserId AND IsDeleted=0
-ORDER BY CreatedDateUtc DESC
+SELECT r.WideSearchRunResultId,r.WideExecutionId,r.Query,r.StatusCode,r.TerminationReasonCode,r.AnswerKindCode,r.FinalAnswer,
+       r.FinalConfidence,r.DecisionConfidence,r.DepthReached,r.LlmCallCount,r.BranchCount,r.CandidateCount,
+       r.ExternalEvidenceCount,r.EnterpriseEvidenceCount,r.EvidenceCoverage,r.ProviderCodeUsed,r.ModelCodeUsed,r.ContextCode,
+       r.DurationMilliseconds,r.CreatedDateUtc,r.ConversationId,r.QualityScore,r.QualityGrade
+FROM POLOXI.Legal_WideSearchRunResult r
+WHERE r.TenantId=@TenantId AND r.CreatedByUserId=@UserId AND r.IsDeleted=0
+  AND (@MatterId IS NULL OR EXISTS(SELECT 1 FROM POLOXI.Legal_WideExecution e WHERE e.WideExecutionId=r.WideExecutionId AND e.MatterId=@MatterId))
+ORDER BY r.CreatedDateUtc DESC
 OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
 """;
         using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        using var reader=await connection.QueryMultipleAsync(new CommandDefinition(sql,new{TenantId=tenantId,UserId=userId,Offset=(page-1)*pageSize,PageSize=pageSize},cancellationToken:cancellationToken));
+        using var reader=await connection.QueryMultipleAsync(new CommandDefinition(sql,new{TenantId=tenantId,UserId=userId,MatterId=matterId,Offset=(page-1)*pageSize,PageSize=pageSize},cancellationToken:cancellationToken));
         var total=await reader.ReadFirstAsync<int>();
         var items=(await reader.ReadAsync<WideSearchRunSummaryDto>()).AsList();
         return new WideSearchRunHistoryPage(items,page,pageSize,total);

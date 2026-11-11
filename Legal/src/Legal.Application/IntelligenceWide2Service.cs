@@ -79,6 +79,17 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             _phaseLastElapsedMs=now;
         }
         _phaseStopwatch.Stop();
+        // Measurement-only: emit a single per-run summary so the per-phase wall-clock breakdown is visible in
+        // the host log (the slowest stages are the real parallelization candidates). Fail-soft; never affects
+        // the answer. Ordered slowest-first and capped so the line stays readable.
+        if(_phaseTimings.Count>0&&logger.IsEnabled(LogLevel.Information))
+        {
+            var totalMs=_phaseTimings.Sum(t=>t.DurationMilliseconds);
+            var breakdown=string.Join(" · ",_phaseTimings
+                .OrderByDescending(t=>t.DurationMilliseconds)
+                .Select(t=>$"{t.StageCode} {t.DurationMilliseconds}ms ({(totalMs>0?(double)t.DurationMilliseconds/totalMs:0):P0})"));
+            logger.LogInformation("Wide2 phase breakdown (total {TotalMs}ms): {Breakdown}",totalMs,breakdown);
+        }
     }
     private async Task PublishProgressAsync(string phase,string readiness,bool isProvisional,string? message,CancellationToken cancellationToken)
     {
@@ -1157,13 +1168,33 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 else
                 {
                     var batches=BuildHierarchyParentBatches(narrowingParents,allBranches);
+                    // Pre-slice to the batches the LLM-call ceiling allows BEFORE dispatch. Each batch is one
+                    // ProposeNextLevelAsync call; at least one batch always runs (the previous sequential loop
+                    // also ran the first batch unconditionally via its Count>0 guard). This replaces the
+                    // mid-loop break so the surviving budget is deterministic regardless of dispatch order.
+                    var allowedBatchCount=batches.Count==0?0:Math.Max(1,Math.Min(batches.Count,configuration.MaximumTotalLlmCalls-llmCalls));
+                    var plannedBatches=batches.Take(allowedBatchCount).ToArray();
+                    // Within a single depth level the parent batches are disjoint and independent, so their
+                    // decomposition calls run concurrently under a bounded gate. Results are captured per batch
+                    // index and materialized in ORIGINAL batch order so the downstream cross-level/intra-level
+                    // dedup (currentCodes + GroupBy.First) is byte-for-byte identical to the sequential path.
                     var batchedChildren=new List<WideBranchRecord>();
-                    foreach(var batch in batches)
+                    if(plannedBatches.Length>0)
                     {
-                        if(batchedChildren.Count>0&&llmCalls+2>configuration.MaximumTotalLlmCalls)break;
-                        var proposal=await ProposeNextLevelAsync(request,batch,capabilities,configuration,depth+1,evidence,queryContract,cancellationToken);
-                        llmCalls++;
-                        batchedChildren.AddRange(MaterializeBranches(proposal.Branches,executionId,request.TenantId,depth+1,parentsByCode,configuration));
+                        var proposalsByIndex=new WideLevelProposal?[plannedBatches.Length];
+                        using(var proposalGate=new SemaphoreSlim(Math.Max(1,configuration.HierarchyProposalConcurrency)))
+                            await Task.WhenAll(plannedBatches.Select(async(batch,index)=>
+                            {
+                                await proposalGate.WaitAsync(cancellationToken);
+                                try{proposalsByIndex[index]=await ProposeNextLevelAsync(request,batch,capabilities,configuration,depth+1,evidence,queryContract,cancellationToken);}
+                                finally{proposalGate.Release();}
+                            }));
+                        for(var index=0;index<proposalsByIndex.Length;index++)
+                        {
+                            llmCalls++;
+                            if(proposalsByIndex[index] is{}proposal)
+                                batchedChildren.AddRange(MaterializeBranches(proposal.Branches,executionId,request.TenantId,depth+1,parentsByCode,configuration));
+                        }
                     }
                     nextLevel=batchedChildren.ToArray();
                 }
@@ -2538,7 +2569,8 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         "properties": {
           "name": { "type": "string" },
           "relevance": { "type": "string" },
-          "reference": { "type": ["string", "null"] }
+          "reference": { "type": ["string", "null"] },
+          "linkedMatterPassage": { "type": ["string", "null"] }
         },
         "required": ["name", "relevance"],
         "additionalProperties": false
@@ -2556,8 +2588,94 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
 """;
 
     // LLM proposal shape for the Legal Answer Composer (deserialized from LegalAnswerSchema).
-    private sealed record LegalAnswerAuthorityProposal(string? Name,string? Relevance,string? Reference);
+    private sealed record LegalAnswerAuthorityProposal(string? Name,string? Relevance,string? Reference,string? LinkedMatterPassage=null);
     private sealed record LegalAnswerProposal(string? Conclusion,string? Analysis,IReadOnlyList<LegalAnswerAuthorityProposal>? KeyAuthorities,string? Application,string? Counterargument,string? RemainingUncertainty,string? DecisiveMissingFact,string? BottomLine);
+
+    // Matches the immutable [AUTH-01] / [AUTH-12] token anchors the composer is instructed to assign to
+    // each supplied verified authority. Used by post-validation to strip any dangling anchor the model
+    // emitted that does not correspond to a supplied authority. [MISSING_AUTHORITY: ...] markers use a
+    // different shape and are intentionally preserved.
+    private static readonly System.Text.RegularExpressions.Regex AuthTokenAnchorRegex=
+        new(@"\[AUTH-(\d{1,3})\]",System.Text.RegularExpressions.RegexOptions.Compiled|System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    // Builds the structured, closed-universe AUTHORITY TABLE plus the CONTROL RULES block that eliminate
+    // citation hallucination. Every verified authority gets an immutable [AUTH-xx] token anchor, its
+    // verbatim citation text, a deterministically-derived Binding/Persuasive tier, its jurisdiction, the
+    // verbatim quote pool (the retrieved snippet - never let the model generate quotes from memory), and a
+    // proposition limit (the narrow purpose the authority may be used for). The CONTROL RULES enforce the
+    // closed universe, the token-anchor mapping discipline, and the Stop-and-Flag [MISSING_AUTHORITY]
+    // fail-safe. targetSovereign is the matter's governing US state (null for the matter-less Deep Citations
+    // path), used only to characterize tier; it never relaxes any verification gate.
+    private static string BuildVerifiedAuthorityTable(IReadOnlyList<WideExternalKnowledgeSnippet> verifiedAuthorities,string? targetSovereign)
+    {
+        if(verifiedAuthorities.Count==0)
+        {
+            return "VERIFIED AUTHORITY TABLE: (none independently verified — return an empty keyAuthorities array and do NOT cite any authority as verified; you MAY still explain the POLOXI interpretation, clearly stating the supporting authority has not yet been independently verified. If a legal transition in your prose genuinely requires an authority that is not in this table, insert the placeholder token [MISSING_AUTHORITY: <describe the required legal rule>] rather than inventing a citation.)\n";
+        }
+        var builder=new StringBuilder();
+        builder.Append("VERIFIED AUTHORITY TABLE (CLOSED UNIVERSE — these are the ONLY authorities you may cite; each row is immutable):\n");
+        var index=0;
+        foreach(var authority in verifiedAuthorities.Take(8))
+        {
+            index++;
+            var tier=DeriveAuthorityTier(authority,targetSovereign);
+            builder.Append("  [AUTH-").Append(index.ToString("D2")).Append("]\n");
+            builder.Append("    CITATION (copy verbatim, do not reformat): ").Append(Truncate(authority.Title,240)).Append('\n');
+            if(!string.IsNullOrWhiteSpace(authority.AuthorityKind))
+                builder.Append("    TYPE: ").Append(authority.AuthorityKind).Append('\n');
+            builder.Append("    WEIGHT OF AUTHORITY: ").Append(tier).Append('\n');
+            if(!string.IsNullOrWhiteSpace(authority.Jurisdiction))
+                builder.Append("    JURISDICTION: ").Append(Truncate(authority.Jurisdiction,120)).Append('\n');
+            if(!string.IsNullOrWhiteSpace(authority.Url))
+                builder.Append("    SOURCE URL (echo as reference, never a different link): ").Append(authority.Url).Append('\n');
+            // Verbatim quote pool: the retrieved snippet text. Quotes in the answer MUST come from this pool.
+            if(!string.IsNullOrWhiteSpace(authority.Snippet))
+                builder.Append("    VERBATIM QUOTE POOL (quote ONLY from this text; never paraphrase into quotation marks): \"").Append(Truncate(authority.Snippet,600)).Append("\"\n");
+            // Proposition limit: how strongly the retrieved source actually supports the proposition.
+            var supportStatus=authority.PropositionSupportStatus switch
+            {
+                "VERIFIED_SUPPORT"=>"The retrieved source supports the proposition it was retrieved for; use it ONLY for that narrow proposition.",
+                "AUTHORITY_FOUND_BUT_SUPPORT_UNCLEAR"=>"The authority exists but the retrieved text does not clearly support the proposition; cite it cautiously and do NOT overstate its holding.",
+                _=>"Use strictly for the narrow proposition the retrieved text establishes; do NOT over-generalize the holding."
+            };
+            builder.Append("    PROPOSITION LIMIT: ").Append(supportStatus).Append('\n');
+        }
+        return builder.ToString();
+    }
+
+    // Emits the explicit prompt guardrails that reduce citation hallucination to zero: the closed-universe
+    // mandate, the token-anchor mapping discipline, and the Stop-and-Flag fail-safe for missing law.
+    private static string BuildCitationControlRules()
+        =>"\nCONTROL RULES (MANDATORY — these govern how you may use the AUTHORITY TABLE above):\n"
+         +"  1. CLOSED-UNIVERSE MANDATE: You operate strictly in a closed universe. You are FORBIDDEN from using outside legal knowledge, memory, or external research tools to introduce, name, quote, or characterize any authority that is not an [AUTH-xx] row in the table above.\n"
+         +"  2. TOKEN-ANCHOR MAPPING: Before writing any citation, map your reasoning to the specific [AUTH-xx] token for that authority, then copy its CITATION text verbatim. keyAuthorities entries MUST copy the CITATION text exactly and echo the SOURCE URL (or null). Never cite an authority that lacks an [AUTH-xx] token.\n"
+         +"  3. VERBATIM QUOTES ONLY: Any quoted language must be copied verbatim from that authority's VERBATIM QUOTE POOL. Never generate, reconstruct, or paraphrase a quotation from memory.\n"
+         +"  4. STOP-AND-FLAG FAIL-SAFE: If an argument or narrative transition requires a legal citation that is NOT present as an [AUTH-xx] row above, do NOT invent one. Instead insert the placeholder token [MISSING_AUTHORITY: <describe the required legal rule>] in your prose and continue.\n";
+
+    // Deterministically characterizes a verified authority as Binding or Persuasive for THIS matter. No LLM:
+    // when the authority's jurisdiction matches the matter's governing sovereign (or the authority is that
+    // state's statutory/regulatory code), it is binding in that forum; a differing identifiable jurisdiction
+    // is persuasive. Federal statutes/regulations are binding within their domain. Unknown jurisdiction →
+    // "Tier unknown" so the composer never overstates weight. This only labels the table; it never changes
+    // which authorities were verified or admitted.
+    private static string DeriveAuthorityTier(WideExternalKnowledgeSnippet authority,string? targetSovereign)
+    {
+        var authSovereign=Legal.Application.Features.Intelligence.Decision.LegalJurisdictionScope.ExtractSovereign(authority.Jurisdiction);
+        var isStatuteOrReg=string.Equals(authority.AuthorityKind,"Statute",StringComparison.OrdinalIgnoreCase)
+            ||string.Equals(authority.AuthorityKind,"Regulation",StringComparison.OrdinalIgnoreCase);
+        if(!string.IsNullOrWhiteSpace(targetSovereign)&&!string.IsNullOrWhiteSpace(authSovereign))
+        {
+            if(string.Equals(authSovereign,targetSovereign,StringComparison.OrdinalIgnoreCase))
+                return isStatuteOrReg?"Binding (governing-jurisdiction primary law)":"Binding (governing-jurisdiction authority)";
+            return "Persuasive (out-of-jurisdiction authority)";
+        }
+        // Federal primary law is binding within its own domain regardless of the matter's state sovereign.
+        var jurisdiction=authority.Jurisdiction;
+        if(isStatuteOrReg&&!string.IsNullOrWhiteSpace(jurisdiction)
+            &&(jurisdiction.Contains("federal",StringComparison.OrdinalIgnoreCase)||jurisdiction.Contains("United States",StringComparison.OrdinalIgnoreCase)||jurisdiction.Contains("U.S.",StringComparison.OrdinalIgnoreCase)))
+            return "Binding (federal primary law)";
+        return "Tier unknown (verify weight before relying)";
+    }
 
     // Builds the deterministic user prompt for the Legal Answer Composer from state POLOXI already
     // computed. It carries the POLOXI conclusion (the answer text/deliverable), the winning
@@ -2605,13 +2723,12 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         }
         if(verifiedAuthorities.Count==0)
         {
-            builder.Append("VERIFIED AUTHORITIES: (none independently verified — return an empty keyAuthorities array and do NOT cite any authority as verified; you MAY still explain the POLOXI interpretation, clearly stating the supporting authority has not yet been independently verified)\n");
+            builder.Append(BuildVerifiedAuthorityTable(verifiedAuthorities,ResolveMatterTargetSovereign(request.Query)));
         }
         else
         {
-            builder.Append("VERIFIED AUTHORITIES (cite ONLY these, echo the name verbatim):\n");
-            foreach(var authority in verifiedAuthorities.Take(8))
-                builder.Append("- ").Append(Truncate(authority.Title,200)).Append(" (").Append(authority.Url).Append("): ").Append(Truncate(authority.Snippet,400)).Append('\n');
+            builder.Append(BuildVerifiedAuthorityTable(verifiedAuthorities,ResolveMatterTargetSovereign(request.Query)));
+            builder.Append(BuildCitationControlRules());
         }
         // WINNING DECISION OUTCOME + ITS FACTORS. The Decision Brief MUST be built from the SAME analysis and
         // factors that made the winning candidate prevail - not a generic summary. Supply the top candidate's
@@ -2649,6 +2766,12 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             }
         }
         builder.Append("\nDECISION BRIEF OBJECTIVE: produce the BEST attorney-grade Decision Brief for THIS matter by INTEGRATING the matter + client profile, the admitted evidence, the verified authorities, the POLOXI interpretation results, and the WINNING DECISION OUTCOME's own decisive factors above. The brief must use the SAME analysis and factors that made the winning outcome prevail: the conclusion restates the POLOXI outcome verbatim in substance; the analysis walks the decisive factor dimensions in descending order and ties each to the admitted evidence and matter facts; the application maps the law to THIS matter's facts; the counterargument addresses the strongest alternative named above; and remainingUncertainty/decisiveMissingFact reflect the residual uncertainty. Do not recite coverage percentages as analysis, do not introduce new facts/authorities/scores/rankings beyond those supplied, label unverified material as such, and preserve genuine contradictions.");
+        // PASSAGE LINKING: for every authority placed in keyAuthorities, populate its "linkedMatterPassage"
+        // with the exact matter passage it grounds (a decisive factor, admitted-evidence excerpt, matter
+        // fact, or proposition), quoted VERBATIM from the matter context / admitted evidence above, so the
+        // UI renders the authority and the matched matter passage SIDE BY SIDE. If no matching matter
+        // material exists in context, set linkedMatterPassage to null — never fabricate a passage.
+        builder.Append("\nPASSAGE LINKING: for every authority you place in keyAuthorities, also populate its \"linkedMatterPassage\" with the exact matter passage it grounds (a decisive factor, admitted-evidence excerpt, matter fact, personal-injury profile detail, or proposition), quoted VERBATIM from the matter context / admitted evidence above. If no matching matter material exists in context, set linkedMatterPassage to null \u2014 never fabricate a passage.");
         return builder.ToString();
     }
 
@@ -3613,7 +3736,11 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 authority.Title.Contains(citedName,StringComparison.OrdinalIgnoreCase)||
                 citedName.Contains(authority.Title,StringComparison.OrdinalIgnoreCase));
             if(!matched)return null; // invented authority → discard entirely
-            authorities.Add(new(citedName,cited.Relevance.Trim(),string.IsNullOrWhiteSpace(cited.Reference)?null:cited.Reference.Trim()));
+            authorities.Add(new(citedName,cited.Relevance.Trim(),string.IsNullOrWhiteSpace(cited.Reference)?null:cited.Reference.Trim())
+            {
+                // Presentation-only: a null/blank linked passage simply renders no matter passage; never a discard.
+                LinkedMatterPassage=string.IsNullOrWhiteSpace(cited.LinkedMatterPassage)?null:cited.LinkedMatterPassage.Trim()
+            });
         }
         // Conclusion-consistency guard: only when POLOXI genuinely reached NO interpretation (UNRESOLVED)
         // does a definitive conclusion contradict POLOXI. A BLOCKED determinacy driven purely by absent
@@ -3631,13 +3758,26 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             return null;
         return new(
             proposal.Conclusion!.Trim(),
-            proposal.Analysis!.Trim(),
+            StripDanglingAuthorityTokens(proposal.Analysis!.Trim(),verifiedAuthorities.Count),
             authorities,
-            proposal.Application!.Trim(),
-            string.IsNullOrWhiteSpace(proposal.Counterargument)?null:proposal.Counterargument.Trim(),
-            string.IsNullOrWhiteSpace(proposal.RemainingUncertainty)?null:proposal.RemainingUncertainty.Trim(),
-            string.IsNullOrWhiteSpace(proposal.DecisiveMissingFact)?null:proposal.DecisiveMissingFact.Trim(),
-            proposal.BottomLine!.Trim());
+            StripDanglingAuthorityTokens(proposal.Application!.Trim(),verifiedAuthorities.Count),
+            string.IsNullOrWhiteSpace(proposal.Counterargument)?null:StripDanglingAuthorityTokens(proposal.Counterargument.Trim(),verifiedAuthorities.Count),
+            string.IsNullOrWhiteSpace(proposal.RemainingUncertainty)?null:StripDanglingAuthorityTokens(proposal.RemainingUncertainty.Trim(),verifiedAuthorities.Count),
+            string.IsNullOrWhiteSpace(proposal.DecisiveMissingFact)?null:StripDanglingAuthorityTokens(proposal.DecisiveMissingFact.Trim(),verifiedAuthorities.Count),
+            StripDanglingAuthorityTokens(proposal.BottomLine!.Trim(),verifiedAuthorities.Count));
+    }
+
+    // Conservative closed-universe cleanup: removes any [AUTH-xx] token anchor whose number does not map to
+    // a supplied verified authority (the table emitted exactly 'suppliedCount' anchors, [AUTH-01]..). This
+    // prevents a stray anchor from surfacing as a phantom citation while never discarding the answer and
+    // never touching [MISSING_AUTHORITY: ...] markers, which are the intended Stop-and-Flag signal. In-range
+    // anchors are left intact so the attorney can see the mapping the composer used.
+    private static string StripDanglingAuthorityTokens(string text,int suppliedCount)
+    {
+        if(string.IsNullOrEmpty(text)||!text.Contains("[AUTH-",StringComparison.OrdinalIgnoreCase))return text;
+        var cleaned=AuthTokenAnchorRegex.Replace(text,match=>
+            int.TryParse(match.Groups[1].Value,out var n)&&n>=1&&n<=suppliedCount?match.Value:string.Empty);
+        return System.Text.RegularExpressions.Regex.Replace(cleaned,@"[ \t]{2,}"," ").Trim();
     }
 
     // Heuristic: does the conclusion assert a definite outcome? Used only by the BLOCKED-determinacy
@@ -4146,6 +4286,42 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
 
     private string? FindMatterFieldValue(string label)
         =>_matterContext?.Decision.FirstOrDefault(f=>string.Equals(f.Label,label,StringComparison.OrdinalIgnoreCase)&&f.HasValue)?.Value;
+
+    private string? PersonalInjuryFieldValue(string label)
+        =>_matterContext?.PersonalInjuryProfile.FirstOrDefault(f=>string.Equals(f.Label,label,StringComparison.OrdinalIgnoreCase)&&f.HasValue)?.Value;
+
+    private string? FactsFieldValue(string label)
+        =>_matterContext?.Facts.FirstOrDefault(f=>string.Equals(f.Label,label,StringComparison.OrdinalIgnoreCase)&&f.HasValue)?.Value;
+
+    // Deterministic retrieval-axis directive for the legal-authority proposal. The matter context block lists
+    // every saved field flatly, so decisive drivers — above all the REQUESTED DISPOSITION (which fixes the
+    // controlling motion standard and procedural posture, e.g. "dismissal without prejudice" => the dismissal/
+    // SLAPP/demurrer standard, not generic liability doctrine), plus Subtype and Incident Type — otherwise sit
+    // buried among demand/lien/billing lines. This hoists them to the FRONT of the prompt as the primary axes
+    // the proposal must cover, so the proposed LEADS target the authorities those factors actually implicate.
+    // No inference and no verification change: the proposals are still UNTRUSTED and clear the same identity +
+    // proposition-support gates in retrieval. Empty when no matter context is loaded (matter-less runs unchanged).
+    private string BuildAuthorityRetrievalAxes()
+    {
+        if(_matterContext is null)return string.Empty;
+        var axes=new List<string>();
+        void Add(string label,string? value){if(!string.IsNullOrWhiteSpace(value))axes.Add($"{label}: {value.Trim()}");}
+        Add("Requested Disposition / motion standard",FindMatterFieldValue("Requested Disposition"));
+        Add("Decision Type",FindMatterFieldValue("Decision Type"));
+        Add("Subtype",FindMatterFieldValue("Subtype"));
+        Add("Posture",FindMatterFieldValue("Posture"));
+        Add("Incident Type",PersonalInjuryFieldValue("Incident Type"));
+        Add("Governing Law",LegalScopeFieldValue("Governing Law"));
+        // The alleged fact pattern fixes the operative substantive doctrine (e.g. slip-and-fall on an
+        // unmarked wet floor => premises-liability dangerous-condition + NOTICE; disputed notice +
+        // comparative fault => the duty/notice and comparative-negligence authorities). These are the
+        // facts that actually decide WHICH authorities govern, so they must steer the proposed leads —
+        // but they are SUPPLIED allegations, never verified, and the proposals still clear every gate.
+        Add("Alleged incident (unproven)",FactsFieldValue("Incident Summary (alleged)"));
+        Add("Alleged liability theory / disputes (unproven)",FactsFieldValue("Liability Summary (alleged)"));
+        if(axes.Count==0)return string.Empty;
+        return "\n\nPRIMARY RETRIEVAL AXES (propose authorities that govern THESE factors first — the Requested Disposition fixes the controlling motion standard and the alleged fact pattern fixes the operative substantive doctrine; both MUST be covered; do not collapse to generic practice-area citations):\n  - "+string.Join("\n  - ",axes);
+    }
 
     // Resolves the matter's governing-law US-state sovereign for the deterministic evidence-scope gate.
     // The saved matter legal-scope is AUTHORITATIVE: a matter's jurisdiction (e.g. New York) is stored on
@@ -4994,6 +5170,21 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                         {
                             var attributionQuery=NormalizeQuery($"{authority.Query} {branch.DisplayName}").ToLowerInvariant();
                             collected.AddRange(await RetrieveStampedAsync(branch,authority.Query,attributionQuery,authority.Kind,authority));
+                        }
+                        // Supplemental proposal leads: previously proposals were only used when a branch named
+                        // NO authority, so a branch that already cited a case never attempted the broader
+                        // query-level authorities and those proposals stayed permanently UNVERIFIED. Attempt the
+                        // unrepresented proposals ONCE on the primary branch (index 0) so every proposed authority
+                        // gets a chance to earn verification. Each still clears the SAME identity/support gate, and
+                        // the shared retrievalGate + grounding budget bound the extra cost fail-soft.
+                        if(useLegalGrounding&&index==0&&proposedLegalAuthorities.Count>0)
+                        {
+                            foreach(var proposal in proposedLegalAuthorities)
+                            {
+                                if(authorities.Any(existing=>string.Equals(existing.Query,proposal.Query,StringComparison.OrdinalIgnoreCase)))continue;
+                                var proposalAttribution=NormalizeQuery($"{proposal.Query} {branch.DisplayName}").ToLowerInvariant();
+                                collected.AddRange(await RetrieveStampedAsync(branch,proposal.Query,proposalAttribution,proposal.Kind,proposal));
+                            }
                         }
                         results[index]=collected;
                     }
@@ -6287,22 +6478,56 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         (answer.ExternalReferences??[]).Where(reference=>Uri.TryCreate(reference.Url,UriKind.Absolute,out var uri)&&uri.Scheme==Uri.UriSchemeHttps)
             .Take(6).Select(reference=>new WideExternalReferenceDto(reference.Title.Trim(),reference.Url.Trim(),reference.Source.Trim(),reference.Summary.Trim(),reference.BranchDisplayName.Trim())).ToArray();
 
-    // V3.20: projects the AI-PROPOSED legal authorities into their labeled, non-evidence UI DTOs. An
-    // authority is marked VERIFIED only when an admitted external snippet (one that passed the mandatory
-    // identity gate) references it; otherwise it stays an UNVERIFIED suggestion. This never promotes a
-    // proposal to evidence — it only reports whether the lead was confirmed by retrieval.
+    // Projects the Decision2 legal authorities into their labeled UI DTOs, VERIFIED-FIRST. Previously this
+    // returned ONLY the shallow query-level LLM proposal list (driven by the whole question, so a personal-
+    // injury matter surfaced generic "Personal Injury" authorities all marked UNVERIFIED), while the
+    // branch-grounded authorities that actually PASSED the identity gate during retrieval were never shown.
+    // Now the projection leads with the identity-verified legal snippets the pipeline retrieved per branch
+    // (the same Deep-Citations grounding), deduped by citation name, and only then appends any LLM proposal
+    // that was NOT already confirmed as an UNVERIFIED supplement. This never fabricates an authority: a
+    // VERIFIED row exists only because a retrieved source passed AuthorityIdentityVerified.
     private static WideProposedAuthorityDto[] MapProposedLegalAuthorities(IReadOnlyList<ProposedLegalAuthority> proposed,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge)
     {
-        if(proposed.Count==0)return [];
-        var admitted=externalKnowledge.Where(snippet=>snippet.AuthorityIdentityVerified).ToArray();
-        return proposed.Select(item=>
+        // Verified legal evidence that cleared the mandatory identity gate and carries a usable citation name.
+        // Restricted to snippets tagged with a legal AuthorityKind (Case/Statute/Regulation) so matter-corpus
+        // documents — which also set AuthorityIdentityVerified but are uploaded files, not legal authorities —
+        // never leak into the citation list.
+        var admitted=externalKnowledge
+            .Where(snippet=>snippet.AuthorityIdentityVerified
+                &&!string.IsNullOrWhiteSpace(snippet.Title)
+                &&!string.IsNullOrWhiteSpace(snippet.AuthorityKind))
+            .ToArray();
+
+        var result=new List<WideProposedAuthorityDto>();
+        var seenNames=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // 1) VERIFIED-FIRST: one row per distinct verified authority name, highest-scoring snippet wins the
+        // Url/relevance. Deterministic (no LLM): name comes from snippet.Title, kind from AuthorityKind.
+        foreach(var group in admitted
+            .GroupBy(snippet=>NormalizeIdentityText(snippet.Title),StringComparer.Ordinal)
+            .Where(group=>!string.IsNullOrWhiteSpace(group.Key)))
         {
-            var verified=admitted.Any(snippet=>SnippetMatchesAuthorityIdentity(snippet,item.Reference));
-            var source=(admitted.FirstOrDefault(snippet=>SnippetMatchesAuthorityIdentity(snippet,item.Reference))
-                ??externalKnowledge.FirstOrDefault(snippet=>SnippetMatchesAuthorityIdentity(snippet,item.Reference)))?.Url;
+            var best=group.OrderByDescending(snippet=>snippet.Score).First();
+            var name=best.Title.Trim();
+            if(!seenNames.Add(name))continue;
+            var kind=string.IsNullOrWhiteSpace(best.AuthorityKind)?"Authority":best.AuthorityKind.Trim();
+            var relevance=string.IsNullOrWhiteSpace(best.Snippet)?string.Empty:best.Snippet.Trim();
+            var url=Uri.TryCreate(best.Url,UriKind.Absolute,out var verifiedUri)&&verifiedUri.Scheme==Uri.UriSchemeHttps?best.Url:null;
+            result.Add(new WideProposedAuthorityDto(name,kind,relevance,"VERIFIED"){Url=url});
+        }
+
+        // 2) UNVERIFIED SUPPLEMENTS: LLM proposals that no verified snippet confirmed, kept honestly labeled
+        // so the attorney still sees the suggested leads without them masquerading as grounded evidence.
+        foreach(var item in proposed)
+        {
+            if(admitted.Any(snippet=>SnippetMatchesAuthorityIdentity(snippet,item.Reference)))continue;
+            if(string.IsNullOrWhiteSpace(item.Name)||!seenNames.Add(item.Name.Trim()))continue;
+            var source=externalKnowledge.FirstOrDefault(snippet=>SnippetMatchesAuthorityIdentity(snippet,item.Reference))?.Url;
             var url=Uri.TryCreate(source,UriKind.Absolute,out var uri)&&uri.Scheme==Uri.UriSchemeHttps?source:null;
-            return new WideProposedAuthorityDto(item.Name,item.Kind,item.Relevance,verified?"VERIFIED":"UNVERIFIED"){Url=url};
-        }).ToArray();
+            result.Add(new WideProposedAuthorityDto(item.Name,item.Kind,item.Relevance,"UNVERIFIED"){Url=url});
+        }
+
+        return result.ToArray();
     }
 
     private static decimal? NormalizeScore(decimal? score)=>score is null?null:Math.Clamp(score.Value,0,1);
@@ -7279,9 +7504,17 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         try
         {
             var contractContext=queryContract is null?"(none)":$"answerKind: {queryContract.AnswerKind}; entityType: {queryContract.EntityType}; ranking: {queryContract.RankingConcept}; hard constraints: {string.Join("; ",queryContract.HardConstraints)}";
+            // Ground the authority proposal in the SELECTED MATTER CONTEXT (subtype, incident type, governing
+            // law, posture, alleged facts, evidence inventory). Without it this stage saw only the matter TITLE
+            // plus the query contract and collapsed to generic practice-area authorities (e.g. a premises-
+            // liability "falling object" California slip-and-fall proposed the same boilerplate "Personal
+            // Injury" cites). The candidate-enumeration stage already appends this block; mirroring it here lets
+            // the proposed LEADS reflect the real factors. The proposals remain UNTRUSTED and still clear the
+            // mandatory identity + proposition-support gates in retrieval, so richer context never relaxes
+            // verification — it only aims retrieval at the authorities the matter actually implicates.
             var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_INFORMATION_VALUE",
                 await GetWideSystemPromptAsync(request,IntelligencePromptCodes.WideLegalAuthorityProposal,cancellationToken),
-                $"Question: {request.Query}\nQuery contract: {contractContext}",
+                $"Question: {request.Query}\nQuery contract: {contractContext}{BuildAuthorityRetrievalAxes()}{BuildMatterContextSection()}",
                 LegalAuthorityProposalSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_LEGAL_AUTHORITY_PROPOSAL",null,request.CorrelationId,"Intelligent Search Wide"),MechanicalModel(configuration,request),cancellationToken);
             var proposal=JsonSerializer.Deserialize<WideLegalAuthorityProposal>(result.Content,JsonOptions);
             if(proposal?.Authorities is null)return [];

@@ -70,8 +70,46 @@
                     </div>
                 }
 
+                @if (_isOwner)
+                {
+                    <h3>Monthly feature limits</h3>
+                    <p class="account-settings-hint">Owners and administrators can raise the monthly allowance for metered features (for example research search). Changes apply to this workspace immediately.</p>
+                    @if (_limitEntitlements.Count == 0)
+                    {
+                        <div class="intel-state">No adjustable feature limits are available for this plan.</div>
+                    }
+                    else
+                    {
+                        <div class="account-activity-table-wrap">
+                            <table class="account-activity-table">
+                                <thead><tr><th>Feature</th><th>Code</th><th>Current monthly limit</th><th>New limit</th><th></th></tr></thead>
+                                <tbody>
+                                    @foreach (var limit in _limitEntitlements)
+                                    {
+                                        <tr>
+                                            <td>@(string.IsNullOrWhiteSpace(limit.DisplayName) ? limit.Code : limit.DisplayName)</td>
+                                            <td><code>@limit.Code</code></td>
+                                            <td>@(limit.LimitValue?.ToString("N0") ?? "Unlimited")</td>
+                                            <td>
+                                                <input type="number" min="0" step="1" class="account-limit-input"
+                                                       @bind="_limitEdits[limit.Code]" disabled="@_savingLimit" aria-label="@($"New monthly limit for {limit.Code}")" />
+                                            </td>
+                                            <td>
+                                                <button type="button" class="um-btn um-btn-primary um-btn-sm"
+                                                        @onclick="() => SaveLimitAsync(limit.Code)" disabled="@_savingLimit">
+                                                    Save
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                }
+
                 <h3>Audit events</h3>
-                <div class="account-activity-controls">
+                    <div class="account-activity-controls">
                     <form @onsubmit="SearchAuditAsync" @onsubmit:preventDefault>
                         <label class="visually-hidden" for="account-audit-search">Search audit events</label>
                         <input id="account-audit-search" type="search" @bind="_auditSearch" placeholder="Search event, resource, ID, or correlation…" />
@@ -195,6 +233,9 @@
     private TenantProfileDto? _profile;
     private AccountSettingsForm _form = new();
     private bool _isOwner;
+    private bool _savingLimit;
+    private IReadOnlyList<EntitlementResolution> _limitEntitlements = [];
+    private readonly Dictionary<string, long> _limitEdits = new(StringComparer.OrdinalIgnoreCase);
     private int _activityDays = 30;
     private IReadOnlyList<AuditEventDto> _audit = [];
     private IReadOnlyList<UsageSummaryDto> _usage = [];
@@ -224,12 +265,14 @@
         try
         {
             var authenticationState = await AuthenticationStateTask;
-            _isOwner = authenticationState.User.IsInRole("OWNER") || authenticationState.User.IsInRole("SYSTEM_ADMIN") || authenticationState.User.IsInRole("TENANT_ADMIN");
+            _isOwner = authenticationState.User.IsInRole("OWNER") || authenticationState.User.IsInRole("SYSTEM_ADMIN") || authenticationState.User.IsInRole("TENANT_ADMIN") || authenticationState.User.IsInRole("SUPERADMIN") || authenticationState.User.IsInRole("ADMIN");
 
             await LoadActivityAsync();
 
             if (_isOwner)
             {
+                await LoadLimitsAsync();
+
                 _profile = await Api.GetTenantProfileAsync();
                 if (_profile is null)
                 {
@@ -278,6 +321,48 @@
     {
         _auditPage = 1;
         await LoadActivityAsync();
+    }
+
+    private async Task LoadLimitsAsync()
+    {
+        var entitlements = await Api.GetEntitlementsAsync();
+        _limitEntitlements = entitlements
+            .Where(e => string.Equals(e.Kind, "Limit", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(e => e.DisplayName ?? e.Code, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        _limitEdits.Clear();
+        foreach (var entitlement in _limitEntitlements)
+            _limitEdits[entitlement.Code] = entitlement.LimitValue ?? 0;
+    }
+
+    private async Task SaveLimitAsync(string code)
+    {
+        _error = null;
+        _success = null;
+        _savingLimit = true;
+        try
+        {
+            var newLimit = _limitEdits.TryGetValue(code, out var value) ? value : 0;
+            if (newLimit < 0)
+            {
+                _error = "The limit must be zero or greater.";
+                return;
+            }
+
+            var updated = await Api.UpdateEntitlementLimitAsync(code, newLimit);
+            await LoadLimitsAsync();
+            var label = updated?.DisplayName ?? code;
+            _success = $"Updated the monthly limit for {label} to {newLimit:N0}.";
+        }
+        catch (Exception ex)
+        {
+            _error = $"Failed to update the feature limit: {ex.Message}";
+        }
+        finally
+        {
+            _savingLimit = false;
+        }
     }
 
     private async Task ChangeAuditPageSizeAsync()

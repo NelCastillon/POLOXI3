@@ -17,7 +17,7 @@ namespace Legal.Api.Controllers;
 [ApiController]
 [Route("api/platform_users")]
 [Authorize]
-public sealed class PlatformUserManagementController(IUserManagementService service) : ControllerBase
+public sealed class PlatformUserManagementController(IUserManagementService service, IEntitlementService entitlementService) : ControllerBase
 {
     private const string ManagePermission = "platform.users.manage";
 
@@ -28,6 +28,30 @@ public sealed class PlatformUserManagementController(IUserManagementService serv
         var granted = AuthenticatedRequestContext.GetGrantedPermissions(User);
         return granted.Contains("NAV_ALL")
             || granted.Contains(ManagePermission, StringComparer.OrdinalIgnoreCase);
+    }
+
+    // Effective entitlements for a specific tenant (plan grants merged with that tenant's overrides).
+    [HttpGet("tenants/{tenantId:guid}/entitlements")]
+    public async Task<IActionResult> GetTenantEntitlements(Guid tenantId, CancellationToken cancellationToken)
+    {
+        if (!CanManage()) return Forbid();
+        if (tenantId == Guid.Empty) return BadRequest("A tenant id is required.");
+        var entitlements = await entitlementService.GetEntitlementsAsync(tenantId, cancellationToken);
+        return Ok(entitlements);
+    }
+
+    // Super-admin update of any tenant's effective monthly limit (tenant override).
+    [HttpPut("tenants/{tenantId:guid}/entitlements/{code}/limit")]
+    public async Task<IActionResult> UpdateTenantEntitlementLimit(Guid tenantId, string code, [FromBody] UpdateEntitlementLimitRequest request, CancellationToken cancellationToken)
+    {
+        if (!CanManage()) return Forbid();
+        if (tenantId == Guid.Empty) return BadRequest("A tenant id is required.");
+        if (request.LimitValue < 0) return BadRequest("The limit must be zero or greater.");
+
+        var updated = await entitlementService.UpdateEntitlementLimitAsync(tenantId, code, request.LimitValue, ActorUserId, cancellationToken);
+        return updated is null
+            ? NotFound(new { Reason = $"Unknown entitlement '{code}'." })
+            : Ok(updated);
     }
 
     [HttpGet]

@@ -51,6 +51,7 @@ public interface IEntitlementService
 {
     Task<IReadOnlyList<EntitlementResolution>> GetEntitlementsAsync(Guid tenantId, CancellationToken ct = default);
     Task<EntitlementResolution?> GetEntitlementAsync(Guid tenantId, string code, CancellationToken ct = default);
+    Task<EntitlementResolution?> UpdateEntitlementLimitAsync(Guid tenantId, string code, long limitValue, Guid? actorUserId, CancellationToken ct = default);
 }
 
 /// <summary>Answers "are you allowed?" — authentication, membership, permission, entitlement, matter access.</summary>

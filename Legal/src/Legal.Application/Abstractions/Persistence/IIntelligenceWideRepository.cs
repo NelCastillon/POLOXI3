@@ -93,7 +93,7 @@ public interface IIntelligenceWideRepository
     // and reopen it. Best-effort; never on the critical result path.
     Task SaveWideSearchRunResultAsync(WideSearchRunCapture capture,CancellationToken cancellationToken=default);
     // Paged list of the running user's own runs, newest first.
-    Task<WideSearchRunHistoryPage> GetWideSearchRunHistoryAsync(Guid tenantId,Guid userId,int page,int pageSize,CancellationToken cancellationToken=default);
+    Task<WideSearchRunHistoryPage> GetWideSearchRunHistoryAsync(Guid tenantId,Guid userId,int page,int pageSize,Guid? matterId=null,CancellationToken cancellationToken=default);
     // Full reopen payload (the saved WideSearchResponse rehydrated) for a single run owned by the user.
     Task<WideSearchRunDetailDto?> GetWideSearchRunResultAsync(Guid tenantId,Guid userId,Guid wideSearchRunResultId,CancellationToken cancellationToken=default);
     // All runs in a continuous-chat thread (shared ConversationId), oldest-first, owned by the user.

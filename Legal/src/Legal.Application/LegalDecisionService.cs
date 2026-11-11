@@ -675,6 +675,9 @@ public sealed partial class LegalDecisionService(
     public Task<IReadOnlyCollection<DecisionSessionSummaryDto>> GetMatterSessionsAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default)
         => repository.GetMatterSessionsAsync(tenantId, decisionMatterId, cancellationToken);
 
+    public Task<MatterRunHistoryBundleDto?> GetMatterRunHistoryBundleAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default)
+        => repository.GetMatterRunHistoryBundleAsync(tenantId, decisionMatterId, cancellationToken);
+
     // ── Candidate Full Analysis read model ──────────────────────────────────────────────────────
     // Composes the dedicated Candidate Full Analysis workspace from already-persisted, authoritative
     // sources: the matter, its latest decision session result (candidates / branches / evidence / flip

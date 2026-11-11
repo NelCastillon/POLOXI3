@@ -175,6 +175,20 @@ public sealed class EntitlementService(ISaasRepository repository) : IEntitlemen
         var all = await repository.ResolveEntitlementsAsync(tenantId, ct);
         return all.FirstOrDefault(e => string.Equals(e.Code, code, StringComparison.OrdinalIgnoreCase));
     }
+
+    public async Task<EntitlementResolution?> UpdateEntitlementLimitAsync(Guid tenantId, string code, long limitValue, Guid? actorUserId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(code))
+            throw new ArgumentException("An entitlement code is required.", nameof(code));
+        if (limitValue < 0)
+            throw new ArgumentOutOfRangeException(nameof(limitValue), "The limit must be zero or greater.");
+
+        var updated = await repository.UpsertTenantEntitlementLimitAsync(tenantId, code.Trim(), limitValue, actorUserId, ct);
+        if (!updated)
+            return null;
+
+        return await GetEntitlementAsync(tenantId, code, ct);
+    }
 }
 
 /// <summary>Authorization: authenticated → membership → permission → entitlement → matter access.</summary>

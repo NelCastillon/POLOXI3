@@ -3102,6 +3102,53 @@ public sealed partial class LegalDecisionRepository(ISqlConnectionFactory connec
         return rows.ToArray();
     }
 
+    // Migration 0486: one connected, tenant-scoped read of the whole matter graph. Returns the matter
+    // aggregate, every run under it, and a per-result-type count of live records (plus the number of
+    // distinct runs that produced them) — all reachable through the enforced MatterId relationship.
+    public async Task<MatterRunHistoryBundleDto?> GetMatterRunHistoryBundleAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default)
+    {
+        var matter = await GetMatterAsync(tenantId, decisionMatterId, cancellationToken);
+        if (matter is null)
+            return null;
+
+        var sessions = await GetMatterSessionsAsync(tenantId, decisionMatterId, cancellationToken);
+
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var counts = await connection.QueryAsync<MatterResultCountDto>(new CommandDefinition(
+            """
+            SELECT ResultType, COUNT(1) AS RecordCount, COUNT(DISTINCT DecisionSessionId) AS RunCount
+            FROM
+            (
+                SELECT 'Candidate'            AS ResultType, DecisionSessionId FROM POLOXI.Legal_DecisionCandidate            WHERE IsDeleted = 0 AND TenantId = @TenantId AND MatterId = @DecisionMatterId
+                UNION ALL SELECT 'Branch',               DecisionSessionId FROM POLOXI.Legal_DecisionBranch               WHERE IsDeleted = 0 AND TenantId = @TenantId AND MatterId = @DecisionMatterId
+                UNION ALL SELECT 'Dependency',           DecisionSessionId FROM POLOXI.Legal_DecisionDependency           WHERE IsDeleted = 0 AND TenantId = @TenantId AND MatterId = @DecisionMatterId
+                UNION ALL SELECT 'Evidence',             DecisionSessionId FROM POLOXI.Legal_DecisionEvidence             WHERE IsDeleted = 0 AND TenantId = @TenantId AND MatterId = @DecisionMatterId
+                UNION ALL SELECT 'FlipPoint',            DecisionSessionId FROM POLOXI.Legal_DecisionFlipPoint            WHERE IsDeleted = 0 AND TenantId = @TenantId AND MatterId = @DecisionMatterId
+                UNION ALL SELECT 'EliminationLedger',    DecisionSessionId FROM POLOXI.Legal_DecisionEliminationLedger    WHERE IsDeleted = 0 AND TenantId = @TenantId AND MatterId = @DecisionMatterId
+                UNION ALL SELECT 'Event',                DecisionSessionId FROM POLOXI.Legal_DecisionEvent                WHERE IsDeleted = 0 AND TenantId = @TenantId AND MatterId = @DecisionMatterId
+                UNION ALL SELECT 'FactProposition',      DecisionSessionId FROM POLOXI.Legal_DecisionFactProposition      WHERE IsDeleted = 0 AND TenantId = @TenantId AND MatterId = @DecisionMatterId
+                UNION ALL SELECT 'LegalProposition',     DecisionSessionId FROM POLOXI.Legal_DecisionLegalProposition     WHERE IsDeleted = 0 AND TenantId = @TenantId AND MatterId = @DecisionMatterId
+                UNION ALL SELECT 'LegalElement',         DecisionSessionId FROM POLOXI.Legal_DecisionLegalElement         WHERE IsDeleted = 0 AND TenantId = @TenantId AND MatterId = @DecisionMatterId
+                UNION ALL SELECT 'ReasoningStrategy',    DecisionSessionId FROM POLOXI.Legal_DecisionReasoningStrategy    WHERE IsDeleted = 0 AND TenantId = @TenantId AND MatterId = @DecisionMatterId
+                UNION ALL SELECT 'BurdenRule',           DecisionSessionId FROM POLOXI.Legal_DecisionBurdenRule           WHERE IsDeleted = 0 AND TenantId = @TenantId AND MatterId = @DecisionMatterId
+                UNION ALL SELECT 'ProceduralConstraint', DecisionSessionId FROM POLOXI.Legal_DecisionProceduralConstraint WHERE IsDeleted = 0 AND TenantId = @TenantId AND MatterId = @DecisionMatterId
+                UNION ALL SELECT 'GraphEdge',            DecisionSessionId FROM POLOXI.Legal_DecisionGraphEdge            WHERE IsDeleted = 0 AND TenantId = @TenantId AND MatterId = @DecisionMatterId
+                UNION ALL SELECT 'DependencyEvent',      DecisionSessionId FROM POLOXI.Legal_DecisionDependencyEvent      WHERE IsDeleted = 0 AND TenantId = @TenantId AND MatterId = @DecisionMatterId
+                UNION ALL SELECT 'Recompetition',        DecisionSessionId FROM POLOXI.Legal_DecisionRecompetition        WHERE IsDeleted = 0 AND TenantId = @TenantId AND MatterId = @DecisionMatterId
+                UNION ALL SELECT 'ResearchNeed',         DecisionSessionId FROM POLOXI.Legal_DecisionResearchNeed         WHERE IsDeleted = 0 AND TenantId = @TenantId AND MatterId = @DecisionMatterId
+                UNION ALL SELECT 'FrontierSnapshot',     DecisionSessionId FROM POLOXI.Legal_DecisionFrontierSnapshot     WHERE IsDeleted = 0 AND TenantId = @TenantId AND MatterId = @DecisionMatterId
+                UNION ALL SELECT 'ClaimProposition',     DecisionSessionId FROM POLOXI.Legal_ClaimProposition             WHERE IsDeleted = 0 AND TenantId = @TenantId AND MatterId = @DecisionMatterId
+            ) AS g
+            GROUP BY ResultType
+            HAVING COUNT(1) > 0
+            ORDER BY ResultType;
+            """,
+            new { TenantId = tenantId, DecisionMatterId = decisionMatterId },
+            cancellationToken: cancellationToken));
+
+        return new MatterRunHistoryBundleDto(matter, sessions, counts.ToArray());
+    }
+
     public async Task<bool> UpdateMatterAsync(Guid tenantId, Guid userId, Guid decisionMatterId, DecisionMatterUpdateRequest request, CancellationToken cancellationToken = default)
     {
         using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);

@@ -29,6 +29,22 @@ public sealed class ExecutionGatewayController(
     public async Task<IActionResult> Entitlements(CancellationToken ct)
         => Ok(await entitlementService.GetEntitlementsAsync(TenantId, ct));
 
+    // Owner/admin self-service update of a single entitlement's effective monthly limit (tenant override).
+    [HttpPut("entitlements/{code}/limit")]
+    public async Task<IActionResult> UpdateEntitlementLimit(string code, [FromBody] UpdateEntitlementLimitRequest request, CancellationToken ct)
+    {
+        if (!(User.IsInRole("OWNER") || User.IsInRole("SYSTEM_ADMIN") || User.IsInRole("TENANT_ADMIN") || User.IsInRole("SUPERADMIN") || User.IsInRole("ADMIN")))
+            return StatusCode(StatusCodes.Status403Forbidden, new { Reason = "Only workspace owners or administrators can change feature limits." });
+
+        if (request.LimitValue < 0)
+            return BadRequest(new { Reason = "The limit must be zero or greater." });
+
+        var updated = await entitlementService.UpdateEntitlementLimitAsync(TenantId, code, request.LimitValue, ActorUserId, ct);
+        return updated is null
+            ? NotFound(new { Reason = $"Unknown entitlement '{code}'." })
+            : Ok(updated);
+    }
+
     // Create a governed capability execution (authorize → reserve → idempotency → execute).
     [HttpPost("execute")]
     public async Task<IActionResult> Execute([FromBody] ExecuteCapabilityRequest request, CancellationToken ct)

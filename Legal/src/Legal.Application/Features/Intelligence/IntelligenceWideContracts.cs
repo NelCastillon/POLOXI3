@@ -887,7 +887,14 @@ public sealed record WideLegalAnswerDto(
 // already verified (present in the verified external-knowledge set); Relevance is the plain-language
 // reason it supports the conclusion. The output guard rejects the composed answer if Name is not a
 // verified authority.
-public sealed record WideLegalAuthorityDto(string Name,string Relevance,string? Reference);
+//   LinkedMatterPassage: the exact matter passage this authority grounds (a matter factor, profile
+//     detail, evidence line, or proposition quoted verbatim from the supplied matter context). Rendered
+//     SIDE BY SIDE with the authority relevance. Nullable/defaulted = backward-compatible with persisted
+//     JSON and degrades to "no matching matter passage" rather than fabricating a link.
+public sealed record WideLegalAuthorityDto(string Name,string Relevance,string? Reference)
+{
+    public string? LinkedMatterPassage{get;init;}
+}
 
 // \u2500\u2500 Candidate Landscape Narrative Composer (PRESENTATION ONLY) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 // One coherent explanation of the WHOLE candidate competition plus an individualized narrative for every
@@ -1366,6 +1373,12 @@ public sealed record WideConfiguration(decimal TargetConfidence,decimal MinimumB
     // Bounded parallelism (DB-seeded; see migration 0147). 1 disables parallel execution.
     public int GroundingConcurrency{get;init;}=4;
     public int ExternalRetrievalConcurrency{get;init;}=3;
+    // Bounded parallelism for the per-level hierarchy-decomposition LLM calls. Within a single depth
+    // level the parent batches produced by BuildHierarchyParentBatches are independent, so their
+    // ProposeNextLevelAsync calls can run concurrently under this gate while the surrounding levels stay
+    // strictly sequential and the children are re-assembled in deterministic batch order. 1 disables
+    // parallelism (original sequential behavior). DB-seeded; default 3 to respect provider rate limits.
+    public int HierarchyProposalConcurrency{get;init;}=3;
     // V2.2 information-directed exploration (DB-seeded; see migration 0149). Fail-soft: any
     // estimator/entropy failure skips the information round and continues V2.1 narrowing.
     public bool EnableInformationValue{get;init;}=true;

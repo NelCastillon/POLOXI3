@@ -329,6 +329,9 @@ internal sealed class RecordingDecisionRepository : ILegalDecisionRepository
     public Task<IReadOnlyCollection<DecisionSessionSummaryDto>> GetMatterSessionsAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default)
         => Task.FromResult<IReadOnlyCollection<DecisionSessionSummaryDto>>([]);
 
+    public Task<MatterRunHistoryBundleDto?> GetMatterRunHistoryBundleAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default)
+        => Task.FromResult<MatterRunHistoryBundleDto?>(null);
+
     public Task<bool> UpdateMatterAsync(Guid tenantId, Guid userId, Guid decisionMatterId, DecisionMatterUpdateRequest request, CancellationToken cancellationToken = default)
         => Task.FromResult(true);
 

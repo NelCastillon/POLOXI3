@@ -39,4 +39,30 @@ public sealed class LegalJurisdictionDetectorTests
 
         Assert.False(detected);
     }
+
+    [Fact]
+    public void TryDetect_CaliforniaCodeOfCivilProcedure_ResolvesStatute()
+    {
+        var sut=new LegalJurisdictionDetector();
+
+        var detected=sut.TryDetect("California Code of Civil Procedure section 581",out var citation);
+
+        Assert.True(detected);
+        Assert.Equal("NAME:CALIFORNIA",citation.JurisdictionCode);
+        Assert.Equal("STATUTE",citation.AuthorityKindCode);
+        Assert.Equal("California Code of Civil Procedure section 581",citation.CitationText);
+    }
+
+    [Fact]
+    public void TryDetect_CaliforniaCivilCodeSectionSymbol_ResolvesStatute()
+    {
+        var sut=new LegalJurisdictionDetector();
+
+        var detected=sut.TryDetect("California Civil Code § 1714",out var citation);
+
+        Assert.True(detected);
+        Assert.Equal("NAME:CALIFORNIA",citation.JurisdictionCode);
+        Assert.Equal("STATUTE",citation.AuthorityKindCode);
+        Assert.Equal("California Civil Code § 1714",citation.CitationText);
+    }
 }

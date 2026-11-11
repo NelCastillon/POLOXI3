@@ -51,7 +51,11 @@ public sealed record EntitlementResolution(
     string Kind,
     bool IsEnabled,
     long? LimitValue,
-    string? LimitPeriodCode);
+    string? LimitPeriodCode,
+    string? DisplayName = null);
+
+/// <summary>Owner-initiated change to a tenant's effective limit for a single entitlement.</summary>
+public sealed record UpdateEntitlementLimitRequest(long LimitValue);
 
 public sealed record CapabilityAuthorizationResult(
     bool Allowed,

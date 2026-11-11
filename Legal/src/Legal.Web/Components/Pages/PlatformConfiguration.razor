@@ -156,10 +156,73 @@
                 }
             }
         </section>
+
+        <section class="intel-panel">
+            <div class="intel-toolbar">
+                <div>
+                    <h2>Tenant limits</h2>
+                    <p>Select a tenant to view and adjust its monthly metered-feature limits (e.g. research search). Saving writes a tenant-specific override that wins over the plan grant for that tenant only.</p>
+                </div>
+            </div>
+
+            <div class="intel-row cfg-row">
+                <div class="cfg-meta">
+                    <strong>Tenant</strong>
+                    <small>Choose which workspace to edit.</small>
+                </div>
+                <select class="form-select" @bind="_selectedTenantId" @bind:after="LoadTenantLimitsAsync" disabled="@_tenantLimitsLoading">
+                    <option value="">— Select a tenant —</option>
+                    @foreach (var tenant in _tenants)
+                    {
+                        <option value="@tenant.TenantId">@tenant.Name (@tenant.Slug)</option>
+                    }
+                </select>
+            </div>
+
+            @if (_tenantLimitError is not null)
+            {
+                <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_tenantLimitError</div>
+            }
+            @if (_tenantLimitSuccess is not null)
+            {
+                <div class="alert alert-success">@_tenantLimitSuccess</div>
+            }
+
+            @if (_tenantLimitsLoading)
+            {
+                <div class="intel-state">Loading tenant limits…</div>
+            }
+            else if (_selectedTenantId is { Length: > 0 })
+            {
+                @if (_tenantLimits.Count == 0)
+                {
+                    <div class="intel-state">No adjustable feature limits are available for this tenant.</div>
+                }
+                else
+                {
+                    @foreach (var limit in _tenantLimits)
+                    {
+                        <div class="intel-row cfg-row">
+                            <div class="cfg-meta">
+                                <strong>@(string.IsNullOrWhiteSpace(limit.DisplayName) ? limit.Code : limit.DisplayName)</strong>
+                                <small>@limit.Code</small>
+                                <span class="cfg-source">Current monthly limit: <code>@(limit.LimitValue?.ToString("N0") ?? "Unlimited")</code></span>
+                            </div>
+                            <input type="number" min="0" step="1" class="form-control cfg-input"
+                                   @bind="_tenantLimitEdits[limit.Code]" disabled="@_savingTenantLimit" aria-label="@($"New monthly limit for {limit.Code}")" />
+                            <button class="um-btn um-btn-primary um-btn-sm" @onclick="() => SaveTenantLimitAsync(limit.Code)" disabled="@_savingTenantLimit">Save</button>
+                        </div>
+                    }
+                }
+            }
+        </section>
     }
 </div>
+@if (_toast is not null)
+{
+    <div class="um-toast @(_toastError ? "um-toast-danger" : "um-toast-success")">@_toast</div>
+}
 </LegalWorkspace>
-
 @code {
     private bool _loading = true;
     private bool _saving;
@@ -168,6 +231,18 @@
     private IReadOnlyList<PlatformConfigurationCategoryDto> _categories = [];
     private IReadOnlyList<LegalAgreementDto> _agreements = [];
     private readonly Dictionary<string, string> _drafts = new(StringComparer.Ordinal);
+
+    private IReadOnlyList<TenantOptionDto> _tenants = [];
+    private string? _selectedTenantId;
+    private bool _tenantLimitsLoading;
+    private bool _savingTenantLimit;
+    private string? _tenantLimitError;
+    private string? _tenantLimitSuccess;
+    private IReadOnlyList<EntitlementResolution> _tenantLimits = [];
+    private readonly Dictionary<string, long> _tenantLimitEdits = new(StringComparer.OrdinalIgnoreCase);
+
+    private string? _toast;
+    private bool _toastError;
 
     protected override Task OnInitializedAsync() => LoadAsync();
 
@@ -179,6 +254,7 @@
         {
             _categories = await Api.GetPlatformConfigurationAsync();
             _agreements = await Api.GetActiveAgreementsAsync();
+            _tenants = await Api.GetPlatformTenantsAsync();
             _drafts.Clear();
             foreach (var item in _categories.SelectMany(c => c.Items))
                 _drafts[item.Key] = ToDisplayValue(item.EffectiveValueJson ?? item.DefaultValueJson, item.ValueType);
@@ -191,6 +267,82 @@
         {
             _loading = false;
         }
+    }
+
+    private async Task LoadTenantLimitsAsync()
+    {
+        _tenantLimitError = null;
+        _tenantLimitSuccess = null;
+        if (string.IsNullOrEmpty(_selectedTenantId) || !Guid.TryParse(_selectedTenantId, out var tenantId))
+        {
+            _tenantLimits = [];
+            _tenantLimitEdits.Clear();
+            return;
+        }
+
+        _tenantLimitsLoading = true;
+        try
+        {
+            var entitlements = await Api.GetPlatformTenantEntitlementsAsync(tenantId);
+            _tenantLimits = entitlements
+                .Where(e => string.Equals(e.Kind, "Limit", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(e => e.DisplayName ?? e.Code, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            _tenantLimitEdits.Clear();
+            foreach (var entitlement in _tenantLimits)
+                _tenantLimitEdits[entitlement.Code] = entitlement.LimitValue ?? 0;
+        }
+        catch (Exception ex)
+        {
+            _tenantLimits = [];
+            _tenantLimitError = $"Failed to load tenant limits: {ex.Message}";
+        }
+        finally
+        {
+            _tenantLimitsLoading = false;
+        }
+    }
+
+    private async Task SaveTenantLimitAsync(string code)
+    {
+        _tenantLimitError = null;
+        _tenantLimitSuccess = null;
+        if (string.IsNullOrEmpty(_selectedTenantId) || !Guid.TryParse(_selectedTenantId, out var tenantId))
+            return;
+
+        _savingTenantLimit = true;
+        try
+        {
+            var newLimit = _tenantLimitEdits.TryGetValue(code, out var value) ? value : 0;
+            if (newLimit < 0)
+            {
+                _tenantLimitError = "The limit must be zero or greater.";
+                return;
+            }
+
+            var updated = await Api.UpdatePlatformTenantEntitlementLimitAsync(tenantId, code, newLimit);
+            await LoadTenantLimitsAsync();
+            var label = updated?.DisplayName ?? code;
+            _tenantLimitSuccess = $"Updated the monthly limit for {label} to {newLimit:N0}.";
+            ShowToast($"Saved {label} monthly limit: {newLimit:N0}.", false);
+        }
+        catch (Exception ex)
+        {
+            _tenantLimitError = $"Failed to update the feature limit: {ex.Message}";
+            ShowToast($"Save failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _savingTenantLimit = false;
+        }
+    }
+
+    private void ShowToast(string message, bool isError)
+    {
+        _toast = message;
+        _toastError = isError;
+        _ = Task.Delay(4000).ContinueWith(_ => InvokeAsync(() => { _toast = null; StateHasChanged(); }));
     }
 
     private void SetCategory(string? category) => _activeCategory = category;

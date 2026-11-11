@@ -728,7 +728,8 @@ public sealed class SaasRepository(ISqlConnectionFactory connectionFactory) : IS
                 e.EntitlementKind AS Kind,
                 CAST(COALESCE(o.IsEnabled, pe.IsEnabled, 0) AS BIT) AS IsEnabled,
                 COALESCE(o.LimitValue, pe.LimitValue) AS LimitValue,
-                COALESCE(o.LimitPeriodCode, pe.LimitPeriodCode) AS LimitPeriodCode
+                COALESCE(o.LimitPeriodCode, pe.LimitPeriodCode) AS LimitPeriodCode,
+                e.DisplayName AS DisplayName
             FROM SaaS.Commerce_Entitlement e
             LEFT JOIN SaaS.Commerce_PlanEntitlement pe
                 ON pe.EntitlementId = e.EntitlementId AND pe.PlanId = @PlanId AND pe.IsDeleted = 0
@@ -740,6 +741,46 @@ public sealed class SaasRepository(ISqlConnectionFactory connectionFactory) : IS
         using var connection = await connectionFactory.CreateOpenConnectionAsync(ct);
         var rows = await connection.QueryAsync<EntitlementResolution>(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: ct));
         return rows.ToList();
+    }
+
+    public async Task<bool> UpsertTenantEntitlementLimitAsync(Guid tenantId, string entitlementCode, long limitValue, Guid? actorUserId, CancellationToken ct = default)
+    {
+        // Raises/sets the tenant's effective limit for a single entitlement via a tenant override row.
+        // ResolveEntitlementsAsync already prefers the override's LimitValue over the shared plan grant,
+        // so this never mutates plan-wide rows. Idempotent against the filtered unique index
+        // UX_Commerce_TenantEntitlementOverride (TenantId, EntitlementId) WHERE IsDeleted = 0: update the
+        // live row when present, otherwise insert one. Returns false when the entitlement code is unknown.
+        const string sql = """
+            DECLARE @EntitlementId UNIQUEIDENTIFIER = (
+                SELECT TOP 1 EntitlementId FROM SaaS.Commerce_Entitlement
+                WHERE Code = @Code AND IsDeleted = 0);
+
+            IF @EntitlementId IS NULL
+                SELECT CAST(0 AS BIT);
+            ELSE
+            BEGIN
+                IF EXISTS (SELECT 1 FROM SaaS.Commerce_TenantEntitlementOverride
+                           WHERE TenantId = @TenantId AND EntitlementId = @EntitlementId AND IsDeleted = 0)
+                    UPDATE SaaS.Commerce_TenantEntitlementOverride
+                        SET LimitValue = @LimitValue,
+                            IsEnabled = COALESCE(IsEnabled, 1),
+                            ExpiresAtUtc = NULL,
+                            ModifiedDateUtc = SYSUTCDATETIME(),
+                            ModifiedByUserId = @ActorUserId
+                    WHERE TenantId = @TenantId AND EntitlementId = @EntitlementId AND IsDeleted = 0;
+                ELSE
+                    INSERT SaaS.Commerce_TenantEntitlementOverride
+                        (OverrideId, TenantId, EntitlementId, IsEnabled, LimitValue, Reason, CreatedByUserId)
+                    VALUES
+                        (NEWID(), @TenantId, @EntitlementId, 1, @LimitValue, N'Self-service limit change from Account Settings.', @ActorUserId);
+
+                SELECT CAST(1 AS BIT);
+            END
+            """;
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(ct);
+        return await connection.ExecuteScalarAsync<bool>(new CommandDefinition(sql,
+            new { TenantId = tenantId, Code = entitlementCode, LimitValue = limitValue, ActorUserId = actorUserId },
+            cancellationToken: ct));
     }
 
     // ── Capability registry ───────────────────────────────────────────────────

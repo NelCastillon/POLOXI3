@@ -514,6 +514,7 @@ public sealed class InvitationServiceTests
         public Task CreateSubscriptionAsync(Guid tenantId, Guid planId, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<Guid?> GetActiveSubscriptionPlanIdAsync(Guid tenantId, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<IReadOnlyList<EntitlementResolution>> ResolveEntitlementsAsync(Guid tenantId, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<bool> UpsertTenantEntitlementLimitAsync(Guid tenantId, string entitlementCode, long limitValue, Guid? actorUserId, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<CapabilityDefinition?> GetCapabilityAsync(string code, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<IReadOnlyList<CapabilityDefinition>> GetCapabilitiesAsync(CancellationToken ct = default) => throw new NotSupportedException();
         public Task<long> GetMonthlyUsageAsync(Guid tenantId, string meterCode, CancellationToken ct = default) => throw new NotSupportedException();

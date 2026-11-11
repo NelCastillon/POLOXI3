@@ -116,6 +116,7 @@
                     }
                     <button class="um-btn um-btn-light um-btn-sm" @onclick="LoadAsync" disabled="@_loading" title="Refresh"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
                     <button class="um-btn um-btn-danger um-btn-sm" @onclick="() => _showDelete = true" disabled="@_busy" title="Delete matter"><i class="bi bi-trash"></i> Delete</button>
+                    <a class="um-btn um-btn-sm matter-detail-chatjudz-btn" href="@($"/legal/chatjudz?matterId={_matter.DecisionMatterId}")" title="Ask Chat Judz about this matter"><i class="bi bi-stars"></i> Chat Judz</a>
                     <button class="um-btn um-btn-sm matter-detail-run-btn matter-detail-run-btn--right @(_showRunAssessment ? "matter-detail-run-btn--open" : null)" @onclick="() => _showRunAssessment = !_showRunAssessment" disabled="@_busy" title="History & Assessment Management"><i class="bi bi-clock-history"></i> History &amp; Assessment @(_showRunAssessment ? "▲" : "▼")</button>
                 </div>
             </header>
@@ -166,6 +167,38 @@
                         <a class="um-btn um-btn-primary ms-auto" href="@($"/legal/personalinjury_decision2?matterId={_matter.DecisionMatterId}")">
                             <i class="bi bi-stars"></i> Decide in this matter using POLOXI
                         </a>
+                    </div>
+                }
+            </section>
+
+            @* ── Connected run graph (migration 0486): every result type linked to this matter. Always
+                 shown on the matter page so the connected-data story is visible even before any runs. ── *@
+            <section class="matter-detail-graph">
+                <div class="matter-detail-graph-head">
+                    <span class="matter-detail-graph-title"><i class="bi bi-diagram-3"></i> Connected run graph</span>
+                    @if (_bundle is { } b && b.ResultCounts.Count > 0)
+                    {
+                        <span class="matter-detail-graph-sub">@b.Sessions.Count @(b.Sessions.Count == 1 ? "run" : "runs") · every result linked to this matter</span>
+                    }
+                </div>
+                @if (_bundle is { } bundle && bundle.ResultCounts.Count > 0)
+                {
+                    <div class="matter-detail-graph-strip">
+                        @foreach (var c in bundle.ResultCounts)
+                        {
+                            <div class="matter-detail-graph-chip" title="@c.RecordCount records across @c.RunCount @(c.RunCount == 1 ? "run" : "runs")">
+                                <span class="matter-detail-graph-chip-count">@c.RecordCount</span>
+                                <span class="matter-detail-graph-chip-label">@ResultTypeLabel(c.ResultType)</span>
+                                <span class="matter-detail-graph-chip-runs">@c.RunCount @(c.RunCount == 1 ? "run" : "runs")</span>
+                            </div>
+                        }
+                    </div>
+                }
+                else
+                {
+                    <div class="matter-detail-graph-empty">
+                        <i class="bi bi-diagram-3"></i>
+                        <span>No connected results yet. Run a decision for this matter and every candidate, branch, evidence item, and claim it produces will link here.</span>
                     </div>
                 }
             </section>
@@ -385,6 +418,7 @@
             {
             <section class="matter-detail-history">
                 <div class="matter-detail-panel-head"><i class="bi bi-clock-history"></i> Decision history <span class="matter-detail-history-count">@_sessions.Count</span></div>
+
                 @if (_sessionsLoading)
                 {
                     <div class="matter-detail-loading" role="status" aria-live="polite"><i class="bi bi-hourglass-split"></i> Loading decision history…</div>
@@ -592,7 +626,16 @@
     private bool _toastError;
     private DecisionMatterDto? _matter;
     private IReadOnlyCollection<DecisionSessionSummaryDto> _sessions = [];
+    // Migration 0486 connected-graph bundle: matter + all runs + per-result-type counts (fail-soft).
+    private MatterRunHistoryBundleDto? _bundle;
     private DecisionMatterFacetsDto _facets = new([], [], []);
+
+    // Humanize the PascalCase result-type key returned by the bundle (e.g. "FlipPoint" -> "Flip Points").
+    private static string ResultTypeLabel(string resultType)
+    {
+        var spaced = System.Text.RegularExpressions.Regex.Replace(resultType, "(?<=[a-z])(?=[A-Z])", " ");
+        return spaced.EndsWith('s') ? spaced : spaced + "s";
+    }
     // 0455: DB-backed Domain Pack matter-type vocabulary for the normalized matter binding.
     // 0458: DB-backed broad Matter Type catalog + packs for the type -> subtype cascade.
     // 0460: canonical MatterType -> Subtype catalog (Legal_MatterSubtype) drives the cascade.
@@ -685,6 +728,7 @@
         // All independent calls run concurrently so total latency is the slowest call, not the sum.
         var matterTask = Api.GetLegalDecisionMatterAsync(MatterId);
         var sessionsTask = Api.GetLegalDecisionMatterSessionsAsync(MatterId);
+        var bundleTask = Api.GetLegalDecisionMatterRunHistoryBundleAsync(MatterId);
         var facetsTask = _lookupsLoaded ? null : Api.GetLegalDecisionMatterFacetsAsync();
         var typesTask = _lookupsLoaded ? null : Api.GetLegalDecisionMatterTypesAsync();
         var subtypesTask = _lookupsLoaded ? null : Api.GetLegalDecisionMatterSubtypesAsync();
@@ -737,6 +781,11 @@
             _sessionsLoading = false;
             StateHasChanged();
         }
+
+        // Connected graph bundle (0486). Isolated & fail-soft — a bundle failure never blocks history.
+        try { _bundle = _matter is null ? null : await bundleTask; }
+        catch { _bundle = null; }
+        StateHasChanged();
     }
 
     private async Task LoadSessionsAsync()

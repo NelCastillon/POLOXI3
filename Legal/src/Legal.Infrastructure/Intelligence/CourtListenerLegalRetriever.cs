@@ -396,8 +396,12 @@ public sealed class CourtListenerLegalRetriever(HttpClient httpClient,ILogger<Co
 
     private static string BuildTitle(CourtListenerSearchResult result)
     {
-        var name=result.CaseName ?? "CourtListener opinion";
-        return string.IsNullOrWhiteSpace(result.Court)?name:$"{name} ({result.Court})";
+        // CourtListener returns caseName with <mark> highlight tags around matched terms. Strip all markup
+        // here (same NormalizeText used for snippets) so the authority name never renders literal <mark> tags.
+        var name=NormalizeText(result.CaseName);
+        if(string.IsNullOrWhiteSpace(name))name="CourtListener opinion";
+        var court=NormalizeText(result.Court);
+        return string.IsNullOrWhiteSpace(court)?name:$"{name} ({court})";
     }
 
     private static string BuildUrl(string baseUrl,string? absoluteUrl)

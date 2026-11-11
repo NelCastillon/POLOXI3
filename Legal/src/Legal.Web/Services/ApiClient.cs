@@ -53,8 +53,8 @@ public sealed class ApiClient(HttpClient httpClient)
     public async Task<IReadOnlyCollection<WideSearchExamplePromptDto>> GetIntelligenceExamplePromptsAsync(CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<WideSearchExamplePromptDto>>("api/intelligence_wide/example_prompts",token)??[];
 
     // /legal/search Run History (per-user). Paged list, newest first.
-    public async Task<WideSearchRunHistoryPage> GetSearchRunHistoryAsync(int page=1,int pageSize=20,CancellationToken token=default)
-        =>await _httpClient.GetFromJsonAsync<WideSearchRunHistoryPage>($"api/intelligence_wide/history?page={page}&pageSize={pageSize}",token)??new WideSearchRunHistoryPage([],page,pageSize,0);
+    public async Task<WideSearchRunHistoryPage> GetSearchRunHistoryAsync(int page=1,int pageSize=20,Guid? matterId=null,CancellationToken token=default)
+        =>await _httpClient.GetFromJsonAsync<WideSearchRunHistoryPage>($"api/intelligence_wide/history?page={page}&pageSize={pageSize}{(matterId is { } m?$"&matterId={m}":string.Empty)}",token)??new WideSearchRunHistoryPage([],page,pageSize,0);
 
     // /legal/search Run History: full reopen payload (the saved WideSearchResponse). Null when not found.
     public async Task<WideSearchRunDetailDto?> GetSearchRunResultAsync(Guid wideSearchRunResultId,CancellationToken token=default)
@@ -137,6 +137,53 @@ public sealed class ApiClient(HttpClient httpClient)
         if(response.StatusCode==System.Net.HttpStatusCode.NotFound)return null;
         await EnsureSuccessWithDetailAsync(response,token);
         return await response.Content.ReadFromJsonAsync<DecisionMemoDto>(cancellationToken:token);
+    }
+
+    // Enterprise "Chat Judz" assistant (/legal/chatjudz) — posts the running transcript and returns the
+    // default-LLM reply. Throws with server detail on failure so the page can surface ex.Message.
+    public async Task<Legal.Application.Features.Intelligence.ChatJudzResponse?> ChatJudzAsync(Legal.Application.Features.Intelligence.ChatJudzRequest request,CancellationToken token=default)
+    {
+        using var response=await _httpClient.PostAsJsonAsync("api/legal_chat/judz",request,token);
+        await EnsureSuccessWithDetailAsync(response,token);
+        return await response.Content.ReadFromJsonAsync<Legal.Application.Features.Intelligence.ChatJudzResponse>(cancellationToken:token);
+    }
+
+    // Chat Judz enterprise history — the signed-in user's own conversations, newest activity first.
+    public async Task<IReadOnlyList<Legal.Application.Features.Intelligence.ChatJudzConversationSummaryDto>> GetChatJudzConversationsAsync(Guid? matterId=null,int take=50,CancellationToken token=default)
+        =>await _httpClient.GetFromJsonAsync<IReadOnlyList<Legal.Application.Features.Intelligence.ChatJudzConversationSummaryDto>>($"api/legal_chat/judz/conversations?take={take}{(matterId is { } m?$"&matterId={m}":string.Empty)}",token)??[];
+
+    // Chat Judz enterprise history — full transcript of one conversation, oldest-first.
+    public async Task<IReadOnlyList<Legal.Application.Features.Intelligence.ChatJudzTurnDto>> GetChatJudzConversationAsync(Guid conversationId,CancellationToken token=default)
+        =>await _httpClient.GetFromJsonAsync<IReadOnlyList<Legal.Application.Features.Intelligence.ChatJudzTurnDto>>($"api/legal_chat/judz/conversations/{conversationId}",token)??[];
+
+    // Chat Judz — Citation Passages history: the user's citation batches (newest first), optional matter filter.
+    public async Task<IReadOnlyList<Legal.Application.Features.Intelligence.ChatJudzCitationBatchSummaryDto>> GetChatJudzCitationBatchesAsync(Guid? matterId=null,int take=50,CancellationToken token=default)
+        =>await _httpClient.GetFromJsonAsync<IReadOnlyList<Legal.Application.Features.Intelligence.ChatJudzCitationBatchSummaryDto>>($"api/legal_chat/judz/citations?take={take}{(matterId is { } m?$"&matterId={m}":string.Empty)}",token)??[];
+
+    // Chat Judz — one reopenable Citation Passages batch (ranked authorities with facets/fit detail).
+    public async Task<Legal.Application.Features.Intelligence.ChatJudzCitationBatchDto?> GetChatJudzCitationBatchAsync(Guid citationBatchId,CancellationToken token=default)
+        =>await _httpClient.GetFromJsonAsync<Legal.Application.Features.Intelligence.ChatJudzCitationBatchDto>($"api/legal_chat/judz/citations/{citationBatchId}",token);
+
+    // Chat Judz enterprise history — soft-delete a conversation for the user.
+    public async Task DeleteChatJudzConversationAsync(Guid conversationId,CancellationToken token=default)
+    {
+        using var response=await _httpClient.DeleteAsync($"api/legal_chat/judz/conversations/{conversationId}",token);
+        await EnsureSuccessWithDetailAsync(response,token);
+    }
+
+    // Chat Judz — active chat-capable model deployments the user can select in the toolbar.
+    public async Task<IReadOnlyList<Legal.Application.Features.Intelligence.ChatJudzModelOptionDto>> GetChatJudzModelsAsync(CancellationToken token=default)
+        =>await _httpClient.GetFromJsonAsync<IReadOnlyList<Legal.Application.Features.Intelligence.ChatJudzModelOptionDto>>("api/legal_chat/judz/models",token)??[];
+
+    // Chat Judz — the user's currently selected chat model code (null => default route).
+    public async Task<string?> GetChatJudzSelectedModelAsync(CancellationToken token=default)
+        =>(await _httpClient.GetFromJsonAsync<Legal.Application.Features.Intelligence.ChatJudzSelectedModelDto>("api/legal_chat/judz/model",token))?.ModelCode;
+
+    // Chat Judz — save the user's selected chat model. Affects subsequent turns only.
+    public async Task SaveChatJudzSelectedModelAsync(string modelCode,CancellationToken token=default)
+    {
+        using var response=await _httpClient.PutAsJsonAsync("api/legal_chat/judz/model",new Legal.Application.Features.Intelligence.ChatJudzSelectedModelDto(modelCode),token);
+        await EnsureSuccessWithDetailAsync(response,token);
     }
 
     // POLOXI Legal Decision Intelligence (/legal/decision) — self-contained module.
@@ -269,6 +316,7 @@ public sealed class ApiClient(HttpClient httpClient)
         public Task<Legal.Application.Features.Intelligence.Decision.DecisionSearchResponse?> GetLegalDecisionSessionAsync(Guid sessionId,CancellationToken token=default)=>GetFromJsonWithTransientThrottleRetryAsync<Legal.Application.Features.Intelligence.Decision.DecisionSearchResponse>($"api/legal_decision/sessions/{sessionId}",token);
         public async Task<Legal.Application.Features.Intelligence.Decision.DecisionClosedLoopResultDto?> ApplyLegalDecisionVerificationAsync(Guid sessionId,Legal.Application.Features.Intelligence.Decision.DecisionVerificationChangeRequest request,CancellationToken token=default){using var response=await _httpClient.PostAsJsonAsync($"api/legal_decision/sessions/{sessionId}/verify",request,token);response.EnsureSuccessStatusCode();return await response.Content.ReadFromJsonAsync<Legal.Application.Features.Intelligence.Decision.DecisionClosedLoopResultDto>(token);}
         public async Task<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.DecisionSessionSummaryDto>> GetLegalDecisionMatterSessionsAsync(Guid matterId,CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.DecisionSessionSummaryDto>>($"api/legal_decision/matters/{matterId}/sessions",token)??[];
+        public Task<Legal.Application.Features.Intelligence.Decision.MatterRunHistoryBundleDto?> GetLegalDecisionMatterRunHistoryBundleAsync(Guid matterId,CancellationToken token=default)=>GetFromJsonWithTransientThrottleRetryAsync<Legal.Application.Features.Intelligence.Decision.MatterRunHistoryBundleDto>($"api/legal_decision/matters/{matterId}/run-history-bundle",token);
         public async Task<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.LegalDocumentDto>> GetLegalMatterDocumentsAsync(Guid matterId,CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.LegalDocumentDto>>($"api/legal_decision/matters/{matterId}/documents",token)??[];
         public async Task<Legal.Application.Features.Intelligence.Decision.Channels.ChannelScoringLpiReadModel> GetChannelScoringLpiAsync(Guid matterId,CancellationToken token=default)=>await GetFromJsonWithTransientThrottleRetryAsync<Legal.Application.Features.Intelligence.Decision.Channels.ChannelScoringLpiReadModel>($"api/legal_decision/matters/{matterId}/channel-scoring",token)??Legal.Application.Features.Intelligence.Decision.Channels.ChannelScoringLpiReadModel.Empty(matterId);
         public async Task<Legal.Application.Features.Intelligence.Decision.Channels.MatterScoringTraceReadModel> GetMatterScoringTraceAsync(Guid matterId,CancellationToken token=default)=>await GetFromJsonWithTransientThrottleRetryAsync<Legal.Application.Features.Intelligence.Decision.Channels.MatterScoringTraceReadModel>($"api/legal_decision/matters/{matterId}/scoring-trace",token)??Legal.Application.Features.Intelligence.Decision.Channels.MatterScoringTraceReadModel.Empty(matterId);
@@ -609,6 +657,10 @@ public sealed class ApiClient(HttpClient httpClient)
     public Task<Legal.Application.Features.Saas.TenantProfileDto?> GetTenantProfileAsync(CancellationToken token=default)=>_httpClient.GetFromJsonAsync<Legal.Application.Features.Saas.TenantProfileDto>("api/account_settings/profile",token);
     public async Task<Legal.Application.Features.Saas.TenantProfileDto?> UpdateTenantProfileAsync(Legal.Application.Features.Saas.UpdateTenantProfileRequest request,CancellationToken token=default){var response=await _httpClient.PutAsJsonAsync("api/account_settings/profile",request,token);await EnsureSuccessWithDetailAsync(response,token);return await response.Content.ReadFromJsonAsync<Legal.Application.Features.Saas.TenantProfileDto>(cancellationToken:token);}
 
+    // ── Effective entitlements (plan grants merged with tenant overrides) and owner/admin limit editing
+    public async Task<IReadOnlyList<Legal.Application.Features.Saas.EntitlementResolution>> GetEntitlementsAsync(CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyList<Legal.Application.Features.Saas.EntitlementResolution>>("api/gateway/entitlements",token)??[];
+    public async Task<Legal.Application.Features.Saas.EntitlementResolution?> UpdateEntitlementLimitAsync(string code,long limitValue,CancellationToken token=default){var response=await _httpClient.PutAsJsonAsync($"api/gateway/entitlements/{Uri.EscapeDataString(code)}/limit",new Legal.Application.Features.Saas.UpdateEntitlementLimitRequest(limitValue),token);await EnsureSuccessWithDetailAsync(response,token);return await response.Content.ReadFromJsonAsync<Legal.Application.Features.Saas.EntitlementResolution>(cancellationToken:token);}
+
     // ── Configuration center
     public Task<IntelligencePlatformSummaryDto?> GetIntelligencePlatformAsync(CancellationToken token=default)=>_httpClient.GetFromJsonAsync<IntelligencePlatformSummaryDto>("api/intelligence/platform",token);
     public async Task<IReadOnlyCollection<AiProviderDto>> GetIntelligenceProvidersAsync(CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<AiProviderDto>>("api/intelligence/providers",token)??[];
@@ -898,6 +950,11 @@ public sealed class ApiClient(HttpClient httpClient)
     public async Task<IReadOnlyList<Legal.Application.Features.Saas.TenantOptionDto>> GetPlatformTenantsAsync(CancellationToken token=default)
         =>await _httpClient.GetFromJsonAsync<IReadOnlyList<Legal.Application.Features.Saas.TenantOptionDto>>("api/platform_users/tenants",token)??[];
 
+    // Super-admin: effective entitlements for a specific tenant, and editing that tenant's monthly limits.
+    public async Task<IReadOnlyList<Legal.Application.Features.Saas.EntitlementResolution>> GetPlatformTenantEntitlementsAsync(Guid tenantId,CancellationToken token=default)
+        =>await _httpClient.GetFromJsonAsync<IReadOnlyList<Legal.Application.Features.Saas.EntitlementResolution>>($"api/platform_users/tenants/{tenantId}/entitlements",token)??[];
+    public async Task<Legal.Application.Features.Saas.EntitlementResolution?> UpdatePlatformTenantEntitlementLimitAsync(Guid tenantId,string code,long limitValue,CancellationToken token=default){var response=await _httpClient.PutAsJsonAsync($"api/platform_users/tenants/{tenantId}/entitlements/{Uri.EscapeDataString(code)}/limit",new Legal.Application.Features.Saas.UpdateEntitlementLimitRequest(limitValue),token);await EnsureSuccessWithDetailAsync(response,token);return await response.Content.ReadFromJsonAsync<Legal.Application.Features.Saas.EntitlementResolution>(cancellationToken:token);}
+
     public async Task<Legal.Application.Features.Saas.ProvisionMemberResult> InvitePlatformMemberAsync(Legal.Application.Features.Saas.InviteMemberRequest request,CancellationToken token=default)
         =>await PostForResultAsync<Legal.Application.Features.Saas.InviteMemberRequest,Legal.Application.Features.Saas.ProvisionMemberResult>("api/platform_users/invite",request,token);
 
@@ -952,9 +1009,7 @@ public sealed class ApiClient(HttpClient httpClient)
                 if(response.StatusCode==HttpStatusCode.TooManyRequests)
                 {
                     var detail=await response.Content.ReadAsStringAsync(token);
-                    throw new InvalidOperationException(string.IsNullOrWhiteSpace(detail)
-                        ? $"The API throttled GET {uri} after {maximumAttempts} attempts."
-                        : $"The API throttled GET {uri} after {maximumAttempts} attempts: {detail}");
+                    throw new InvalidOperationException(BuildThrottleMessage(detail,maximumAttempts));
                 }
                 await EnsureSuccessWithDetailAsync(response,token);
                 // A successful response can legitimately carry no body (HTTP 204 No Content, or an empty
@@ -991,9 +1046,7 @@ public sealed class ApiClient(HttpClient httpClient)
                 if(response.StatusCode==HttpStatusCode.TooManyRequests)
                 {
                     var detail=await response.Content.ReadAsStringAsync(token);
-                    throw new InvalidOperationException(string.IsNullOrWhiteSpace(detail)
-                        ? $"The API throttled POST {uri} after {maximumAttempts} attempts. Please wait a moment and try again."
-                        : $"The API throttled POST {uri} after {maximumAttempts} attempts: {detail}");
+                    throw new InvalidOperationException(BuildThrottleMessage(detail,maximumAttempts));
                 }
                 await EnsureSuccessWithDetailAsync(response,token);
                 if(response.StatusCode==HttpStatusCode.NoContent||response.Content.Headers.ContentLength==0)return default;
@@ -1010,6 +1063,53 @@ public sealed class ApiClient(HttpClient httpClient)
         }
         return default;
     }
+
+    // ── Friendly throttle / quota messaging ─────────────────────────────────────────────────────────
+    // Converts a raw HTTP 429 body into a user-facing message. A monthly-quota exhaustion (the SaaS
+    // CapabilityGate returns a JSON body with "meterCode"/"limit"/"message") is a billing-limit state,
+    // not a transient rate-limit, so we tell the user exactly what ran out and where to review/raise it
+    // in Settings. Anything else falls back to a generic "try again shortly" transient message.
+    private static string BuildThrottleMessage(string? detail,int attempts)
+    {
+        if(!string.IsNullOrWhiteSpace(detail))
+        {
+            try
+            {
+                using var document=System.Text.Json.JsonDocument.Parse(detail);
+                var root=document.RootElement;
+                if(root.ValueKind==System.Text.Json.JsonValueKind.Object
+                   &&root.TryGetProperty("meterCode",out var meterElement))
+                {
+                    var meter=meterElement.GetString();
+                    var limit=root.TryGetProperty("limit",out var limitElement)&&limitElement.TryGetInt64(out var limitValue)
+                        ? limitValue.ToString()
+                        : null;
+                    var feature=DescribeMeter(meter);
+                    var limitText=limit is null?string.Empty:$" of {limit} this month";
+                    return $"You've reached your monthly {feature} limit{limitText}. "
+                        +"This resets at the start of next month. "
+                        +"A workspace owner or admin can raise this limit under Settings → Account Settings (/account/settings) in the \"Monthly feature limits\" section. "
+                        +"A Super Admin can adjust any tenant's limit under Platform → Platform Configuration (/platform/configuration) in the \"Tenant limits\" section.";
+                }
+            }
+            catch(System.Text.Json.JsonException)
+            {
+                // Non-JSON 429 body — fall through to the generic transient message below.
+            }
+        }
+
+        return "The service is busy right now and the request couldn't be completed after "
+            +$"{attempts} attempts. Please wait a moment and try again.";
+    }
+
+    // Maps a SaaS customer meter code to a friendly feature name for quota messages.
+    private static string DescribeMeter(string? meterCode)=>meterCode switch
+    {
+        "research.search.run"=>"research search",
+        "legal.decision.run"=>"decision intelligence",
+        null or ""=>"usage",
+        _=>meterCode.Replace('.',' ')
+    };
 
     private static async Task EnsureSuccessWithDetailAsync(HttpResponseMessage response,CancellationToken token){if(response.IsSuccessStatusCode)return;var detail=await response.Content.ReadAsStringAsync(token);throw new InvalidOperationException(string.IsNullOrWhiteSpace(detail)?$"Request failed with status {(int)response.StatusCode}.":detail);}
 

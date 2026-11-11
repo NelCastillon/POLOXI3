@@ -183,6 +183,11 @@
                            href="@($"/legal/providercaseview{(EffectiveMatterId is { } pvId ? $"?matterId={pvId}" : string.Empty)}")">
                             <i class="bi bi-shield-lock" aria-hidden="true"></i> Provider Case Portal
                         </a>
+                        <span class="dfi-tab-sep" aria-hidden="true"></span>
+                        <a class="dfi-tab dfi-tab--chatjudz"
+                           href="@ChatJudzHref">
+                            <i class="bi bi-stars" aria-hidden="true"></i> Chat Judz
+                        </a>
                     </div>
                     }
 
@@ -459,11 +464,11 @@
                                                     </div>
                                                 </div>
                                             </div>
-                                        }
+                                                                                                          }
 
-                                        @if (_matter is not null)
-        {
-            <div class="decision-matter-banner">
+                                                                                                                                           @if (_matter is not null && _dfiTab != "Citations")
+                                                                                                          {
+                                                                                                              <div class="decision-matter-banner">
                 <i class="bi bi-file-earmark-arrow-up"></i>
                 <div class="decision-matter-banner-body">
                     <span>Matter corpus</span>
@@ -524,7 +529,7 @@
             }
         }
 
-        @if (IsSavedRunView)
+        @if (IsSavedRunView && _dfiTab != "Citations")
         {
             <section class="alert alert-info d-flex align-items-center gap-2" role="status">
                 <i class="bi bi-clock-history"></i>
@@ -538,7 +543,7 @@
                 <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_savedRunError</div>
             }
         }
-        else
+        else if (_dfiTab != "Citations")
         {
         <section class="poloxi-composer" aria-label="Wide enterprise question">
             <div class="poloxi-composer-input">
@@ -597,7 +602,7 @@
         </section>
         }
 
-        @if (_loading)
+        @if (_loading && _dfiTab != "Citations")
         {
             <section class="poloxi-loading" role="status" aria-live="polite">
                 <div class="pid2-loader pid2-loader--inline" aria-hidden="true">
@@ -629,11 +634,11 @@
             </section>
                 @GroupDetailsPanel
         }
-        else if (_error is not null)
+        else if (_error is not null && _dfiTab != "Citations")
         {
             <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_error</div>
         }
-        else if (_response is not null)
+        else if (_response is not null && _dfiTab != "Citations")
         {
             @if (_response.StatusCode == "USER_CLARIFICATION_REQUIRED" && !string.IsNullOrWhiteSpace(_response.ClarificationQuestion))
             {
@@ -2324,10 +2329,10 @@
                     <button type="button" class="um-btn um-btn-primary" @onclick="CloseAmbiguityEvidence">Close</button>
                 </div>
             </div>
-        </div>
-    }
+             </div>
+        }
 
-    <FactorReferencePopup Reference="_referenceDetail" OnClose="CloseReferenceDetail" />
+        <FactorReferencePopup Reference="_referenceDetail" OnClose="CloseReferenceDetail" />
 </LegalWorkspace>
 
 @code {
@@ -2385,6 +2390,20 @@
     // True only when Analysis History opened this page to view a saved run's complete results read-only.
     private bool IsSavedRunView => RunId is { } rid && rid != Guid.Empty
         && (string.Equals(ReadOnlyFlag, "1", StringComparison.Ordinal) || string.Equals(ReadOnlyFlag, "true", StringComparison.OrdinalIgnoreCase));
+
+    // Chat Judz tab href — forwards the current matter/run/readonly context so the chat page's
+    // "Back to Decision" link returns to the exact same view the user came from.
+    private string ChatJudzHref
+    {
+        get
+        {
+            var query = new List<string>();
+            if (EffectiveMatterId is { } mid && mid != Guid.Empty) query.Add($"matterId={mid}");
+            if (RunId is { } rid && rid != Guid.Empty) query.Add($"runId={rid}");
+            if (!string.IsNullOrWhiteSpace(ReadOnlyFlag)) query.Add($"readonly={Uri.EscapeDataString(ReadOnlyFlag)}");
+            return query.Count == 0 ? "/legal/chatjudz" : $"/legal/chatjudz?{string.Join("&", query)}";
+        }
+    }
 
     internal bool IsSavedRunViewPublic => IsSavedRunView;
 
@@ -2995,7 +3014,13 @@
     {
         if (MatterId is not { } matterId || matterId == Guid.Empty)
             return;
-        await LoadCalibrationDataAsync(matterId);
+        // Skip the calibration reload when the initial-load batch already ran it this cycle (one-shot),
+        // otherwise opening a saved run would fire the identical snapshot/change-event/review-task/delta/
+        // session/proposition-IV/NBA/what-to-resolve batch twice. Still refresh the evidence graph.
+        if (_calibrationLoadedThisCycle)
+            _calibrationLoadedThisCycle = false;
+        else
+            await LoadCalibrationDataAsync(matterId);
         if (!_evidenceGraphLoading)
             await LoadEvidenceGraphAsync();
     }
@@ -5883,6 +5908,15 @@
     internal IReadOnlyList<WideInspectorDependencyDto> DaSharedDeps => _response?.DecisionInspector?.SharedDependencies?.ToArray() ?? [];
     internal IReadOnlyList<WideInspectorDependencyDto> DaFrontierDeps => DaSharedDeps.Where(d => !string.IsNullOrWhiteSpace(d.UnresolvedInformation)).ToArray();
     internal IReadOnlyList<WideProposedAuthorityDto> DaAuthorities => _response?.ProposedLegalAuthorities?.ToArray() ?? [];
+    // External/live grounding sources surfaced below the Citations tab, mirroring the main answer page.
+    internal IReadOnlyList<WideExternalReferenceDto> DaExternalReferences => _response?.ExternalReferences?.ToArray() ?? [];
+    internal IReadOnlyList<WideExternalKnowledgeSnippet> DaExternalKnowledge => _response is null ? [] : DistinctGroundingSources(_response.ExternalKnowledge).ToArray();
+    internal string DaBranchNameWithLevel(string branchDisplayName) => BranchNameWithLevel(branchDisplayName);
+    internal Task DaOpenExternal(string url) => OpenExternal(url);
+    internal string? DaMatterContextText => _response?.MatterContext?.SerializedContext;
+    // The matter this cockpit is bound to, so matter-scoped child features (e.g. Deep Citations) can
+    // link their persisted Wide search runs back to this matter instead of recording ad-hoc searches.
+    internal Guid? DaMatterId => _matter?.DecisionMatterId ?? MatterId;
     internal IReadOnlyList<PoloxiEvidenceDto> DaEvidence => _response?.Evidence?.OrderByDescending(e => e.RelevanceScore).ToArray() ?? [];
     internal WideFactorDto? DaSelectedFactor => _daSelectedFactorId is null
         ? DaAtomicFactors.FirstOrDefault()
@@ -7961,7 +7995,15 @@
         _cdcSelectedSnapshotId ??= CdcSnapshots.FirstOrDefault()?.DecisionSnapshotId;
         _dciSelectedDeltaId ??= DciDeltas.FirstOrDefault()?.DecisionDeltaId;
         await LoadPropositionInfoValueAsync(matterId);
+        // Mark that the calibration/intelligence batch just loaded, so a same-cycle post-answer refresh
+        // (e.g. when a saved run already set _response during initial load) does not re-run the identical
+        // batch of snapshot/change-event/review-task/delta/session/proposition-IV/NBA/what-to-resolve calls.
+        _calibrationLoadedThisCycle = true;
     }
+
+    // One-shot guard: set true by LoadCalibrationDataAsync, consumed by RefreshPostAnswerIntelligenceAsync
+    // to skip a redundant immediate re-load on the same page-load cycle.
+    private bool _calibrationLoadedThisCycle;
 
     // Advisory proposition-IV load: scores the matter's atomic fact-propositions for the latest decision
     // session. Fails soft — any error leaves the panel in its empty-state without disrupting the CDC tab.

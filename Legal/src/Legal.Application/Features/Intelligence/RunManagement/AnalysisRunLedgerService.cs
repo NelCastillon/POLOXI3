@@ -14,8 +14,9 @@ public sealed class AnalysisRunLedgerService(
     public async Task<RunAssessmentPageDto> GetPageAsync(
         Guid tenantId, Guid matterId, CancellationToken cancellationToken = default)
     {
-        var matters = await decisionService.GetMattersAsync(tenantId, cancellationToken);
-        var matter = matters.FirstOrDefault(m => m.DecisionMatterId == matterId);
+        // Resolve ONLY the open matter (single-row seek) instead of loading the whole-tenant matter list
+        // and filtering in memory — the page is always scoped to one matterId.
+        var matter = await decisionService.GetMatterAsync(tenantId, matterId, cancellationToken);
 
         var title = matter?.Title ?? "Matter";
         var reference = matter?.MatterTypeCode ?? matter?.PracticeAreaCode;

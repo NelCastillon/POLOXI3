@@ -31,6 +31,27 @@
         </div>
     </header>
 
+    @* ── Connected run graph (migration 0486): every result type reachable from THIS matter. ── *@
+    @if (_bundle is { } bundle && bundle.ResultCounts.Count > 0)
+    {
+        <section class="ram-graph" aria-label="Connected run graph">
+            <div class="ram-graph-head">
+                <span class="ram-graph-title"><i class="bi bi-diagram-3"></i> Connected run graph</span>
+                <span class="ram-graph-sub">@bundle.Sessions.Count @(bundle.Sessions.Count == 1 ? "run" : "runs") · every result linked to this matter</span>
+            </div>
+            <div class="ram-graph-strip">
+                @foreach (var c in bundle.ResultCounts)
+                {
+                    <div class="ram-graph-chip" title="@c.RecordCount records across @c.RunCount @(c.RunCount == 1 ? "run" : "runs")">
+                        <span class="ram-graph-chip-count">@c.RecordCount</span>
+                        <span class="ram-graph-chip-label">@ResultTypeLabel(c.ResultType)</span>
+                        <span class="ram-graph-chip-runs">@c.RunCount @(c.RunCount == 1 ? "run" : "runs")</span>
+                    </div>
+                }
+            </div>
+        </section>
+    }
+
     @if (_loading)
     {
         <div class="ram-loading"><span class="spinner-border"></span> Loading run ledger…</div>
@@ -381,11 +402,22 @@
         ? $"/legal/runassessment?matterId={id}"
         : "/legal/runassessment";
 
+    // Humanize the PascalCase result-type key returned by the bundle (e.g. "FlipPoint" -> "Flip Points").
+    private static string ResultTypeLabel(string resultType)
+    {
+        var spaced = System.Text.RegularExpressions.Regex.Replace(resultType, "(?<=[a-z])(?=[A-Z])", " ");
+        return spaced.EndsWith('s') ? spaced : spaced + "s";
+    }
+
     private RunAssessmentPageDto? _page;
     private Guid? _selectedRunId;
     private bool _loading;
     private string? _loadError;
     private Guid? _loadedMatterId;
+
+    // Migration 0486 connected-graph bundle: matter aggregate + all runs + per-result-type counts,
+    // loaded from the single run-history-bundle endpoint. Fail-soft — a null bundle just hides the strip.
+    private Legal.Application.Features.Intelligence.Decision.MatterRunHistoryBundleDto? _bundle;
 
     private AnalysisRunDto? _pendingDeleteRun;
     private bool _deleting;
@@ -421,6 +453,10 @@
             }
 
             _page = await Api.GetLegalRunAssessmentPageAsync(matterId);
+
+            // Connected graph bundle (0486). Isolated so a bundle failure never blocks the run ledger.
+            try { _bundle = await Api.GetLegalDecisionMatterRunHistoryBundleAsync(matterId); }
+            catch { _bundle = null; }
 
             if (_page is not null && _selectedRunId is null)
                 _selectedRunId = _page.CurrentAssessment?.AnalysisRunId ?? _page.Runs.FirstOrDefault()?.AnalysisRunId;

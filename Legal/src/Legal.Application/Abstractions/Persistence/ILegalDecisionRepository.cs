@@ -50,6 +50,8 @@ public interface ILegalDecisionRepository
     Task<Guid> CreateMatterAsync(Guid tenantId, Guid userId, DecisionMatterCreateRequest request, CancellationToken cancellationToken = default);
     Task<IReadOnlyCollection<DecisionTimelineEventDto>> GetSessionTimelineAsync(Guid tenantId, Guid decisionSessionId, CancellationToken cancellationToken = default);
     Task<IReadOnlyCollection<DecisionSessionSummaryDto>> GetMatterSessionsAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default);
+    // Migration 0486: matter aggregate + all runs + per-result-type connected counts in one read.
+    Task<MatterRunHistoryBundleDto?> GetMatterRunHistoryBundleAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default);
     Task<bool> UpdateMatterAsync(Guid tenantId, Guid userId, Guid decisionMatterId, DecisionMatterUpdateRequest request, CancellationToken cancellationToken = default);
     Task<bool> UpdateMatterAdditionalNarrativeAsync(Guid tenantId, Guid userId, Guid decisionMatterId, string? additionalNarrative, CancellationToken cancellationToken = default);
     Task<bool> UpdateMatterScopeOutThresholdAsync(Guid tenantId, Guid userId, Guid decisionMatterId, decimal? matterScopeOutThreshold, CancellationToken cancellationToken = default);

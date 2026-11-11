@@ -82,8 +82,8 @@ public sealed class IntelligenceWideController(IIntelligenceWideService service,
     // Paged list of the signed-in user's own past Wide search runs, newest first.
     [HttpGet("history")]
     [Authorize(Policy=IntelligencePolicies.Search)]
-    public async Task<IActionResult> History([FromQuery]int page=1,[FromQuery]int pageSize=20,CancellationToken cancellationToken=default)
-        =>Ok(await service.GetSearchRunHistoryAsync(TenantId,ActorUserId,page,pageSize,cancellationToken));
+    public async Task<IActionResult> History([FromQuery]int page=1,[FromQuery]int pageSize=20,[FromQuery]Guid? matterId=null,CancellationToken cancellationToken=default)
+        =>Ok(await service.GetSearchRunHistoryAsync(TenantId,ActorUserId,page,pageSize,matterId,cancellationToken));
 
     // Full reopen payload (the saved WideSearchResponse) for one of the user's own runs.
     [HttpGet("history/{wideSearchRunResultId:guid}")]
