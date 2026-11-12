@@ -20,10 +20,23 @@ namespace Legal.Api.Controllers;
 // listable and reopenable. Tenant/actor are taken from the authenticated request context.
 [ApiController]
 [Route("api/legal_chat")]
-public sealed class LegalChatController(IAiProviderRouter aiProviderRouter, IChatJudzRepository history, ILegalDecisionService decisionService, IWideRunResultRepository wideRunResults, IAnalysisRunLedgerRepository runLedger) : ControllerBase
+public sealed class LegalChatController(IAiProviderRouter aiProviderRouter, IChatJudzRepository history, ILegalDecisionService decisionService, IWideRunResultRepository wideRunResults, IAnalysisRunLedgerRepository runLedger, IIntelligenceWideService wideService) : ControllerBase
 {
     // Reuses an already-seeded feature policy so the default LLM is selected without new DB seed data.
     private const string FeatureCode = "INTELLIGENCE_POLOXI_EXPLANATION";
+
+    // Deep Citation run identification. These MUST stay in sync with the Citations tab
+    // (CitationsTab.razor): a run is citation-related when it was executed in the Legal search context
+    // or began with the fixed Deep Citations prompt prefix. The left "Citation history" panel and the
+    // Citations tab both read these runs from the Wide search run ledger (POLOXI.Legal_WideSearchRunResult),
+    // which is a DIFFERENT store from the AnalysisRun ledger the chat grounds decision outcomes on. The
+    // chat must read the SAME ledger for citations so it never contradicts the visible citation history.
+    private const string LegalContextCode = "LEGAL";
+    private const string DeepCitationPromptPrefix = "List top best citations for this matter case,, ";
+
+    private static bool IsCitationRelatedWideRun(WideSearchRunSummaryDto run)
+        => (run.Query is not null && run.Query.StartsWith(DeepCitationPromptPrefix, StringComparison.Ordinal))
+           || string.Equals(run.ContextCode, LegalContextCode, StringComparison.OrdinalIgnoreCase);
 
     // Input-length guardrails. The AI router rejects a turn when systemPrompt.Length + userPrompt.Length
     // exceeds the tenant's configured MaximumInputCharacters. The matter-context block injected into the
@@ -183,7 +196,22 @@ public sealed class LegalChatController(IAiProviderRouter aiProviderRouter, ICha
             var runResultTask = LoadRunResultAsync();
             await Task.WhenAll(wideTask, runResultTask);
 
-            var wideResponses = wideTask.Result;
+            var wideResponses = wideTask.Result.ToList();
+
+            // Deep Citation grounding. The left "Citation history" panel and the Citations tab read
+            // citation runs from the Wide search run ledger (POLOXI.Legal_WideSearchRunResult), which is a
+            // SEPARATE store from the AnalysisRun ledger loaded above. Without this, the chat sees zero
+            // authorities and answers "no recorded citations" while the panel plainly shows a 25-cite Deep
+            // Citation run — a self-contradiction. Load the matter's citation-related Wide runs (same ledger),
+            // link the BEST one (highest persisted Search Quality score), and merge it so its ranked
+            // authorities ground the chat answer. Fail-soft and tenant/user scoped.
+            if (userId is { } actorId)
+            {
+                var deepCitationResponses = await LoadDeepCitationWideResponsesAsync(tenantId, actorId, matterId, cancellationToken);
+                if (deepCitationResponses.Count > 0)
+                    wideResponses.InsertRange(0, deepCitationResponses);
+            }
+
             var citations = AggregateProposedAuthorities(wideResponses);
             rankedAuthorities = AggregateInterpretiveAuthorities(wideResponses);
             var runResult = runResultTask.Result;
@@ -860,6 +888,45 @@ public sealed class LegalChatController(IAiProviderRouter aiProviderRouter, ICha
         });
         var loaded = await Task.WhenAll(fetches);
         return loaded.Where(w => w is not null).Select(w => w!).ToList();
+    }
+
+    // Loads the matter's citation-related Deep Citation runs from the Wide search run ledger
+    // (POLOXI.Legal_WideSearchRunResult) — the SAME ledger the left "Citation history" panel and the
+    // Citations tab read — and returns the full WideSearchResponse of the BEST run first (highest persisted
+    // Search Quality score, tie-broken by newest). This guarantees the chat grounds on the exact citation
+    // data the user can already see, so it can never answer "no recorded citations" while a Deep Citation run
+    // is listed. Tenant/user scoped and fail-soft: any failure yields an empty set and never blocks the turn.
+    private async Task<IReadOnlyList<WideSearchResponse>> LoadDeepCitationWideResponsesAsync(
+        Guid tenantId, Guid userId, Guid matterId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var historyPage = await wideService.GetSearchRunHistoryAsync(tenantId, userId, 1, 50, matterId, cancellationToken);
+            var citationRuns = historyPage.Items
+                .Where(IsCitationRelatedWideRun)
+                .OrderByDescending(r => r.QualityScore ?? decimal.MinValue)
+                .ThenByDescending(r => r.CreatedDateUtc)
+                .ToArray();
+            if (citationRuns.Length == 0)
+                return [];
+
+            var responses = new List<WideSearchResponse>();
+            foreach (var run in citationRuns)
+            {
+                try
+                {
+                    var detail = await wideService.GetSearchRunResultAsync(tenantId, userId, run.WideSearchRunResultId, cancellationToken);
+                    if (detail?.Response is { } response)
+                        responses.Add(response);
+                }
+                catch { /* fail-soft per run */ }
+            }
+            return responses;
+        }
+        catch
+        {
+            return [];
+        }
     }
 
     // Single-run wide citation load for when the chat was opened from a specific Decision2 run. Tenant-scoped,

@@ -38,6 +38,15 @@ public sealed class CourtListenerLegalRetriever(HttpClient httpClient,ILogger<Co
     private static IReadOnlyCollection<CourtListenerCourt>? _courtCatalog;
     private static DateTimeOffset _courtCatalogExpiresUtc=DateTimeOffset.MinValue;
 
+    // CourtListener enforces a strict anonymous rate limit, and this retriever is resolved per request and
+    // fanned out across branches (GroundingConcurrency), so independent executions otherwise burst the API
+    // in parallel and trip HTTP 429. To fix that at the source, every outbound CourtListener request is
+    // funneled through a PROCESS-WIDE gate that serializes calls and enforces a minimum spacing between them.
+    // This throttles only CourtListener traffic — it does not lower the pipeline's GroundingConcurrency or
+    // affect other providers.
+    private static readonly SemaphoreSlim RequestGate=new(1,1);
+    private static DateTimeOffset _nextRequestEarliestUtc=DateTimeOffset.MinValue;
+
     public async Task<LegalProviderRetrievalResult> SearchAsync(string query,WideLegalGroundingConfiguration configuration,CancellationToken cancellationToken=default)
         =>await SearchCoreAsync(query,configuration,null,cancellationToken);
 
@@ -179,7 +188,7 @@ public sealed class CourtListenerLegalRetriever(HttpClient httpClient,ILogger<Co
             if(!string.IsNullOrWhiteSpace(configuration.CourtListenerApiToken))
                 request.Headers.TryAddWithoutValidation("Authorization",$"Token {configuration.CourtListenerApiToken.Trim()}");
 
-            response=await httpClient.SendAsync(request,cancellationToken);
+            response=await SendThrottledAsync(request,configuration,cancellationToken);
             var retryable=response.StatusCode==HttpStatusCode.TooManyRequests||response.StatusCode==HttpStatusCode.ServiceUnavailable;
             if(!retryable||attempt>=MaxRateLimitRetries)return response;
 
@@ -187,6 +196,28 @@ public sealed class CourtListenerLegalRetriever(HttpClient httpClient,ILogger<Co
             logger.LogWarning("LEGAL-TRACE stage=4-courtlistener-retry status={StatusCode} attempt={Attempt} delayMs={DelayMs} url={Url}",(int)response.StatusCode,attempt+1,(int)delay.TotalMilliseconds,url);
             await Task.Delay(delay,cancellationToken);
         }
+    }
+
+    // Serializes outbound CourtListener requests process-wide and enforces MinRequestSpacing between the
+    // START of consecutive calls so concurrent branch grounding cannot burst the anonymous rate limit. The
+    // gate is released as soon as the next earliest-start time is reserved (not held for the whole response),
+    // so requests are paced without being fully sequentialized on slow responses.
+    private async Task<HttpResponseMessage> SendThrottledAsync(HttpRequestMessage request,WideLegalGroundingConfiguration configuration,CancellationToken cancellationToken)
+    {
+        var spacing=TimeSpan.FromMilliseconds(Math.Clamp(configuration.CourtListenerMinRequestSpacingMs,0,10000));
+        await RequestGate.WaitAsync(cancellationToken);
+        try
+        {
+            var now=DateTimeOffset.UtcNow;
+            var wait=_nextRequestEarliestUtc-now;
+            if(wait>TimeSpan.Zero)await Task.Delay(wait,cancellationToken);
+            _nextRequestEarliestUtc=DateTimeOffset.UtcNow+spacing;
+        }
+        finally
+        {
+            RequestGate.Release();
+        }
+        return await httpClient.SendAsync(request,cancellationToken);
     }
 
     // Prefers the server's Retry-After header (delta-seconds or HTTP-date); otherwise falls back to a capped

@@ -162,6 +162,78 @@
             </div>
         </div>
 
+        @* ── Deep Citation History: every Deep Citation run saved for this matter, newest first,
+             with its persisted enterprise Search Quality score. Click a run to reopen its full
+             result below. ── *@
+        @if (_deepHistory.Count > 0)
+        {
+            <div class="cit-deephist">
+                <div class="cit-deephist-head">
+                    <div class="cit-deephist-title">
+                        <span class="cit-deephist-icon"><i class="bi bi-clock-history" aria-hidden="true"></i></span>
+                        <div>
+                            <h5>Deep Citation History</h5>
+                            <span class="cit-deephist-sub">@_deepHistory.Count citation-related @(_deepHistory.Count == 1 ? "search" : "searches") · newest first</span>
+                        </div>
+                    </div>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="RefreshDeepHistoryAsync" disabled="@(_deepHistoryLoading || _deepLoading)" title="Reload Deep Citation history">
+                        @if (_deepHistoryLoading)
+                        {
+                            <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                        }
+                        else
+                        {
+                            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i>
+                        }
+                        <span>Refresh</span>
+                    </button>
+                </div>
+
+                <ul class="cit-deephist-list">
+                    @foreach (var run in _deepHistory)
+                    {
+                        var isActive = _activeHistoryRunId == run.WideSearchRunResultId;
+                        <li class="cit-deephist-card @(isActive ? "cit-deephist-card--active" : null)">
+                            <div class="cit-deephist-card-main" @onclick="() => OpenHistoryRunAsync(run)" title="Open this Deep Citation run below">
+                                <div class="cit-deephist-card-top">
+                                    <span class="cit-deephist-status cit-deephist-status--@HistoryStatusClass(run.StatusCode)">@HistoryStatusLabel(run.StatusCode)</span>
+                                    @if (run.QualityScore is { } quality)
+                                    {
+                                        var grade = string.IsNullOrWhiteSpace(run.QualityGrade) ? QualityGradeFromScore(quality) : run.QualityGrade!;
+                                        <span class="cit-deephist-quality cit-deephist-quality--@grade.ToLowerInvariant()"
+                                              title="Search quality grade @grade (@(QualityPercent(quality))%)">
+                                            <strong>@grade</strong> @(QualityPercent(quality))%
+                                        </span>
+                                    }
+                                    <span class="cit-deephist-when" title="@run.CreatedDateUtc.ToLocalTime().ToString("f")">@run.CreatedDateUtc.ToLocalTime().ToString("MMM d, yyyy · h:mm tt")</span>
+                                </div>
+                                <p class="cit-deephist-query">@DeepHistoryTitle(run)</p>
+                                @if (!string.IsNullOrWhiteSpace(run.FinalAnswer))
+                                {
+                                    <p class="cit-deephist-answer">@Truncate(run.FinalAnswer!, 160)</p>
+                                }
+                                <div class="cit-deephist-metrics">
+                                    <span title="Decision/interpretation confidence"><i class="bi bi-speedometer2"></i> @(((run.DecisionConfidence ?? run.FinalConfidence)).ToString("P0"))</span>
+                                    <span title="Ranked candidates"><i class="bi bi-trophy"></i> @run.CandidateCount</span>
+                                    <span title="Interpretation branches explored"><i class="bi bi-diagram-3"></i> @run.BranchCount</span>
+                                    <span title="Evidence items (external + enterprise)"><i class="bi bi-link-45deg"></i> @(run.ExternalEvidenceCount + run.EnterpriseEvidenceCount)</span>
+                                    <span title="LLM calls"><i class="bi bi-cpu"></i> @run.LlmCallCount</span>
+                                    <span title="Duration"><i class="bi bi-stopwatch"></i> @(TimeSpan.FromMilliseconds(run.DurationMilliseconds).TotalSeconds.ToString("0.0"))s</span>
+                                    @if (!string.IsNullOrWhiteSpace(run.ModelCodeUsed))
+                                    {
+                                        <span title="Model used"><i class="bi bi-robot"></i> @run.ModelCodeUsed</span>
+                                    }
+                                </div>
+                            </div>
+                            <div class="cit-deephist-card-actions">
+                                <button type="button" class="um-btn um-btn-sm" title="Open the exact saved result below" @onclick="() => OpenHistoryRunAsync(run)" @onclick:stopPropagation="true"><i class="bi bi-box-arrow-up-right"></i> Open</button>
+                            </div>
+                        </li>
+                    }
+                </ul>
+            </div>
+        }
+
         @if (_deepError is not null)
         {
             <div class="alert alert-danger" role="alert" style="border-left: 4px solid #dc3545;">
@@ -183,6 +255,21 @@
         @if (_deepResponse is { } resp)
         {
             <div class="cit-deep-results">
+                @* Diagnostic: shows exactly why the medal ranking summary did or did not render. The medals bind to
+                   AnswerContext.CandidateSummaries; when POLOXI answers via the fixed query contract without a
+                   Candidate × Branch competition, there are no summaries to medal. ── *@
+                <div class="dfi-panel-sub cit-deep-diagnostic" style="font-size:.78rem;opacity:.75;margin-bottom:.5rem;">
+                    <i class="bi bi-bug" aria-hidden="true"></i>
+                    Diagnostic — AnswerKind: <code>@(resp.AnswerKindCode ?? "—")</code>
+                    · AnswerContext: <code>@(resp.AnswerContext is null ? "null" : "present")</code>
+                    · CandidateSummaries: <code>@(resp.AnswerContext?.CandidateSummaries.Count ?? 0)</code>
+                    · Candidates: <code>@resp.Candidates.Count</code>
+                    · Branches: <code>@resp.Branches.Count</code>
+                    @if (resp.AnswerContext is { CandidateSummaries.Count: 0 } || resp.AnswerContext is null)
+                    {
+                        <span> — no candidate competition produced summaries, so the medal ranking is suppressed (same gate as /legal/search).</span>
+                    }
+                </div>
                 @if (resp.LegalAnswer is { } legalAnswer)
                 {
                     <section class="poloxi-answer-card poloxi-reveal">
@@ -816,7 +903,6 @@
         }
 
         @ComparisonPanel
-        @AbvActionPanel
     }
 
     @* ── External sources, live grounding, and AI-suggested authorities (mirrors the main answer page). ── *@
@@ -984,6 +1070,23 @@
     private string _filter = "ALL";
     private string _search = string.Empty;
 
+    // Exact Deep Citations prompt prefix. Deep Citation runs are the only runs that start with this
+    // text, so it also identifies Deep Citation runs in Search History (used by rehydration to avoid
+    // adopting the Decision2 single-submit run as if it were a Deep Citation result).
+    private const string DeepCitationPromptPrefix = "List top best citations for this matter case,, ";
+
+    // Canonical Legal search context code (POLOXI.Legal_SearchContext.ContextCode). Any /legal/search run
+    // executed in this context is citation/legal-authority related and surfaces in the Citations tab.
+    private const string LegalContextCode = "LEGAL";
+
+    // A run belongs in the Citations tab's Deep Citation History when it is either an explicit Deep
+    // Citations run (fixed prompt prefix) OR any run executed in the Legal search context — regardless of
+    // where it was generated (/legal/search or this tab). ContextCode is stamped at save time, so the
+    // link is deterministic and bidirectional without matter scoping or heuristics.
+    private static bool IsCitationRelatedRun(WideSearchRunSummaryDto run)
+        => (run.Query is not null && run.Query.StartsWith(DeepCitationPromptPrefix, StringComparison.Ordinal))
+           || string.Equals(run.ContextCode, LegalContextCode, StringComparison.OrdinalIgnoreCase);
+
     // ── Deep Citations state ──
     private IReadOnlyCollection<WideModelOptionDto> _models = [];
     private string _deepText = string.Empty;
@@ -992,6 +1095,13 @@
     private string? _deepError;
     private WideSearchResponse? _deepResponse;
     private bool _modelsLoaded;
+
+    // ── Deep Citation History state ──
+    // All Deep Citation runs saved for this matter (newest first), each carrying its persisted
+    // enterprise Search Quality score/grade (0475). Clicking a row rehydrates its full result below.
+    private readonly List<WideSearchRunSummaryDto> _deepHistory = [];
+    private bool _deepHistoryLoading;
+    private Guid? _activeHistoryRunId;
 
     // Deterministic final ranking (mirrors /legal/search): filter constraint violations, order by rank, take 10.
     private static IReadOnlyList<WideCandidateDto> DeepRankedCandidates(WideSearchResponse resp)
@@ -1184,164 +1294,6 @@
         }
     </text>;
 
-    private RenderFragment AbvActionPanel =>@<text>
-        @if (_deepResponse?.AbvAction is { } abv)
-        {
-            <div class="poloxi-answer-section poloxi-reveal">
-                <h3><i class="bi bi-flag"></i> ABV (Action Business Plan)</h3>
-                @if (string.Equals(abv.StatusCode, "Resolved", StringComparison.OrdinalIgnoreCase))
-                {
-                    <p class="poloxi-abv-narrative">@AbvNarrative(abv)</p>
-                    <ol class="poloxi-abv-plan">
-                        <li>
-                            <strong>Confirm the decision.</strong>
-                            POLOXI reads this request as an intent to
-                            <em>@((abv.IntentName ?? abv.IntentCode ?? "act").ToLowerInvariant())</em>.
-                            @if (!string.IsNullOrWhiteSpace(abv.IntentRationale))
-                            {
-                                <span>Rationale: @abv.IntentRationale</span>
-                            }
-                        </li>
-                        <li>
-                            <strong>Weigh the exposure.</strong>
-                            This decision carries a <em>@(abv.ImpactTierCode ?? "n/a")</em> business impact@(abv.MetricAtRisk is not null ? $" against {abv.MetricAtRisk}" : "")@(abv.EstimatedExposure is { } exp ? $", with an estimated exposure of {exp:C0}" : ", with no monetary exposure quantified from admitted evidence").
-                        </li>
-                        <li>
-                            <strong>Respect the clock.</strong>
-                            Treat this as <em>@(abv.PriorityCode ?? "standard")</em> priority@(abv.SlaHours is { } sla ? $" and resolve within the {sla}-hour SLA" : "")@(abv.UrgencyPolicyCode is not null ? $" (policy {abv.UrgencyPolicyCode})" : "").
-                        </li>
-                        <li>
-                            <strong>Assign ownership.</strong>
-                            Route this to the <em>@(abv.OwnerRole ?? "responsible owner")</em>@(abv.OwnerRole is null ? " (no owner mapping configured for this intent/impact)" : "") for action.
-                        </li>
-                        <li>
-                            <strong>Execute the next action.</strong>
-                            @(abv.NextStep ?? abv.ActionCode ?? "Proceed per standard operating procedure.")
-                            @if (!string.IsNullOrWhiteSpace(abv.PlaybookCode))
-                            {
-                                <span>Follow playbook <strong>@abv.PlaybookCode</strong>.</span>
-                            }
-                        </li>
-                        <li>
-                            <strong>Governance gate.</strong>
-                            @(abv.ExecutionAllowed ? "Automated execution is permitted for this action." : "Automated execution is not permitted — this action must be carried out manually.")
-                            @(abv.HumanApprovalRequired ? " A human approval is required before it proceeds." : " No additional approval step is configured.")
-                        </li>
-                    </ol>
-                    <div class="poloxi-abv-grid">
-                        @if (abv.IntentName is not null || abv.IntentCode is not null)
-                        {
-                            <div class="poloxi-abv-item">
-                                <span class="poloxi-abv-label"><i class="bi bi-bullseye"></i> Intent</span>
-                                <span class="poloxi-abv-value">@(abv.IntentName ?? abv.IntentCode)@(abv.IntentCode is not null && abv.IntentName is not null ? $" ({abv.IntentCode})" : "")</span>
-                                @if (abv.IntentSourceCode is not null)
-                                {
-                                    <span class="poloxi-abv-source" title="Provenance">@abv.IntentSourceCode</span>
-                                }
-                            </div>
-                        }
-                        @if (abv.ImpactTierCode is not null)
-                        {
-                            <div class="poloxi-abv-item">
-                                <span class="poloxi-abv-label"><i class="bi bi-graph-up-arrow"></i> Impact</span>
-                                <span class="poloxi-abv-value">@abv.ImpactTierCode@(abv.MetricAtRisk is not null ? $" · {abv.MetricAtRisk}" : "")@(abv.EstimatedExposure is { } exposure ? $" · {exposure:C0}" : "")</span>
-                                @if (abv.ImpactSourceCode is not null)
-                                {
-                                    <span class="poloxi-abv-source" title="Provenance">@abv.ImpactSourceCode</span>
-                                }
-                            </div>
-                        }
-                        @if (abv.PriorityCode is not null)
-                        {
-                            <div class="poloxi-abv-item">
-                                <span class="poloxi-abv-label"><i class="bi bi-alarm"></i> Urgency</span>
-                                <span class="poloxi-abv-value">@abv.PriorityCode@(abv.SlaHours is { } slaHours ? $" · SLA {slaHours}h" : "")@(abv.UrgencyPolicyCode is not null ? $" · {abv.UrgencyPolicyCode}" : "")</span>
-                                @if (abv.UrgencySourceCode is not null)
-                                {
-                                    <span class="poloxi-abv-source" title="Provenance">@abv.UrgencySourceCode</span>
-                                }
-                            </div>
-                        }
-                        @if (abv.OwnerRole is not null)
-                        {
-                            <div class="poloxi-abv-item">
-                                <span class="poloxi-abv-label"><i class="bi bi-person-badge"></i> Owner</span>
-                                <span class="poloxi-abv-value">@abv.OwnerRole</span>
-                                @if (abv.OwnerSourceCode is not null)
-                                {
-                                    <span class="poloxi-abv-source" title="Provenance">@abv.OwnerSourceCode</span>
-                                }
-                            </div>
-                        }
-                        @if (abv.NextStep is not null || abv.ActionCode is not null)
-                        {
-                            <div class="poloxi-abv-item">
-                                <span class="poloxi-abv-label"><i class="bi bi-arrow-right-circle"></i> Next action</span>
-                                <span class="poloxi-abv-value">@(abv.NextStep ?? abv.ActionCode)@(abv.ActionCode is not null && abv.NextStep is not null ? $" ({abv.ActionCode})" : "")</span>
-                                @if (abv.ExecutionSourceCode is not null)
-                                {
-                                    <span class="poloxi-abv-source" title="Provenance">@abv.ExecutionSourceCode</span>
-                                }
-                            </div>
-                        }
-                        @if (!string.IsNullOrWhiteSpace(abv.PlaybookCode))
-                        {
-                            <div class="poloxi-abv-item">
-                                <span class="poloxi-abv-label"><i class="bi bi-journal-text"></i> Playbook</span>
-                                <span class="poloxi-abv-value">@abv.PlaybookCode</span>
-                            </div>
-                        }
-                        <div class="poloxi-abv-item">
-                            <span class="poloxi-abv-label"><i class="bi bi-shield-check"></i> Governance</span>
-                            <span class="poloxi-abv-value">@(abv.ExecutionAllowed ? "Auto-execute allowed" : "Manual execution")@(abv.HumanApprovalRequired ? " · Human approval required" : " · No approval gate")</span>
-                            <span class="poloxi-abv-source" title="Actionability">@abv.ActionabilityStatusCode</span>
-                        </div>
-                    </div>
-                    <p class="poloxi-abv-note"><i class="bi bi-shield-lock"></i> Review only — POLOXI proposes; a human approves. Every business value above resolves deterministically from Domain-Pack configuration with explicit provenance, and is never invented.</p>
-                }
-                else
-                {
-                    <p class="poloxi-abv-note"><i class="bi bi-info-circle"></i> No actionable business value was resolved for this answer (@abv.ActionabilityStatusCode)@(abv.FailureMessage is not null ? $": {abv.FailureMessage}" : ".")</p>
-                }
-            </div>
-        }
-    </text>;
-
-    // Composes the ABV into a single, readable executive-summary paragraph.
-    private static string AbvNarrative(WideAbvActionDto abv)
-    {
-        var sb = new System.Text.StringBuilder();
-        var intent = abv.IntentName ?? abv.IntentCode ?? "act on this decision";
-        sb.Append($"POLOXI recommends a business response to {intent.ToLowerInvariant()}. ");
-        if (abv.ImpactTierCode is not null)
-        {
-            sb.Append($"The decision is assessed as {abv.ImpactTierCode.ToLowerInvariant()} impact");
-            if (abv.MetricAtRisk is not null) sb.Append($" to {abv.MetricAtRisk}");
-            if (abv.EstimatedExposure is { } exp) sb.Append($", with an estimated exposure of {exp:C0}");
-            sb.Append(". ");
-        }
-        if (abv.PriorityCode is not null)
-        {
-            sb.Append($"It should be handled at {abv.PriorityCode.ToLowerInvariant()} priority");
-            if (abv.SlaHours is { } sla) sb.Append($" within a {sla}-hour SLA");
-            sb.Append(". ");
-        }
-        if (abv.OwnerRole is not null)
-            sb.Append($"Ownership sits with the {abv.OwnerRole}. ");
-        var next = abv.NextStep ?? abv.ActionCode;
-        if (!string.IsNullOrWhiteSpace(next))
-            sb.Append($"The recommended next action is: {next}. ");
-        if (!string.IsNullOrWhiteSpace(abv.PlaybookCode))
-            sb.Append($"Execute using playbook {abv.PlaybookCode}. ");
-        sb.Append(abv.ExecutionAllowed
-            ? "Automated execution is permitted"
-            : "This action must be executed manually");
-        sb.Append(abv.HumanApprovalRequired
-            ? ", but only after a human approves it."
-            : ", with no further approval gate configured.");
-        return sb.ToString();
-    }
-
     protected override async Task OnInitializedAsync()
     {
         if (_modelsLoaded)
@@ -1362,29 +1314,143 @@
         await RehydrateLatestDeepCitationsAsync();
     }
 
-    // Reloads the newest matter-scoped Deep Citations run from Search History into _deepResponse so the
-    // bottom-of-tab result survives navigation. Fail-soft: any error simply leaves the panel empty.
+    // Reloads the newest citation-related run from Search History into _deepResponse so the bottom-of-tab
+    // result survives navigation. Fail-soft: any error simply leaves the panel empty.
     private async Task RehydrateLatestDeepCitationsAsync()
     {
-        if (_deepResponse is not null || _deepLoading)
-            return;
-        if (Owner.DaMatterId is not { } matterId || matterId == Guid.Empty)
-            return;
         try
         {
-            var history = await Api.GetSearchRunHistoryAsync(page: 1, pageSize: 1, matterId: matterId);
-            var latest = history.Items.FirstOrDefault();
-            if (latest is null)
-                return;
-            var detail = await Api.GetSearchRunResultAsync(latest.WideSearchRunResultId);
-            if (detail?.Response is { } response)
-                _deepResponse = response;
+            // Global history (no matter filter): citation-related runs appear in every matter's Citations
+            // tab regardless of where they were generated. Scoping is by Legal context / Deep Citation
+            // prefix, not by MatterId, so a /legal/search Legal run and a Deep Citations run both surface.
+            var history = await Api.GetSearchRunHistoryAsync(page: 1, pageSize: 50);
+            // Only adopt citation-related runs — never the Decision2 single-submit (Wide2) run, which also
+            // writes history rows. Citation runs are identified by the Deep Citation prefix OR Legal context.
+            var deepRuns = history.Items
+                .Where(IsCitationRelatedRun)
+                .OrderByDescending(item => item.CreatedDateUtc)
+                .ToArray();
+
+            _deepHistory.Clear();
+            _deepHistory.AddRange(deepRuns);
+
+            // Rehydrate the latest run into the result panel when nothing is loaded yet, so the
+            // result persists across tab switches.
+            if (_deepResponse is null && !_deepLoading && deepRuns.Length > 0)
+            {
+                var detail = await Api.GetSearchRunResultAsync(deepRuns[0].WideSearchRunResultId);
+                if (detail?.Response is { } response)
+                {
+                    _deepResponse = response;
+                    _activeHistoryRunId = deepRuns[0].WideSearchRunResultId;
+                }
+            }
         }
         catch
         {
             // Advisory rehydration only — never block the tab if history is unavailable.
         }
     }
+
+    // Reload the Deep Citation history list on demand (user-triggered refresh).
+    private async Task RefreshDeepHistoryAsync()
+    {
+        if (_deepHistoryLoading)
+            return;
+        _deepHistoryLoading = true;
+        try
+        {
+            // Global history (no matter filter) so citation-related runs from /legal/search and this tab
+            // both appear, matched by the shared citation predicate (Deep Citation prefix OR Legal context).
+            var history = await Api.GetSearchRunHistoryAsync(page: 1, pageSize: 50);
+            var deepRuns = history.Items
+                .Where(IsCitationRelatedRun)
+                .OrderByDescending(item => item.CreatedDateUtc)
+                .ToArray();
+            _deepHistory.Clear();
+            _deepHistory.AddRange(deepRuns);
+        }
+        catch (Exception ex)
+        {
+            _deepError = $"Could not refresh Deep Citation history: {ex.Message}";
+        }
+        finally
+        {
+            _deepHistoryLoading = false;
+        }
+    }
+
+    // Load a previously saved Deep Citation run into the result panel below.
+    private async Task OpenHistoryRunAsync(WideSearchRunSummaryDto run)
+    {
+        if (_deepLoading || run.WideSearchRunResultId == _activeHistoryRunId)
+            return;
+        _deepLoading = true;
+        _deepError = null;
+        try
+        {
+            var detail = await Api.GetSearchRunResultAsync(run.WideSearchRunResultId);
+            if (detail?.Response is { } response)
+            {
+                _deepResponse = response;
+                _activeHistoryRunId = run.WideSearchRunResultId;
+            }
+            else
+            {
+                _deepError = "This Deep Citation run could not be loaded.";
+            }
+        }
+        catch (Exception ex)
+        {
+            _deepError = $"Could not open Deep Citation run: {ex.Message}";
+        }
+        finally
+        {
+            _deepLoading = false;
+        }
+    }
+
+    // Display title for a saved Deep Citation run (prompt prefix stripped, trimmed to a readable length).
+    private static string DeepHistoryTitle(WideSearchRunSummaryDto run)
+    {
+        var q = run.Query ?? string.Empty;
+        if (q.StartsWith(DeepCitationPromptPrefix, StringComparison.Ordinal))
+            q = q[DeepCitationPromptPrefix.Length..].Trim();
+        if (string.IsNullOrWhiteSpace(q))
+            return "Deep Citation search";
+        return q.Length > 160 ? q[..160].TrimEnd() + "…" : q;
+    }
+
+    // Quality percent for the chip. QualityScore is persisted as a 0–1 fraction (identical to the
+    // /legal/search Search History badge), so render it as score × 100.
+    private static int QualityPercent(decimal score) => (int)Math.Round(score * 100m);
+    private static string QualityGradeFromScore(decimal score) => score switch
+    {
+        >= 0.90m => "A",
+        >= 0.80m => "B",
+        >= 0.70m => "C",
+        >= 0.60m => "D",
+        _ => "F"
+    };
+
+    // Status label/class for the history card (mirrors /legal/search Search History).
+    private static string HistoryStatusLabel(string? statusCode) => statusCode switch
+    {
+        null or "" => "Completed",
+        "USER_CLARIFICATION_REQUIRED" => "Clarification",
+        _ => System.Globalization.CultureInfo.CurrentCulture.TextInfo.ToTitleCase(statusCode.Replace('_', ' ').ToLowerInvariant()),
+    };
+
+    private static string HistoryStatusClass(string? statusCode) => statusCode switch
+    {
+        "USER_CLARIFICATION_REQUIRED" => "clarify",
+        "FAILED" or "ERROR" => "failed",
+        "CANCELLED" => "cancelled",
+        _ => "ok",
+    };
+
+    private static string Truncate(string value, int max)
+        => value.Length <= max ? value : value[..max].TrimEnd() + "…";
 
 
     // Build the prompt from the box above, run it through the same POLOXI "Legal" search pipeline used by
@@ -1395,7 +1461,7 @@
         if (string.IsNullOrWhiteSpace(context) || _deepLoading)
             return;
 
-        const string promptPrefix = "Rank the best legal citations for this matter case as a ranked list of authorities (entity ranking), ";
+        const string promptPrefix = DeepCitationPromptPrefix;
         const int maxPromptLength = 4000;
         // The API caps Query at 4000 chars. Trim the context so prefix + context never exceeds it.
         var budget = maxPromptLength - promptPrefix.Length;
@@ -1412,7 +1478,7 @@
                 new(Guid.Empty, Guid.Empty, prompt, 50, Guid.NewGuid().ToString("N"))
                 {
                     ModelCode = string.IsNullOrWhiteSpace(_deepModelCode) ? "gpt-4.1-mini" : _deepModelCode,
-                    ContextCode = "Legal",
+                    ContextCode = "LEGAL",
                     ConversationId = Guid.NewGuid(),
                     // Link this Deep Citations run to the current matter so the saved /legal/search run
                     // history row relates back to this Matter instead of being an ad-hoc search.
@@ -1426,6 +1492,14 @@
         finally
         {
             _deepLoading = false;
+        }
+
+        // Refresh the history so the newly-saved run (with its persisted quality score) appears
+        // and is marked active. Fail-soft: run display already succeeded above.
+        if (_deepResponse is not null)
+        {
+            await RefreshDeepHistoryAsync();
+            _activeHistoryRunId = _deepHistory.Count > 0 ? _deepHistory[0].WideSearchRunResultId : null;
         }
     }
 

@@ -44,7 +44,7 @@
                 </label>
                 <label class="poloxi-model-select" title="Choose the search context. General uses the standard web grounding; Legal grounds answers in CourtListener case law and GovInfo/eCFR statutes and regulations.">
                     <i class="bi bi-bank" aria-hidden="true"></i>
-                    <select @bind="_selectedContextCode" aria-label="Context">
+                    <select @bind="_selectedContextCode" @bind:after="OnContextChangedAsync" aria-label="Context">
                         @foreach (var context in _contexts)
                         {
                             <option value="@context.ContextCode">@context.DisplayName</option>
@@ -68,6 +68,70 @@
                     }
                 </button>
             </div>
+            @if (IsLegalContext)
+            {
+                <div class="poloxi-matter-link" aria-label="Link this search to a matter">
+                    <div class="poloxi-matter-head">
+                        <div class="poloxi-matter-title">
+                            <i class="bi bi-folder2-open" aria-hidden="true"></i>
+                            <div>
+                                <strong>Link to a matter</strong>
+                                <span>Legal searches you link appear in that matter's Citations tab history.</span>
+                            </div>
+                        </div>
+                        @if (_selectedMatter is { } linked)
+                        {
+                            <span class="poloxi-matter-chip" title="@linked.Title">
+                                <i class="bi bi-link-45deg" aria-hidden="true"></i>
+                                <span>@linked.Title</span>
+                                <button type="button" class="poloxi-matter-chip-clear" title="Unlink matter" @onclick="ClearSelectedMatter"><i class="bi bi-x-lg"></i></button>
+                            </span>
+                        }
+                    </div>
+                    @if (_selectedMatter is null)
+                    {
+                        <div class="poloxi-matter-search">
+                            <i class="bi bi-search" aria-hidden="true"></i>
+                            <input type="search" class="poloxi-matter-input"
+                                   placeholder="Search matters by title, type, or jurisdiction…"
+                                   value="@_matterSearch" @oninput="OnMatterSearchInput"
+                                   @onfocus="() => _matterMenuOpen = true"
+                                   aria-label="Search matters" />
+                            @if (_matterSearch.Length > 0)
+                            {
+                                <button type="button" class="poloxi-matter-input-clear" title="Clear" @onclick="ClearMatterSearch"><i class="bi bi-x-lg"></i></button>
+                            }
+                        </div>
+                        @if (_matterMenuOpen)
+                        {
+                            <div class="poloxi-matter-menu" role="listbox">
+                                @if (_mattersLoading)
+                                {
+                                    <div class="poloxi-matter-state"><i class="bi bi-arrow-repeat poloxi-matter-spin"></i> Loading matters…</div>
+                                }
+                                else if (FilteredMatters.Count == 0)
+                                {
+                                    <div class="poloxi-matter-state">No matters match &ldquo;@_matterSearch&rdquo;.</div>
+                                }
+                                else
+                                {
+                                    @foreach (var matter in FilteredMatters)
+                                    {
+                                        <button type="button" class="poloxi-matter-option" role="option" @onclick="() => SelectMatter(matter)">
+                                            <span class="poloxi-matter-option-title">@matter.Title</span>
+                                            <span class="poloxi-matter-option-meta">
+                                                @if (!string.IsNullOrWhiteSpace(matter.MatterTypeCode)) { <span>@matter.MatterTypeCode</span> }
+                                                @if (!string.IsNullOrWhiteSpace(matter.Jurisdiction)) { <span>@matter.Jurisdiction</span> }
+                                                <span class="poloxi-matter-option-status">@matter.StatusCode</span>
+                                            </span>
+                                        </button>
+                                    }
+                                }
+                            </div>
+                        }
+                    }
+                </div>
+            }
         </section>
 
         @HistoryPanel
@@ -2084,6 +2148,97 @@
     private IReadOnlyCollection<WideModelOptionDto> _models = [];
     private string _selectedContextCode = "GENERAL";
     private IReadOnlyCollection<WideSearchContextDto> _contexts = [];
+
+    // ── Matter linking (Legal context only) ─────────────────────────────────────
+    // When the Legal context is active, the user can link the search to a matter. The selected matter's
+    // id is sent as WideSearchRequest.MatterId so the run is persisted against that matter and surfaces in
+    // the matter's Citations tab Deep Citation History (same shared Wide history ledger).
+    private IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.DecisionMatterDto> _matters = [];
+    private bool _mattersLoaded;
+    private bool _mattersLoading;
+    private string _matterSearch = "";
+    private bool _matterMenuOpen;
+    private Legal.Application.Features.Intelligence.Decision.DecisionMatterDto? _selectedMatter;
+
+    private bool IsLegalContext => string.Equals(_selectedContextCode, "LEGAL", StringComparison.OrdinalIgnoreCase);
+
+    private IReadOnlyList<Legal.Application.Features.Intelligence.Decision.DecisionMatterDto> FilteredMatters
+    {
+        get
+        {
+            var term = _matterSearch.Trim();
+            var source = _matters.AsEnumerable();
+            if (term.Length > 0)
+            {
+                source = source.Where(m =>
+                    (m.Title?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
+                    || (m.MatterTypeCode?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
+                    || (m.Jurisdiction?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
+                    || (m.Description?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false));
+            }
+            return source.OrderByDescending(m => m.ModifiedDateUtc ?? m.CreatedDateUtc).Take(50).ToList();
+        }
+    }
+
+    // Fired when the context dropdown changes; when switching to Legal, preload the matter list so the
+    // dynamic-search dropdown is populated immediately for linking.
+    private async Task OnContextChangedAsync()
+    {
+        if (IsLegalContext)
+        {
+            await EnsureMattersLoadedAsync();
+        }
+        else
+        {
+            // Leaving the Legal context clears any pending matter link so a General search never carries one.
+            _selectedMatter = null;
+            _matterMenuOpen = false;
+        }
+    }
+
+    private async Task EnsureMattersLoadedAsync()
+    {
+        if (_mattersLoaded || _mattersLoading) return;
+        _mattersLoading = true;
+        try
+        {
+            _matters = await Api.GetLegalDecisionMattersAsync();
+            _mattersLoaded = true;
+        }
+        catch
+        {
+            _matters = [];
+        }
+        finally
+        {
+            _mattersLoading = false;
+        }
+    }
+
+    private void OnMatterSearchInput(ChangeEventArgs e)
+    {
+        _matterSearch = e.Value?.ToString() ?? "";
+        _matterMenuOpen = true;
+    }
+
+    private void ClearMatterSearch()
+    {
+        _matterSearch = "";
+        _matterMenuOpen = true;
+    }
+
+    private void SelectMatter(Legal.Application.Features.Intelligence.Decision.DecisionMatterDto matter)
+    {
+        _selectedMatter = matter;
+        _matterMenuOpen = false;
+        _matterSearch = "";
+    }
+
+    private void ClearSelectedMatter()
+    {
+        _selectedMatter = null;
+        _matterMenuOpen = true;
+    }
     private bool _loading, _usePoloxiEngine = true;
     private bool _showPipeline;
     // V2.9 two-view UX: consumer Answer view by default; the full POLOXI Analysis stays one click away.
@@ -2581,6 +2736,8 @@
             if (defaultContext is not null) _selectedContextCode = defaultContext.ContextCode;
         }
         catch { _contexts = []; }
+        // If the page defaults to the Legal context, preload matters so the link dropdown is ready.
+        if (IsLegalContext) await EnsureMattersLoadedAsync();
     }
 
     private async Task SearchAsync()
@@ -2592,6 +2749,10 @@
         _clarificationAnswer = "";
         // Clicking "Let's Go" closes the Search History panel so the new result displays on top.
         _showHistory = false;
+        // Clear any previously reopened/saved run so the stale snapshot and its banner do not linger
+        // while the new search runs — the loading state only takes over when there is no prior response.
+        _reopenedRun = null;
+        _response = null;
         // A brand-new search starts a fresh conversation thread.
         _thread.Clear();
         _expandedTurns.Clear();
@@ -2606,7 +2767,7 @@
         var userText = _query.Trim();
         try
         {
-            _response = await Api.IntelligentSearchWideDynamicAsync(new(Guid.Empty, Guid.Empty, userText, 50, Guid.NewGuid().ToString("N")) { UsePoloxiEngine = _usePoloxiEngine, ModelCode = string.IsNullOrWhiteSpace(_selectedModelCode) ? "gpt-4.1-mini" : _selectedModelCode, ContextCode = _selectedContextCode, ConversationId = _conversationId }, _searchCancellation.Token);
+            _response = await Api.IntelligentSearchWideDynamicAsync(new(Guid.Empty, Guid.Empty, userText, 50, Guid.NewGuid().ToString("N")) { UsePoloxiEngine = _usePoloxiEngine, ModelCode = string.IsNullOrWhiteSpace(_selectedModelCode) ? "gpt-4.1-mini" : _selectedModelCode, ContextCode = _selectedContextCode, ConversationId = _conversationId, MatterId = IsLegalContext ? _selectedMatter?.DecisionMatterId : null, BypassCache = true }, _searchCancellation.Token);
             RecordTurn(userText, isFollowUp: false, startedNewSegment: false);
         }
         catch (OperationCanceledException)
@@ -2871,7 +3032,13 @@
             _threadRootModelCode = _selectedModelCode ?? "";
             if (!string.IsNullOrWhiteSpace(detail.ContextCode))
             {
-                _selectedContextCode = detail.ContextCode!;
+                // Resolve the saved context against the known options case-insensitively so the Context
+                // dropdown selects the matching option instead of rendering empty when a run was saved with
+                // a differently-cased code (e.g. legacy Deep Citation runs saved "Legal" vs canonical "LEGAL").
+                var matchedContext = _contexts.FirstOrDefault(c =>
+                    string.Equals(c.ContextCode, detail.ContextCode, StringComparison.OrdinalIgnoreCase));
+                _selectedContextCode = matchedContext?.ContextCode ?? detail.ContextCode!;
+                _threadRootContextCode = _selectedContextCode;
             }
 
             if (detail.ConversationId is { } conversationId)

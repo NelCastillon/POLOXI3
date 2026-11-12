@@ -56,6 +56,11 @@ public sealed record WideSearchRequest(Guid TenantId,Guid UserId,[Required,Strin
     // fields into the Astra proposal prompt. The original user Query is preserved verbatim and is never
     // suppressed by the matter context; loading is fail-soft so an unavailable matter never breaks search.
     public Guid? MatterId{get;init;}
+    // Fresh-run override: when true, the pipeline skips all reuse/caching so every run produces an
+    // independently retrieved result. This bypasses the external-knowledge snippet cache for branch
+    // grounding and seed verification, forcing live provider retrieval. Default false = existing
+    // cache-first behavior. Use for deliberate re-runs where a different result each time is the goal.
+    public bool BypassCache{get;init;}
     // ADDITIVE Domain Pack mode (default false = existing behavior, byte-for-byte unchanged prompts).
     // When true, the WIDE proposal stages (intent + hierarchy) prepend the stored Domain Pack overlay
     // (DECISION_DISCOVERY_DOMAIN_PACK_V1) plus the complete active SELECTED_DOMAIN_PACK configuration,
@@ -1608,7 +1613,13 @@ public sealed record WideLegalGroundingConfiguration(
     string GovInfoApiKey,
     string EcfrBaseUrl,
     bool CornellLiiEnabled,
-    string CornellLiiBaseUrl);
+    string CornellLiiBaseUrl,
+    // Minimum spacing (milliseconds) enforced between the START of consecutive CourtListener requests,
+    // process-wide, so concurrent branch grounding cannot burst the strict anonymous rate limit and trip
+    // HTTP 429 (DB-seeded; key Intelligence.SearchWide.LegalGrounding.CourtListener.MinRequestSpacingMs).
+    // Default 1200ms. Throttles only CourtListener traffic; it does not affect GroundingConcurrency or
+    // any other provider.
+    int CourtListenerMinRequestSpacingMs = 1200);
 
 public sealed record LegalAuthoritySourceDescriptor(
     Guid LegalAuthoritySourceId,

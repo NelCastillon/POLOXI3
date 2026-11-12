@@ -339,13 +339,25 @@
     public string? ReadOnlyFlag { get; set; }
 
     private readonly List<ChatMessageVm> _messages = new();
-    private readonly string[] _suggestions =
+
+    // The two action prompts stay fixed; the remaining four are regenerated from the current matter's
+    // factors (BuildMatterSuggestions) so the empty-state chips are always relevant to THIS case. When no
+    // matter is linked (or it cannot be loaded) we fall back to the generic personal-injury prompts.
+    private static readonly string[] ActionSuggestions =
+    {
+        "create a premium brief for this matter",
+        "list all citations and link the passages to the matter"
+    };
+
+    private static readonly string[] GenericSuggestions =
     {
         "Summarize the strengths and weaknesses of a rear-end collision claim.",
         "Draft a professional email requesting updated medical records from a provider.",
         "What evidence strengthens a premises-liability slip-and-fall case?",
         "Outline next steps after a defendant's insurer denies liability."
     };
+
+    private List<string> _suggestions = new(ActionSuggestions.Concat(GenericSuggestions));
 
     private string _draft = string.Empty;
     private string? _error;
@@ -383,6 +395,81 @@
         await LoadHistoryAsync();
         await LoadModelsAsync();
         await LoadCitationHistoryAsync();
+        await LoadMatterSuggestionsAsync();
+    }
+
+    // Replaces the four generic starter prompts with matter-specific ones derived from the current
+    // matter's decision factors (type/subtype, posture, requested disposition, jurisdiction). The two
+    // action prompts stay pinned on top. Fail-soft: any error keeps the generic defaults.
+    private async Task LoadMatterSuggestionsAsync()
+    {
+        if (MatterId is not { } matterId || matterId == Guid.Empty)
+            return;
+
+        try
+        {
+            var matter = await Api.GetLegalDecisionMatterAsync(matterId);
+            if (matter is null)
+                return;
+
+            var dynamic = BuildMatterSuggestions(matter);
+            if (dynamic.Count == 0)
+                return;
+
+            _suggestions = new List<string>(ActionSuggestions.Concat(dynamic));
+            StateHasChanged();
+        }
+        catch
+        {
+            // Keep the generic defaults when the matter cannot be loaded.
+        }
+    }
+
+    // Deterministically composes up to four case-specific starter prompts from the matter's factors.
+    // No fabrication: every prompt is phrased around values actually present on the matter record.
+    private static List<string> BuildMatterSuggestions(Legal.Application.Features.Intelligence.Decision.DecisionMatterDto m)
+    {
+        var prompts = new List<string>();
+
+        var matterType = FirstNonEmpty(m.Subtype, m.DomainPackMatterTypeName, m.MatterTypeName, m.MatterTypeCode);
+        var typeLabel = string.IsNullOrWhiteSpace(matterType) ? "this matter" : $"this {matterType} matter";
+
+        // 1. Strengths/weaknesses tied to the actual claim target.
+        var target = FirstNonEmpty(m.MotionTarget);
+        prompts.Add(string.IsNullOrWhiteSpace(target)
+            ? $"Summarize the strengths and weaknesses of {typeLabel}."
+            : $"Summarize the strengths and weaknesses of {typeLabel} as to {target}.");
+
+        // 2. Disposition / posture strategy anchored to the requested disposition.
+        var disposition = FirstNonEmpty(m.RequestedDisposition);
+        if (!string.IsNullOrWhiteSpace(disposition))
+            prompts.Add($"What arguments and authorities best support {disposition} here?");
+        else if (!string.IsNullOrWhiteSpace(m.Posture))
+            prompts.Add($"What is the strongest strategy given this posture: {m.Posture}?");
+        else
+            prompts.Add($"What are the strongest arguments for the moving party in {typeLabel}?");
+
+        // 3. Jurisdiction-specific controlling law.
+        var law = FirstNonEmpty(m.GoverningLaw, m.State, m.Jurisdiction);
+        prompts.Add(string.IsNullOrWhiteSpace(law)
+            ? $"What controlling law and key elements govern {typeLabel}?"
+            : $"What {law} law and key elements control {typeLabel}?");
+
+        // 4. Evidence gaps / next steps using available matter context.
+        var party = FirstNonEmpty(m.RespondingParty);
+        prompts.Add(string.IsNullOrWhiteSpace(party)
+            ? $"What evidence gaps should we close to strengthen {typeLabel}?"
+            : $"What evidence do we need to overcome {party}'s likely defenses?");
+
+        return prompts;
+    }
+
+    private static string FirstNonEmpty(params string?[] values)
+    {
+        foreach (var v in values)
+            if (!string.IsNullOrWhiteSpace(v))
+                return v.Trim();
+        return string.Empty;
     }
 
     private async Task LoadModelsAsync()

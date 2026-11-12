@@ -239,7 +239,8 @@ COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.Configurat
 COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.LegalGrounding.GovInfo.ApiKey' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'') GovInfoApiKey,
 COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.LegalGrounding.Ecfr.BaseUrl' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'https://www.ecfr.gov') EcfrBaseUrl,
 COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.LegalGrounding.CornellLii.Enabled' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'true') CornellLiiEnabled,
-COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.LegalGrounding.CornellLii.BaseUrl' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'https://www.law.cornell.edu') CornellLiiBaseUrl;
+COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.LegalGrounding.CornellLii.BaseUrl' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'https://www.law.cornell.edu') CornellLiiBaseUrl,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.LegalGrounding.CourtListener.MinRequestSpacingMs' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),1200) CourtListenerMinRequestSpacingMs;
 """;
         using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         var row=await connection.QuerySingleAsync<LegalGroundingConfigurationRow>(new CommandDefinition(sql,new{TenantId=tenantId},cancellationToken:cancellationToken));
@@ -257,7 +258,8 @@ COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.Configurat
             row.GovInfoApiKey,
             row.EcfrBaseUrl,
             string.Equals(row.CornellLiiEnabled,"true",StringComparison.OrdinalIgnoreCase),
-            row.CornellLiiBaseUrl);
+            row.CornellLiiBaseUrl,
+            Math.Clamp(row.CourtListenerMinRequestSpacingMs,0,10000));
     }
 
     private sealed record LegalGroundingConfigurationRow(
@@ -274,7 +276,8 @@ COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.Configurat
         string GovInfoApiKey,
         string EcfrBaseUrl,
         string CornellLiiEnabled,
-        string CornellLiiBaseUrl);
+        string CornellLiiBaseUrl,
+        int CourtListenerMinRequestSpacingMs);
 
     public async Task<IReadOnlyCollection<WideLegalConceptAuthorityDto>> GetLegalConceptAuthoritiesAsync(Guid tenantId,CancellationToken cancellationToken=default)
     {

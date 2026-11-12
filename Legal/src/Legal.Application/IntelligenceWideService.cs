@@ -2699,7 +2699,7 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
             async Task<IReadOnlyList<WideExternalKnowledgeSnippet>> RetrieveStampedAsync(WideBranchRecord branch,string providerQuery,string attributionQuery,LegalAuthorityKind kind,LegalAuthorityReference? verify)
             {
                 var branchClaim=$"{branch.DisplayName}. {branch.Interpretation}";
-                var cached=await wideRepository.GetCachedExternalKnowledgeAsync(request.TenantId,attributionQuery,notBeforeUtc,cancellationToken);
+                var cached=request.BypassCache?Array.Empty<WideExternalKnowledgeSnippet>():await wideRepository.GetCachedExternalKnowledgeAsync(request.TenantId,attributionQuery,notBeforeUtc,cancellationToken);
                 if(cached.Count>0)return cached.Take(maximumSnippets).Select(snippet=>StampBranch(snippet,branch,attributionQuery)).ToArray();
                 var retrieved=await retrieve(providerQuery,kind,cancellationToken);
                 if(retrieved.Count==0)return [];
@@ -5146,7 +5146,7 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
                 try
                 {
                     var query=NormalizeQuery($"{string.Join(" vs ",batch)} {topic} comparison").ToLowerInvariant();
-                    var cached=await wideRepository.GetCachedExternalKnowledgeAsync(request.TenantId,query,notBeforeUtc,cancellationToken);
+                    var cached=request.BypassCache?Array.Empty<WideExternalKnowledgeSnippet>():await wideRepository.GetCachedExternalKnowledgeAsync(request.TenantId,query,notBeforeUtc,cancellationToken);
                     if(cached.Count>0){collected.AddRange(cached.Take(maximumSnippets));continue;}
                     var retrieved=await retrieve(query,cancellationToken);
                     if(retrieved.Count==0)continue;
