@@ -86,6 +86,14 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
     public Task<WideSearchRunDetailDto?> GetSearchRunResultAsync(Guid tenantId,Guid userId,Guid wideSearchRunResultId,CancellationToken cancellationToken=default)
         =>wideRepository.GetWideSearchRunResultAsync(tenantId,userId,wideSearchRunResultId,cancellationToken);
 
+    // Matter-scoped history/detail (NOT user-scoped). Used by Chat Judz grounding so its citations match
+    // the Citations tab for the matter, regardless of which user created the run.
+    public Task<WideSearchRunHistoryPage> GetSearchRunHistoryForMatterAsync(Guid tenantId,Guid matterId,int page,int pageSize,CancellationToken cancellationToken=default)
+        =>wideRepository.GetWideSearchRunHistoryForMatterAsync(tenantId,matterId,page,pageSize,cancellationToken);
+
+    public Task<WideSearchRunDetailDto?> GetSearchRunResultForMatterAsync(Guid tenantId,Guid matterId,Guid wideSearchRunResultId,CancellationToken cancellationToken=default)
+        =>wideRepository.GetWideSearchRunResultForMatterAsync(tenantId,matterId,wideSearchRunResultId,cancellationToken);
+
     public Task<IReadOnlyList<WideConversationTurnDto>> GetSearchConversationAsync(Guid tenantId,Guid userId,Guid conversationId,CancellationToken cancellationToken=default)
         =>wideRepository.GetWideSearchConversationAsync(tenantId,userId,conversationId,cancellationToken);
 

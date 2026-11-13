@@ -20,7 +20,7 @@ namespace Legal.Api.Controllers;
 // listable and reopenable. Tenant/actor are taken from the authenticated request context.
 [ApiController]
 [Route("api/legal_chat")]
-public sealed class LegalChatController(IAiProviderRouter aiProviderRouter, IChatJudzRepository history, ILegalDecisionService decisionService, IWideRunResultRepository wideRunResults, IAnalysisRunLedgerRepository runLedger, IIntelligenceWideService wideService) : ControllerBase
+public sealed class LegalChatController(IAiProviderRouter aiProviderRouter, IChatJudzRepository history, ILegalDecisionService decisionService, IWideRunResultRepository wideRunResults, IAnalysisRunLedgerRepository runLedger, IIntelligenceWideService wideService, ILogger<LegalChatController> logger) : ControllerBase
 {
     // Reuses an already-seeded feature policy so the default LLM is selected without new DB seed data.
     private const string FeatureCode = "INTELLIGENCE_POLOXI_EXPLANATION";
@@ -54,6 +54,18 @@ public sealed class LegalChatController(IAiProviderRouter aiProviderRouter, ICha
         "legal research framing, drafting, and workflow questions. When a question calls for legal " +
         "judgment, explain the reasoning and note that final decisions require attorney review. " +
         "Never fabricate case citations or facts; if you are unsure, say so. " +
+        "AUTHORITY LINKING MANDATE: for ANY matter-related question, strategy point, factual assertion, or " +
+        "recommendation, you MUST logically connect it to the governing legal authority — the case-law " +
+        "citations and the STATUTORY authorities (statutes, codes, regulations, rules) present in the " +
+        "MATTER CONTEXT's CITATIONS / LEGAL AUTHORITY and RANKED LEGAL AUTHORITY LANDSCAPE sections (the " +
+        "same data shown on the Citations tab, sourced from the matter's citation runs and related records). " +
+        "Distinguish STATUTORY authority (identified by a statute/code/regulation/rule Kind, e.g. a California " +
+        "Code or CCP section) from CASE LAW, and prefer citing the controlling statute first when the point " +
+        "turns on a statutory element, deadline, duty, or standard (e.g. negligence per se, statute of " +
+        "limitations, product-liability standards). When the context contains a relevant authority, cite it " +
+        "by name/kind and tie it to the specific matter factor it governs; when NO authority in context " +
+        "covers the point, say so explicitly and flag it as a cite-check gap for the attorney rather than " +
+        "inventing one. Do not answer a substantive legal question without this authority linkage. " +
         "PASSAGE LINKING: whenever you present a legal authority, citation, or ranked-authority result, " +
         "link it back to the specific case material it supports — a matter factor, the personal-injury " +
         "profile, an evidence item, an atomic/claim proposition, or the set of all related matter factors " +
@@ -122,17 +134,13 @@ public sealed class LegalChatController(IAiProviderRouter aiProviderRouter, ICha
             if (matter is null)
                 return NotFound($"Matter {matterId} was not found for the current tenant.");
 
-            // Question-aware grounding. Simple matter-identity questions ("who is the plaintiff?",
-            // "what court is this in?", "what's the posture?") are fully answerable from the matter
-            // record alone. For these we skip the 5+ concurrent run/evidence/proposition/citation
-            // round-trips and emit only the compact identity block, avoiding a ~34K-char system prompt
-            // (and its latency/token cost) for a 35-char question. Any analytical/strategy/run/authority
-            // keyword escalates to full grounding, so detail is never silently lost.
-            if (!RequiresDetailedGrounding(userPrompt))
-            {
-                systemPrompt = SystemPrompt + "\n\n" + BuildMatterContext(matter);
-            }
-            else
+            // Matter-scoped grounding always loads the full case context — including the authority
+            // roster. The previous "simple identity question" short-circuit emitted only the compact
+            // matter block (no citations), which caused Judz to volunteer a false "no case law, statutes,
+            // or authorities are recorded" cite-check note for general questions like "what's up with my
+            // client?" even though the matter has a rich ranked-authority landscape. Correctness of the
+            // authority answer outweighs the few round-trips saved, and every load below is fail-soft and
+            // runs concurrently, so a grounded turn still resolves quickly.
             {
 
             // All matter-workspace surfaces are independent of each other and only depend on matterId, so
@@ -200,14 +208,14 @@ public sealed class LegalChatController(IAiProviderRouter aiProviderRouter, ICha
 
             // Deep Citation grounding. The left "Citation history" panel and the Citations tab read
             // citation runs from the Wide search run ledger (POLOXI.Legal_WideSearchRunResult), which is a
-            // SEPARATE store from the AnalysisRun ledger loaded above. Without this, the chat sees zero
-            // authorities and answers "no recorded citations" while the panel plainly shows a 25-cite Deep
-            // Citation run — a self-contradiction. Load the matter's citation-related Wide runs (same ledger),
-            // link the BEST one (highest persisted Search Quality score), and merge it so its ranked
-            // authorities ground the chat answer. Fail-soft and tenant/user scoped.
-            if (userId is { } actorId)
+            // SEPARATE store from the AnalysisRun ledger loaded above. Chat Judz must always ground on the
+            // BEST RUN from Run History: load only the single highest-quality citation run (tie-broken by
+            // newest) and insert it FIRST so, during de-duplication, its authorities are the authoritative
+            // source and a weaker run can never override or pollute them. MATTER-scoped (not current-user
+            // scoped) so the best run grounds the chat even when another user executed it. Fail-soft.
+            if (matterId != Guid.Empty)
             {
-                var deepCitationResponses = await LoadDeepCitationWideResponsesAsync(tenantId, actorId, matterId, cancellationToken);
+                var deepCitationResponses = await LoadDeepCitationWideResponsesAsync(tenantId, matterId, cancellationToken);
                 if (deepCitationResponses.Count > 0)
                     wideResponses.InsertRange(0, deepCitationResponses);
             }
@@ -215,6 +223,20 @@ public sealed class LegalChatController(IAiProviderRouter aiProviderRouter, ICha
             var citations = AggregateProposedAuthorities(wideResponses);
             rankedAuthorities = AggregateInterpretiveAuthorities(wideResponses);
             var runResult = runResultTask.Result;
+
+            // DIAGNOSTIC: prove exactly what authority data is injected into the model prompt. Logs the
+            // flat citation count/names and the ranked branch count/sample item names so we can see
+            // whether the grounded authorities are real citations (e.g. "CCP 335.1", "Rowland") or the
+            // negative interpretive gap narrative ("No statute ... is supplied"). Remove once diagnosed.
+            logger.LogWarning(
+                "ChatJudz grounding diagnostics for matter {MatterId}: wideResponses={WideCount}, flatCitations={FlatCount} [{FlatNames}], rankedBranches={BranchCount}, rankedItems={ItemCount} [{ItemNames}]",
+                matterId,
+                wideResponses.Count,
+                citations.Count,
+                string.Join(" | ", citations.Take(10).Select(c => c.Name)),
+                rankedAuthorities.Count,
+                rankedAuthorities.Sum(b => b.Items.Count),
+                string.Join(" | ", rankedAuthorities.SelectMany(b => b.Items).Take(10).Select(i => i.Name)));
 
             // Decision Outcome grounding. The Decision2 Overview tab's "Decision Outcome" cards are a
             // projection of the persisted Wide run (Candidates / CandidateLandscape), NOT of the decision
@@ -467,40 +489,6 @@ public sealed class LegalChatController(IAiProviderRouter aiProviderRouter, ICha
         return builder.ToString();
     }
 
-    // Decides whether a chat turn needs the full (expensive) matter grounding — connected run history,
-    // evidence scope, atomic propositions, the selected decision run, citations and the ranked authority
-    // landscape — or whether the compact matter-identity block alone suffices.
-    //
-    // The matter record already answers party / court / jurisdiction / posture / status / outcome
-    // questions, so those stay cheap. Any analytical, strategic, run, evidence, citation or authority
-    // intent escalates to full grounding. The default when a keyword matches is to include detail, so
-    // ambiguity never silently drops context — we only trim for clearly identity-level questions.
-    private static readonly string[] DetailedGroundingKeywords =
-    [
-        "run", "analysis", "analyze", "analyse", "score", "margin", "entropy", "confidence",
-        "candidate", "branch", "flip", "readiness", "evidence", "proposition", "citation", "cite",
-        "authority", "authorities", "case law", "caselaw", "precedent", "statute", "holding",
-        "ruling", "recommend", "strategy", "strateg", "argue", "argument", "likelihood", "odds",
-        "chance", "win", "lose", "risk", "weakness", "strength", "why", "how should", "what should",
-        "next step", "best run", "damages", "liability", "settlement", "demand", "injur", "treatment",
-        "medical", "lien", "negotiat", "deadline",
-        // Drafting intents must pull the full grounded context (facts, evidence, propositions, authorities,
-        // outcome, next best action) so Judz drafts from the matter, not a generic template.
-        "draft", "write", "prepare", "compose", "brief", "motion", "opposition", "memo", "memorandum",
-        "letter", "pleading", "complaint", "petition", "declaration", "document"
-    ];
-
-    private static bool RequiresDetailedGrounding(string question)
-    {
-        if (string.IsNullOrWhiteSpace(question)) return false;
-        foreach (var keyword in DetailedGroundingKeywords)
-        {
-            if (question.Contains(keyword, StringComparison.OrdinalIgnoreCase))
-                return true;
-        }
-        return false;
-    }
-
     // Serializes the authoritative, persisted matter record into a clearly delimited case-context block.
     // Only non-empty fields are emitted. The block is DATA, not instructions: the model is told to treat
     // it as the current matter's facts and to say when a requested detail is not present rather than guess.
@@ -549,6 +537,20 @@ public sealed class LegalChatController(IAiProviderRouter aiProviderRouter, ICha
         Add("Status", matter.StatusCode);
         Add("Current decision outcome", matter.CurrentOutcome);
         Add("Decision status", matter.DecisionStatusCode);
+
+        // ── Citations / Legal Authority tab: the run's proposed legal-authority citations. ──
+        // Emitted FIRST — before the Decision Outcome block — so the clamp (which trims the TAIL to stay
+        // within MatterContextCharBudget) can never cut the citation list. The Decision Outcome block is
+        // the unbounded part: a richly-grounded matter can carry dozens of landscape candidates, each with
+        // full narrative detail (key drivers, risks, alternatives, mapped outcomes), which alone can consume
+        // the entire budget. Previously citations sat AFTER that block and were clamped away even though
+        // they were aggregated into the data — so the model saw no citations and falsely answered "none
+        // recorded" while the Citations tab (and these diagnostics) showed many.
+        // The flat ProposedLegalAuthorities list is frequently empty for Deep Citation runs whose
+        // authorities live only in the branch-grouped InterpretiveResults (rankedAuthorities); in that
+        // case we derive the flat authority roster from the ranked branches so the model still sees the
+        // recorded authorities even when the detailed landscape at the tail is clamped away.
+        AppendCitations(builder, citations, rankedAuthorities);
 
         // ── Decision Outcome (the authoritative outcome the Decision2 Overview tab's "Decision Outcomes"
         //    cards render). This is a projection of the persisted Wide run (Candidates / CandidateLandscape),
@@ -787,31 +789,6 @@ public sealed class LegalChatController(IAiProviderRouter aiProviderRouter, ICha
             }
         }
 
-        // ── Citations / Legal Authority tab: the run's proposed legal-authority citations. ──
-        if (citations is { Count: > 0 })
-        {
-            builder.AppendLine();
-            builder.AppendLine("--- CITATIONS / LEGAL AUTHORITY (proposed or verified across all runs for this matter) ---");
-            var verified = citations.Count(a => string.Equals(a.VerificationStatus, "VERIFIED", StringComparison.OrdinalIgnoreCase));
-            builder.Append("- Total citations: ").Append(citations.Count)
-                .Append(" (").Append(verified).Append(" verified, ")
-                .Append(citations.Count - verified).AppendLine(" unverified)");
-            builder.AppendLine("  Note: \"Unverified\" reflects retrieval/configuration state, not bad law; recognizing a citation is never treated as verification.");
-            foreach (var c in citations
-                        .Where(c => !string.IsNullOrWhiteSpace(c.Name))
-                        .GroupBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
-                        .Select(g => g.First())
-                        .OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
-                        .Take(200))
-            {
-                builder.Append("  • ").Append(c.Name);
-                if (!string.IsNullOrWhiteSpace(c.Kind)) builder.Append(" [").Append(c.Kind).Append(']');
-                builder.Append(" — ").Append(c.VerificationStatus);
-                if (!string.IsNullOrWhiteSpace(c.Relevance)) builder.Append(" | ").Append(c.Relevance);
-                builder.AppendLine();
-            }
-        }
-
         // ── Ranked authority landscape: the rich, branch-grouped citation surface rendered on the
         // Decision2 Citations tab (branch interpretation + confidence, and for each authority its rank,
         // match/strength score, facets such as Doctrine/Jurisdiction/Fact fit, and the fit rationale).
@@ -849,6 +826,74 @@ public sealed class LegalChatController(IAiProviderRouter aiProviderRouter, ICha
         return ClampMatterContext(builder.ToString());
     }
 
+    // Emits the flat CITATIONS / LEGAL AUTHORITY list (proposed or verified across all runs for this
+    // matter). Extracted so it can be emitted HIGH in the matter-context block, ahead of the trimmable
+    // tail, guaranteeing the model always sees the recorded authorities. When the flat
+    // ProposedLegalAuthorities list is empty (common for Deep Citation runs whose authorities live only
+    // in the branch-grouped InterpretiveResults), the roster is derived from the ranked branches so the
+    // model never sees an empty citation block while real authorities exist in the ranked landscape.
+    private static void AppendCitations(
+        StringBuilder builder,
+        IReadOnlyCollection<WideProposedAuthorityDto>? citations,
+        IReadOnlyCollection<WideInterpretiveResultDto>? rankedAuthorities = null)
+    {
+        // Emit the RANKED authority roster first (POLOXI's branch-grouped legal-authority landscape),
+        // then the FLAT proposed/verified citations. Ranked authorities carry relevance scoring and are
+        // the richer signal, so they lead; the flat list follows for verification status / kind / relevance.
+        if (rankedAuthorities is { Count: > 0 })
+        {
+            var roster = rankedAuthorities
+                .SelectMany(b => b.Items)
+                .Where(i => !string.IsNullOrWhiteSpace(i.Name))
+                .GroupBy(i => i.Name!.Trim(), StringComparer.OrdinalIgnoreCase)
+                .Select(g => g.OrderByDescending(i => i.Score ?? decimal.MinValue).First())
+                .OrderByDescending(i => i.Score ?? decimal.MinValue)
+                .ThenBy(i => i.Name, StringComparer.OrdinalIgnoreCase)
+                .Take(200)
+                .ToList();
+
+            if (roster.Count > 0)
+            {
+                builder.AppendLine();
+                builder.AppendLine("--- CITATIONS / LEGAL AUTHORITY (ranked authorities recorded across all runs for this matter) ---");
+                builder.Append("- Total authorities: ").Append(roster.Count)
+                    .AppendLine(" (derived from the ranked legal-authority landscape below)");
+                builder.AppendLine("  Note: These authorities are POLOXI's ranked legal-authority landscape for this matter; relevance scores describe strength/fit, not verification of the law.");
+                foreach (var item in roster)
+                {
+                    builder.Append("  • ").Append(item.Name);
+                    if (item.Score is { } score)
+                        builder.Append(" (").Append(score.ToString("P0", CultureInfo.InvariantCulture)).Append(')');
+                    builder.AppendLine();
+                }
+            }
+        }
+
+        if (citations is { Count: > 0 })
+        {
+            builder.AppendLine();
+            builder.AppendLine("--- CITATIONS / LEGAL AUTHORITY (proposed or verified across all runs for this matter) ---");
+            var verified = citations.Count(a => string.Equals(a.VerificationStatus, "VERIFIED", StringComparison.OrdinalIgnoreCase));
+            builder.Append("- Total citations: ").Append(citations.Count)
+                .Append(" (").Append(verified).Append(" verified, ")
+                .Append(citations.Count - verified).AppendLine(" unverified)");
+            builder.AppendLine("  Note: \"Unverified\" reflects retrieval/configuration state, not bad law; recognizing a citation is never treated as verification.");
+            foreach (var c in citations
+                        .Where(c => !string.IsNullOrWhiteSpace(c.Name))
+                        .GroupBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
+                        .Select(g => g.First())
+                        .OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
+                        .Take(200))
+            {
+                builder.Append("  • ").Append(c.Name);
+                if (!string.IsNullOrWhiteSpace(c.Kind)) builder.Append(" [").Append(c.Kind).Append(']');
+                builder.Append(" — ").Append(c.VerificationStatus);
+                if (!string.IsNullOrWhiteSpace(c.Relevance)) builder.Append(" | ").Append(c.Relevance);
+                builder.AppendLine();
+            }
+        }
+    }
+
     // Keeps the injected matter-context block within a conservative character budget so a richly-grounded
     // matter (large run history, many citations, a deep ranked-authority landscape) cannot push the system
     // prompt past the AI router's MaximumInputCharacters guard. The high-value identity/posture/outcome
@@ -862,66 +907,65 @@ public sealed class LegalChatController(IAiProviderRouter aiProviderRouter, ICha
         return string.Concat(context.AsSpan(0, keep), marker);
     }
 
-    // Loads the persisted Wide result for EVERY analysis run of the matter (newest first), skipping any
-    // run that cannot be loaded. Tenant-scoped and fail-soft. The full response is kept so BOTH citation
-    // surfaces (flat ProposedLegalAuthorities and branch-grouped InterpretiveResults) can be aggregated.
+    // Loads the persisted Wide result for the SINGLE BEST analysis run of the matter. Tenant-scoped and
+    // fail-soft. The full response is kept so BOTH citation surfaces (flat ProposedLegalAuthorities and
+    // branch-grouped InterpretiveResults) can be read from that one authoritative run.
+    //
+    // BEST-RUN RULE (why this is not a merge): previously this aggregated up to 12 runs. Merging let a
+    // weak/negative run — one whose decision outcome, atomic propositions, or interpretive branches carry a
+    // "no statute / no legal authorities are supplied" GAP narrative — pollute the prompt alongside the real
+    // citations, causing Judz to answer "no citations recorded" while the Citations tab plainly listed many.
+    // The matter's Citations tab shows the single best-quality run, so Chat must ground on that same run.
+    // "Best" is the deterministic DB-backed QualityScore: the IsBestRun flag wins, else the highest Score,
+    // tie-broken by newest (RequestedUtc). Runs without a quality score (pre-decision/failed) only act as a
+    // last-resort fallback so a matter that has never produced a scored decision still grounds on its newest run.
     private async Task<IReadOnlyList<WideSearchResponse>> LoadAllMatterWideResponsesAsync(
         Guid tenantId, IReadOnlyList<AnalysisRunDto> ledgerRuns, CancellationToken cancellationToken)
     {
         if (ledgerRuns.Count == 0)
             return [];
 
-        // Bound + parallelize. The side-by-side passage feature aggregates citations across runs; doing one
-        // sequential DB round-trip per run made matters with many runs slow on EVERY chat turn. Load only the
-        // most recent runs (newest authorities dominate the de-duplicated context) and fetch them concurrently,
-        // preserving newest-first ordering. Still tenant-scoped and fail-soft per run.
-        const int MaximumRunsToAggregate = 12;
-        var orderedRuns = ledgerRuns
-            .OrderByDescending(r => r.RequestedUtc)
-            .Take(MaximumRunsToAggregate)
-            .ToList();
+        var bestRun = ledgerRuns
+            .OrderByDescending(r => r.QualityScore?.IsBestRun == true)
+            .ThenByDescending(r => r.QualityScore?.Score ?? int.MinValue)
+            .ThenByDescending(r => r.RequestedUtc)
+            .First();
 
-        var fetches = orderedRuns.Select(async run =>
-        {
-            try { return await wideRunResults.GetByAnalysisRunAsync(tenantId, run.AnalysisRunId, cancellationToken); }
-            catch { return null; }
-        });
-        var loaded = await Task.WhenAll(fetches);
-        return loaded.Where(w => w is not null).Select(w => w!).ToList();
+        WideSearchResponse? response;
+        try { response = await wideRunResults.GetByAnalysisRunAsync(tenantId, bestRun.AnalysisRunId, cancellationToken); }
+        catch { response = null; }
+
+        return response is null ? [] : [response];
     }
 
-    // Loads the matter's citation-related Deep Citation runs from the Wide search run ledger
+    // Loads the matter's SINGLE BEST citation-related run from the Wide search run ledger
     // (POLOXI.Legal_WideSearchRunResult) — the SAME ledger the left "Citation history" panel and the
-    // Citations tab read — and returns the full WideSearchResponse of the BEST run first (highest persisted
-    // Search Quality score, tie-broken by newest). This guarantees the chat grounds on the exact citation
-    // data the user can already see, so it can never answer "no recorded citations" while a Deep Citation run
-    // is listed. Tenant/user scoped and fail-soft: any failure yields an empty set and never blocks the turn.
+    // Citations tab read — and returns only that run's full WideSearchResponse. "Best" is the highest
+    // persisted Search Quality score, tie-broken by newest (CreatedDateUtc). Chat Judz must always ground
+    // on the Best Run from Run History, so we deliberately return ONLY that one run rather than merging
+    // every citation run: merging let a weak/negative run (e.g. one whose InterpretiveResults carry a
+    // "no statute supplied" gap narrative) pollute or override the authoritative Best Run's citations,
+    // causing Judz to answer "no recorded citations" while the Best Run plainly lists authorities. The
+    // lookup is MATTER-scoped (not current-user scoped): the best-quality run may have been executed by a
+    // different user, yet it is the authoritative source for the matter — the same way the Citations tab
+    // shows the matter's decision authorities regardless of the caller. Fail-soft: any failure yields an
+    // empty set and never blocks the turn.
     private async Task<IReadOnlyList<WideSearchResponse>> LoadDeepCitationWideResponsesAsync(
-        Guid tenantId, Guid userId, Guid matterId, CancellationToken cancellationToken)
+        Guid tenantId, Guid matterId, CancellationToken cancellationToken)
     {
         try
         {
-            var historyPage = await wideService.GetSearchRunHistoryAsync(tenantId, userId, 1, 50, matterId, cancellationToken);
-            var citationRuns = historyPage.Items
+            var historyPage = await wideService.GetSearchRunHistoryForMatterAsync(tenantId, matterId, 1, 50, cancellationToken);
+            var bestRun = historyPage.Items
                 .Where(IsCitationRelatedWideRun)
                 .OrderByDescending(r => r.QualityScore ?? decimal.MinValue)
                 .ThenByDescending(r => r.CreatedDateUtc)
-                .ToArray();
-            if (citationRuns.Length == 0)
+                .FirstOrDefault();
+            if (bestRun is null)
                 return [];
 
-            var responses = new List<WideSearchResponse>();
-            foreach (var run in citationRuns)
-            {
-                try
-                {
-                    var detail = await wideService.GetSearchRunResultAsync(tenantId, userId, run.WideSearchRunResultId, cancellationToken);
-                    if (detail?.Response is { } response)
-                        responses.Add(response);
-                }
-                catch { /* fail-soft per run */ }
-            }
-            return responses;
+            var detail = await wideService.GetSearchRunResultForMatterAsync(tenantId, matterId, bestRun.WideSearchRunResultId, cancellationToken);
+            return detail?.Response is { } response ? [response] : [];
         }
         catch
         {

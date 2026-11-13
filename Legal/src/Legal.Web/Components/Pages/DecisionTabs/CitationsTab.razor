@@ -9,7 +9,7 @@
      it never changes verification state. ── *@
 
 @{
-    var authorities = Owner.DaAuthorities;
+    var authorities = CitationTableAuthorities;
     var distinct = authorities
         .Where(a => !string.IsNullOrWhiteSpace(a.Name))
         .GroupBy(a => a.Name, StringComparer.OrdinalIgnoreCase)
@@ -1111,6 +1111,47 @@
             .Take(10)
             .ToArray();
 
+    // Authorities powering the top Citations table. PRIORITY: the best-quality Deep Citation run for THIS
+    // matter (_deepResponse, selected by RehydrateLatestDeepCitationsAsync using the best-quality rule), so
+    // the table reflects the same authoritative run the Deep Citation panel shows. The Deep run exposes two
+    // complementary authority surfaces — the flat ProposedLegalAuthorities list and the branch-grouped
+    // InterpretiveResults ranked authorities. Prefer the flat list; when it is empty (common for Deep
+    // Citation runs whose authorities live only in the ranked branches) derive a de-duplicated roster from
+    // the ranked items (highest branch score wins). Fall back to the Decision2 saved-run authorities
+    // (Owner.DaAuthorities) only when no Deep Citation run exists for the matter yet.
+    private IReadOnlyList<WideProposedAuthorityDto> CitationTableAuthorities
+    {
+        get
+        {
+            if (_deepResponse is { } resp)
+            {
+                if (resp.ProposedLegalAuthorities is { Count: > 0 } flat)
+                    return flat.ToArray();
+
+                if (resp.InterpretiveResults is { Count: > 0 } ranked)
+                {
+                    var roster = ranked
+                        .SelectMany(b => b.Items)
+                        .Where(i => !string.IsNullOrWhiteSpace(i.Name))
+                        .GroupBy(i => i.Name.Trim(), StringComparer.OrdinalIgnoreCase)
+                        .Select(g => g.OrderByDescending(i => i.Score ?? decimal.MinValue).First())
+                        .OrderByDescending(i => i.Score ?? decimal.MinValue)
+                        .ThenBy(i => i.Name, StringComparer.OrdinalIgnoreCase)
+                        .Select(i => new WideProposedAuthorityDto(
+                            i.Name.Trim(),
+                            string.Empty,
+                            i.Detail ?? string.Empty,
+                            "UNVERIFIED"))
+                        .ToArray();
+                    if (roster.Length > 0)
+                        return roster;
+                }
+            }
+
+            return Owner.DaAuthorities;
+        }
+    }
+
     // ── /legal/search result-parity helpers (bound to _deepResponse) ──
     private IReadOnlyCollection<WideBranchDto> SurvivingBranches => _deepResponse?.Branches.Where(x => !x.IsEliminated).ToArray() ?? [];
     private IReadOnlyCollection<WideBranchDto> EliminatedBranches => _deepResponse?.Branches.Where(x => x.IsEliminated).ToArray() ?? [];
@@ -1320,10 +1361,12 @@
     {
         try
         {
-            // Global history (no matter filter): citation-related runs appear in every matter's Citations
-            // tab regardless of where they were generated. Scoping is by Legal context / Deep Citation
-            // prefix, not by MatterId, so a /legal/search Legal run and a Deep Citations run both surface.
-            var history = await Api.GetSearchRunHistoryAsync(page: 1, pageSize: 50);
+            // Scope history to THIS matter so a run generated for another matter (e.g. a different
+            // plaintiff) can never surface in — or be auto-adopted as the "best" run for — this
+            // matter's Citations tab. Without the MatterId filter, global history leaks cross-matter
+            // citation runs (the root cause of unrelated authorities appearing here).
+            var matterId = Owner.DaMatterId is { } mid && mid != Guid.Empty ? mid : (Guid?)null;
+            var history = await Api.GetSearchRunHistoryAsync(page: 1, pageSize: 50, matterId: matterId);
             // Only adopt citation-related runs — never the Decision2 single-submit (Wide2) run, which also
             // writes history rows. Citation runs are identified by the Deep Citation prefix OR Legal context.
             var deepRuns = history.Items
@@ -1334,15 +1377,21 @@
             _deepHistory.Clear();
             _deepHistory.AddRange(deepRuns);
 
-            // Rehydrate the latest run into the result panel when nothing is loaded yet, so the
-            // result persists across tab switches.
+            // Rehydrate the BEST run into the result panel when nothing is loaded yet, so the Deep
+            // Citation surface always shows the highest-quality run (not merely the newest). "Best" is
+            // the highest persisted Search Quality score, tie-broken by newest. The history list above
+            // stays newest-first for scanning; only the auto-loaded result panel prefers the best run.
             if (_deepResponse is null && !_deepLoading && deepRuns.Length > 0)
             {
-                var detail = await Api.GetSearchRunResultAsync(deepRuns[0].WideSearchRunResultId);
+                var bestRun = deepRuns
+                    .OrderByDescending(item => item.QualityScore ?? decimal.MinValue)
+                    .ThenByDescending(item => item.CreatedDateUtc)
+                    .First();
+                var detail = await Api.GetSearchRunResultAsync(bestRun.WideSearchRunResultId);
                 if (detail?.Response is { } response)
                 {
                     _deepResponse = response;
-                    _activeHistoryRunId = deepRuns[0].WideSearchRunResultId;
+                    _activeHistoryRunId = bestRun.WideSearchRunResultId;
                 }
             }
         }
@@ -1360,9 +1409,11 @@
         _deepHistoryLoading = true;
         try
         {
-            // Global history (no matter filter) so citation-related runs from /legal/search and this tab
-            // both appear, matched by the shared citation predicate (Deep Citation prefix OR Legal context).
-            var history = await Api.GetSearchRunHistoryAsync(page: 1, pageSize: 50);
+            // Matter-scoped history (see RehydrateLatestDeepCitationsAsync) so the refreshed list only
+            // shows citation-related runs belonging to THIS matter, matched by the shared citation
+            // predicate (Deep Citation prefix OR Legal context).
+            var matterId = Owner.DaMatterId is { } mid && mid != Guid.Empty ? mid : (Guid?)null;
+            var history = await Api.GetSearchRunHistoryAsync(page: 1, pageSize: 50, matterId: matterId);
             var deepRuns = history.Items
                 .Where(IsCitationRelatedRun)
                 .OrderByDescending(item => item.CreatedDateUtc)

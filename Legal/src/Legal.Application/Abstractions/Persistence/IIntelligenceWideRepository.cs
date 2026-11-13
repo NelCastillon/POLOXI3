@@ -96,6 +96,13 @@ public interface IIntelligenceWideRepository
     Task<WideSearchRunHistoryPage> GetWideSearchRunHistoryAsync(Guid tenantId,Guid userId,int page,int pageSize,Guid? matterId=null,CancellationToken cancellationToken=default);
     // Full reopen payload (the saved WideSearchResponse rehydrated) for a single run owned by the user.
     Task<WideSearchRunDetailDto?> GetWideSearchRunResultAsync(Guid tenantId,Guid userId,Guid wideSearchRunResultId,CancellationToken cancellationToken=default);
+    // Matter-scoped history (NOT user-scoped): every Wide run linked to a matter for the tenant, newest
+    // first, regardless of which user created it. Used by Chat Judz grounding so its citations match the
+    // Citations tab (which reads the matter's decision run, not the caller's own runs).
+    Task<WideSearchRunHistoryPage> GetWideSearchRunHistoryForMatterAsync(Guid tenantId,Guid matterId,int page,int pageSize,CancellationToken cancellationToken=default);
+    // Matter-scoped full reopen payload (NOT user-scoped): the saved WideSearchResponse for a run that
+    // belongs to the given matter and tenant, regardless of creator.
+    Task<WideSearchRunDetailDto?> GetWideSearchRunResultForMatterAsync(Guid tenantId,Guid matterId,Guid wideSearchRunResultId,CancellationToken cancellationToken=default);
     // All runs in a continuous-chat thread (shared ConversationId), oldest-first, owned by the user.
     Task<IReadOnlyList<WideConversationTurnDto>> GetWideSearchConversationAsync(Guid tenantId,Guid userId,Guid conversationId,CancellationToken cancellationToken=default);
     // Latest persisted WideSearchResponse for a given execution, tenant-scoped. Used by the follow-up

@@ -1179,13 +1179,62 @@ WHERE TenantId=@TenantId AND CreatedByUserId=@UserId AND WideSearchRunResultId=@
 """;
         using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         var row=await connection.QuerySingleOrDefaultAsync<WideSearchRunResultRow>(new CommandDefinition(sql,new{TenantId=tenantId,UserId=userId,WideSearchRunResultId=wideSearchRunResultId},cancellationToken:cancellationToken));
+        return MapRunDetail(row);
+    }
+
+    // Matter-scoped history (NOT user-scoped): joins through POLOXI.Legal_WideExecution on MatterId so
+    // Chat Judz grounding sees every citation run for the matter regardless of which user created it.
+    public async Task<WideSearchRunHistoryPage> GetWideSearchRunHistoryForMatterAsync(Guid tenantId,Guid matterId,int page,int pageSize,CancellationToken cancellationToken=default)
+    {
+        if(page<1)page=1;
+        if(pageSize<1)pageSize=20;
+        if(pageSize>100)pageSize=100;
+        const string sql="""
+SELECT COUNT(1)
+FROM POLOXI.Legal_WideSearchRunResult r
+WHERE r.TenantId=@TenantId AND r.IsDeleted=0
+  AND EXISTS(SELECT 1 FROM POLOXI.Legal_WideExecution e WHERE e.WideExecutionId=r.WideExecutionId AND e.MatterId=@MatterId);
+
+SELECT r.WideSearchRunResultId,r.WideExecutionId,r.Query,r.StatusCode,r.TerminationReasonCode,r.AnswerKindCode,r.FinalAnswer,
+       r.FinalConfidence,r.DecisionConfidence,r.DepthReached,r.LlmCallCount,r.BranchCount,r.CandidateCount,
+       r.ExternalEvidenceCount,r.EnterpriseEvidenceCount,r.EvidenceCoverage,r.ProviderCodeUsed,r.ModelCodeUsed,r.ContextCode,
+       r.DurationMilliseconds,r.CreatedDateUtc,r.ConversationId,r.QualityScore,r.QualityGrade
+FROM POLOXI.Legal_WideSearchRunResult r
+WHERE r.TenantId=@TenantId AND r.IsDeleted=0
+  AND EXISTS(SELECT 1 FROM POLOXI.Legal_WideExecution e WHERE e.WideExecutionId=r.WideExecutionId AND e.MatterId=@MatterId)
+ORDER BY r.CreatedDateUtc DESC
+OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        using var reader=await connection.QueryMultipleAsync(new CommandDefinition(sql,new{TenantId=tenantId,MatterId=matterId,Offset=(page-1)*pageSize,PageSize=pageSize},cancellationToken:cancellationToken));
+        var total=await reader.ReadFirstAsync<int>();
+        var items=(await reader.ReadAsync<WideSearchRunSummaryDto>()).AsList();
+        return new WideSearchRunHistoryPage(items,page,pageSize,total);
+    }
+
+    // Matter-scoped full reopen payload (NOT user-scoped). The run must belong to the matter via WideExecution.
+    public async Task<WideSearchRunDetailDto?> GetWideSearchRunResultForMatterAsync(Guid tenantId,Guid matterId,Guid wideSearchRunResultId,CancellationToken cancellationToken=default)
+    {
+        const string sql="""
+SELECT TOP(1) r.WideSearchRunResultId,r.WideExecutionId,r.Query,r.ContextCode,r.CreatedDateUtc,r.DetailJson,r.ConversationId
+FROM POLOXI.Legal_WideSearchRunResult r
+WHERE r.TenantId=@TenantId AND r.WideSearchRunResultId=@WideSearchRunResultId AND r.IsDeleted=0
+  AND EXISTS(SELECT 1 FROM POLOXI.Legal_WideExecution e WHERE e.WideExecutionId=r.WideExecutionId AND e.MatterId=@MatterId);
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var row=await connection.QuerySingleOrDefaultAsync<WideSearchRunResultRow>(new CommandDefinition(sql,new{TenantId=tenantId,MatterId=matterId,WideSearchRunResultId=wideSearchRunResultId},cancellationToken:cancellationToken));
+        return MapRunDetail(row);
+    }
+
+    // Shared row → DTO mapping. DetailJson is serialized by IntelligenceWideService using
+    // JsonSerializerDefaults.Web (camelCase), so reopen MUST deserialize with the same Web options.
+    // Using default (case-sensitive PascalCase) options silently produced an empty response.
+    private static WideSearchRunDetailDto? MapRunDetail(WideSearchRunResultRow? row)
+    {
         if(row is null)return null;
         WideSearchResponse? response=null;
         if(!string.IsNullOrWhiteSpace(row.DetailJson))
         {
-            // DetailJson is serialized by IntelligenceWideService using JsonSerializerDefaults.Web (camelCase),
-            // so reopen MUST deserialize with the same Web options. Using default (case-sensitive PascalCase)
-            // options silently produced an empty response, which made the Reopen button appear to do nothing.
             try{response=JsonSerializer.Deserialize<WideSearchResponse>(row.DetailJson,RunHistoryJsonOptions);}
             catch(JsonException){response=null;}
         }

@@ -31,6 +31,9 @@ public interface IIntelligenceWideService
     Task<WideSearchRunHistoryPage> GetSearchRunHistoryAsync(Guid tenantId,Guid userId,int page,int pageSize,Guid? matterId=null,CancellationToken cancellationToken=default);
     // /legal/search Run History: full reopen payload (saved WideSearchResponse) for one of the user's runs.
     Task<WideSearchRunDetailDto?> GetSearchRunResultAsync(Guid tenantId,Guid userId,Guid wideSearchRunResultId,CancellationToken cancellationToken=default);
+    // Matter-scoped history/detail (NOT user-scoped) for Chat Judz grounding.
+    Task<WideSearchRunHistoryPage> GetSearchRunHistoryForMatterAsync(Guid tenantId,Guid matterId,int page,int pageSize,CancellationToken cancellationToken=default);
+    Task<WideSearchRunDetailDto?> GetSearchRunResultForMatterAsync(Guid tenantId,Guid matterId,Guid wideSearchRunResultId,CancellationToken cancellationToken=default);
     // /legal/search continuous-chat thread: all runs sharing a ConversationId, oldest-first, owned by the user.
     Task<IReadOnlyList<WideConversationTurnDto>> GetSearchConversationAsync(Guid tenantId,Guid userId,Guid conversationId,CancellationToken cancellationToken=default);
 }
