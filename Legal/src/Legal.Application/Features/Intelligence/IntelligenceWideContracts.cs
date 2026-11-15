@@ -1546,6 +1546,13 @@ public sealed record WideConfiguration(decimal TargetConfidence,decimal MinimumB
     public int L3PassagesPerParent{get;init;}=4;
     public int L3MinimumPropositionsPerParent{get;init;}=2;
     public int L3MaxConcurrency{get;init;}=3;
+    // Zero-evidence Evidence Type gate (reduces speculative L3 over-generation). When true, an EVD_ Evidence
+    // Type parent that the matter supplies NO evidence for (no directly classified document, no mapped passage,
+    // and no indexed passage) is held out of the L3 atomic-proposition pass and recorded as DEFERRED_ACQUISITION
+    // instead of producing speculative "No X supplied" propositions that carry 0% evidence. Concepts (CPT_) are
+    // never gated, required-coverage Evidence Types are never gated, and any EVD_ with evidence still runs L3.
+    // Default true: the prior behaviour (every in-scope L2 reaches L3) is restored by setting this false.
+    public bool GateZeroEvidenceEvidenceTypesFromL3{get;init;}=true;
     // Matter-funneled L3 (migration 0436). L3TierAThreshold is retained only to label the scope-ledger
     // audit TierCode; it no longer affects L3 batching or context density.
     public decimal L3TierAThreshold{get;init;}=0.35m;
@@ -1586,6 +1593,13 @@ public sealed record WideConfiguration(decimal TargetConfidence,decimal MinimumB
     // Migration 0462: Candidate Landscape composer sharding. Candidates per concurrent composer call
     // (same model/prompt/context/schema per slice, merged afterwards). 0 or >= candidate count = single call.
     public int LandscapeShardSize{get;init;}=6;
+    // Migration 0494: Candidate Landscape full-narrative cap. When > 0, only the top-N ranked candidates
+    // receive the expensive LLM-authored narrative; every remaining candidate keeps its deterministic
+    // narrative (already built from persisted scores + interpretive results) via the existing merge. ALL
+    // candidates stay fully scored and ranked by the POLOXI Candidate x Branch competition - this dial only
+    // trims presentation output tokens / composer shards, never the ranking. 0 = all candidates get the
+    // LLM narrative (byte-for-byte unchanged behavior).
+    public int LandscapeFullNarrativeTopN{get;init;}
 }
 
 // V3.3 answer-kind definition row from POLOXI.AnswerKind. DepthCeiling 0 and MaxInformationRounds

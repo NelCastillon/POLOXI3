@@ -2386,11 +2386,16 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                         :BuildFallbackLandscapeCandidates(survivorsFinal);
                 if(landscapeCandidates.Count>0)
                 {
-                    // One metered call per shard (migration 0462); 0 shard size = single call.
-                    llmCalls+=configuration.LandscapeShardSize>0&&landscapeCandidates.Count>configuration.LandscapeShardSize
-                        ?(landscapeCandidates.Count+configuration.LandscapeShardSize-1)/configuration.LandscapeShardSize
+                    // One metered call per shard (migration 0462); 0 shard size = single call. The full-narrative
+                    // cap (migration 0494) first trims the AUTHORED set to the top-N ranked candidates, so the
+                    // shard math (and metered call count) is computed over the authored set, not the whole set.
+                    var authoredCount=configuration.LandscapeFullNarrativeTopN>0&&landscapeCandidates.Count>configuration.LandscapeFullNarrativeTopN
+                        ?configuration.LandscapeFullNarrativeTopN
+                        :landscapeCandidates.Count;
+                    llmCalls+=configuration.LandscapeShardSize>0&&authoredCount>configuration.LandscapeShardSize
+                        ?(authoredCount+configuration.LandscapeShardSize-1)/configuration.LandscapeShardSize
                         :1;
-                    candidateLandscape=await ComposeCandidateLandscapeAsync(request,executionId.ToString(),landscapeCandidates,answerContext?.WinnerDisplayName,answerStatus,decisionConfidence,finalEntropy,relevantEvidence,externalKnowledge,interpretiveResults,configuration.LandscapeShardSize,cancellationToken);
+                    candidateLandscape=await ComposeCandidateLandscapeAsync(request,executionId.ToString(),landscapeCandidates,answerContext?.WinnerDisplayName,answerStatus,decisionConfidence,finalEntropy,relevantEvidence,externalKnowledge,interpretiveResults,configuration.LandscapeShardSize,configuration.LandscapeFullNarrativeTopN,cancellationToken);
                 }
             }
             timer.Stop();
@@ -3103,7 +3108,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     // One LLM call turns the whole decided candidate competition into a coherent landscape plus an
     // individualized per-candidate narrative. It never re-runs reasoning, changes ranking/scores, or
     // introduces new facts; any failure returns null and the standard POLOXI candidate cards stand.
-    private async Task<WideCandidateLandscapeDto?> ComposeCandidateLandscapeAsync(WideSearchRequest request,string executionId,IReadOnlyCollection<WideCandidateDto> candidates,string? winnerDisplayName,string answerStatus,decimal? decisionConfidence,WideEntropyResult finalEntropy,IReadOnlyCollection<PoloxiEvidenceDto> relevantEvidence,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge,IReadOnlyCollection<WideInterpretiveResultDto> interpretiveResults,int landscapeShardSize,CancellationToken cancellationToken)
+    private async Task<WideCandidateLandscapeDto?> ComposeCandidateLandscapeAsync(WideSearchRequest request,string executionId,IReadOnlyCollection<WideCandidateDto> candidates,string? winnerDisplayName,string answerStatus,decimal? decisionConfidence,WideEntropyResult finalEntropy,IReadOnlyCollection<PoloxiEvidenceDto> relevantEvidence,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge,IReadOnlyCollection<WideInterpretiveResultDto> interpretiveResults,int landscapeShardSize,int landscapeFullNarrativeTopN,CancellationToken cancellationToken)
     {
         try
         {
@@ -3126,11 +3131,22 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             // one proposal (landscape block from the first successful shard, which saw the whole set) and flow
             // through the unchanged identity-guard map + deterministic merge. Content per candidate is identical
             // to the single-call path; a failed shard contributes nothing and the merge fills its candidates.
+            // Full-narrative cap (migration 0494): when LandscapeFullNarrativeTopN > 0 and the set is larger,
+            // only the top-N ranked candidates are sent to the LLM composer. The FULL candidate set still forms
+            // the comparative context (userPrompt above is built from every candidate) and the deterministic
+            // merge below still authors every remaining candidate from persisted scores + interpretive results,
+            // so ALL candidates stay fully scored, ranked, and narrated - only the LLM output tokens / shard
+            // count shrink. 0 = every candidate gets the LLM narrative (unchanged behavior).
             var ordered=candidates.OrderBy(c=>c.RankNumber).ToArray();
+            var authored=landscapeFullNarrativeTopN>0&&ordered.Length>landscapeFullNarrativeTopN
+                ?ordered.Take(landscapeFullNarrativeTopN).ToArray()
+                :ordered;
+            if(authored.Length<ordered.Length)
+                logger.LogInformation("Candidate landscape full-narrative cap: {Authored} of {Total} candidate(s) authored by the LLM composer (top-N={TopN}); the remaining {Deterministic} candidate(s) use the deterministic narrative. All candidates remain scored and ranked.",authored.Length,ordered.Length,landscapeFullNarrativeTopN,ordered.Length-authored.Length);
             CandidateLandscapeProposal? proposal;
-            if(landscapeShardSize>0&&ordered.Length>landscapeShardSize)
+            if(landscapeShardSize>0&&authored.Length>landscapeShardSize)
             {
-                var shards=ordered.Chunk(landscapeShardSize).ToArray();
+                var shards=authored.Chunk(landscapeShardSize).ToArray();
                 var shardTasks=shards.Select((shard,index)=>ComposeCandidateLandscapeShardAsync(request,executionId,featureCode,systemPrompt,userPrompt,shard,index,synthesisModel,cancellationToken)).ToArray();
                 var shardProposals=await Task.WhenAll(shardTasks);
                 var successful=shardProposals.Where(p=>p is not null).Select(p=>p!).ToArray();

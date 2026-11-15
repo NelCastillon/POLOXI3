@@ -24,6 +24,8 @@ public interface IIntelligenceWideService
     // Editable matter evidence-scope threshold settings (Intelligence.SearchWide.MatterScope*) surfaced on /legal/configuration.
     Task<IReadOnlyCollection<MatterScopeSettingDto>> GetMatterScopeSettingsAsync(Guid tenantId,CancellationToken cancellationToken=default);
     Task SaveMatterScopeSettingAsync(SaveMatterScopeSettingRequest request,Guid tenantId,Guid actorUserId,CancellationToken cancellationToken=default);
+    // Editable Candidate Landscape presentation dials (Intelligence.SearchWide.Landscape*) surfaced on /legal/configuration. Saves reuse SaveMatterScopeSettingAsync.
+    Task<IReadOnlyCollection<MatterScopeSettingDto>> GetLandscapeSettingsAsync(Guid tenantId,CancellationToken cancellationToken=default);
     // Platform UI toggle controlling whether /legal/search shows the End-to-end POLOXI pipeline section.
     Task<bool> GetShowPipelineAsync(CancellationToken cancellationToken=default);
     Task SaveShowPipelineAsync(bool showPipeline,CancellationToken cancellationToken=default);

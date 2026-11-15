@@ -423,10 +423,18 @@ WHEN NOT MATCHED THEN
 
     // ── Matter evidence-scope threshold configuration ───────────────────────────────────────────
     private const string MatterScopeSettingPrefix="Intelligence.SearchWide.MatterScope";
+    // Candidate Landscape presentation dials (Intelligence.SearchWide.Landscape*: shard size, full-narrative top-N).
+    private const string LandscapeSettingPrefix="Intelligence.SearchWide.Landscape";
 
     private sealed record MatterScopeSettingRow(string SettingKey,string? PlatformValue,string? TenantValue,string DataTypeCode,string? Description);
 
-    public async Task<IReadOnlyCollection<MatterScopeSettingDto>> GetMatterScopeSettingsAsync(Guid tenantId,CancellationToken cancellationToken=default)
+    public Task<IReadOnlyCollection<MatterScopeSettingDto>> GetMatterScopeSettingsAsync(Guid tenantId,CancellationToken cancellationToken=default)
+        =>GetPrefixedSettingsAsync(MatterScopeSettingPrefix,tenantId,cancellationToken);
+
+    public Task<IReadOnlyCollection<MatterScopeSettingDto>> GetLandscapeSettingsAsync(Guid tenantId,CancellationToken cancellationToken=default)
+        =>GetPrefixedSettingsAsync(LandscapeSettingPrefix,tenantId,cancellationToken);
+
+    private async Task<IReadOnlyCollection<MatterScopeSettingDto>> GetPrefixedSettingsAsync(string prefix,Guid tenantId,CancellationToken cancellationToken)
     {
         const string sql="""
 SELECT plat.SettingKey,
@@ -441,7 +449,7 @@ WHERE plat.TenantId IS NULL AND plat.ScopeCode=N'Platform' AND plat.IsDeleted=0 
 ORDER BY plat.SettingKey;
 """;
         using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        var rows=await connection.QueryAsync<MatterScopeSettingRow>(new CommandDefinition(sql,new{TenantId=tenantId,Prefix=MatterScopeSettingPrefix},cancellationToken:cancellationToken));
+        var rows=await connection.QueryAsync<MatterScopeSettingRow>(new CommandDefinition(sql,new{TenantId=tenantId,Prefix=prefix},cancellationToken:cancellationToken));
         return rows.Select(r=>new MatterScopeSettingDto(
             r.SettingKey,
             r.TenantValue??r.PlatformValue??string.Empty,

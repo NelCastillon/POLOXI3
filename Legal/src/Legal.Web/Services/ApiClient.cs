@@ -702,6 +702,7 @@ public sealed class ApiClient(HttpClient httpClient)
     // Matter evidence-scope threshold settings (Intelligence.SearchWide.MatterScope*) stored in Core.ConfigurationSetting (tenant override + platform default).
     public async Task<IReadOnlyCollection<MatterScopeSettingDto>> GetMatterScopeSettingsAsync(CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<MatterScopeSettingDto>>("api/intelligence/matter-scope-settings",token)??[];
     public async Task SaveMatterScopeSettingAsync(string settingKey,SaveMatterScopeSettingRequest request,CancellationToken token=default){var response=await _httpClient.PutAsJsonAsync($"api/intelligence/matter-scope-settings/{Uri.EscapeDataString(settingKey)}",request,token);await EnsureSuccessWithDetailAsync(response,token);}
+    public async Task<IReadOnlyCollection<MatterScopeSettingDto>> GetLandscapeSettingsAsync(CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<MatterScopeSettingDto>>("api/intelligence/landscape-settings",token)??[];
 
     // Search result display toggle for the End-to-end POLOXI pipeline section.
     public async Task<bool> GetShowPipelineAsync(CancellationToken token=default)=>await TryGetShowPipelineAsync("api/intelligence/show-pipeline",token);

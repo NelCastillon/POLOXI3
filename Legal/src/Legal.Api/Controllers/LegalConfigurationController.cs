@@ -153,6 +153,11 @@ public sealed class LegalConfigurationController(IIntelligenceRepository reposit
     [Authorize(Policy=IntelligencePolicies.Configure)]
     public async Task<IActionResult> SaveMatterScopeSetting(string settingKey,[FromBody]SaveMatterScopeSettingRequest request,CancellationToken cancellationToken){await wideService.SaveMatterScopeSettingAsync(request with{SettingKey=settingKey},TenantId,ActorUserId,cancellationToken);return NoContent();}
 
+    // Candidate Landscape presentation dials (Intelligence.SearchWide.Landscape*) stored in Core.ConfigurationSetting. Saves reuse the matter-scope PUT (MERGE by key).
+    [HttpGet("landscape-settings")]
+    [Authorize(Policy=IntelligencePolicies.Configure)]
+    public async Task<IActionResult> LandscapeSettings(CancellationToken cancellationToken)=>Ok(await wideService.GetLandscapeSettingsAsync(TenantId,cancellationToken));
+
     // Search result display toggle for the End-to-end POLOXI pipeline section (Core.ConfigurationSetting).
     [HttpGet("show-pipeline")]
     [Authorize(Policy=IntelligencePolicies.Configure)]
