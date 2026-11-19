@@ -1,5 +1,6 @@
 using Legal.Application.Abstractions.Intelligence;
 using Legal.Application.Features.Intelligence.Decision;
+using System.Text.Json;
 using Xunit;
 
 namespace Legal.Application.Tests.Intelligence;
@@ -66,6 +67,89 @@ public sealed class LegalDocumentSemanticInterpreterBatchingTests
         Assert.Single(router.Requests);
     }
 
+    [Fact]
+    public async Task InterpretAsync_BindsUnambiguousTypeAndPreservesSupportedFact()
+    {
+        var passage = Assert.Single(BuildPassages(1, 100));
+        var concepts = new[]
+        {
+            Concept("DAMAGES_QUANTUM", "DAMAGES", 10),
+            Concept("MEDICAL_LIEN_SUBROGATION", "DAMAGES", 20)
+        };
+        var router = new CapturingRouter
+        {
+            Output = JsonSerializer.Serialize(new LegalDocumentSemanticProposal(null, null,
+                [new LegalEvidenceSemanticProposal("E1", passage.LegalDocumentPassageId, "MEDICAL_LIEN", "DAMAGES", "Lien is asserted.", .9m, "UNKNOWN", null)],
+                [new LegalFactSemanticProposal("F1", "Lien is asserted.", LegalFactStates.Alleged, .9m)],
+                [new LegalSemanticRelationshipProposal("E1", "F1", LegalDocumentRelationshipTypes.Supports, null)], [], []))
+        };
+        var pack = new ResolvedDomainPack("PERSONAL_INJURY", "PERSONAL_INJURY", concepts, [], [], [], [])
+        {
+            EvidenceTypes = [new DecisionDomainPackEvidenceTypeDto("MEDICAL_LIEN", "Medical lien", "DAMAGES", null)]
+        };
+
+        var proposal = await new LegalDocumentSemanticInterpreter(router).InterpretAsync(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(),
+            pack.PackCode, concepts, [passage], "binding", resolvedPack: pack);
+
+        Assert.Equal("MEDICAL_LIEN_SUBROGATION", Assert.Single(proposal.EvidenceItems).DomainConceptCode);
+        Assert.Single(proposal.FactPropositions);
+    }
+
+    [Fact]
+    public async Task InterpretAsync_DoesNotAdmitAmbiguousConceptOrUnlinkedFact()
+    {
+        var passage = Assert.Single(BuildPassages(1, 100));
+        var concepts = new[] { Concept("DAMAGES_QUANTUM", "DAMAGES", 10), Concept("MEDICAL_LIEN_SUBROGATION", "DAMAGES", 20) };
+        var router = new CapturingRouter
+        {
+            Output = JsonSerializer.Serialize(new LegalDocumentSemanticProposal(null, null,
+                [new LegalEvidenceSemanticProposal("E1", passage.LegalDocumentPassageId, "UNCLASSIFIED", "DAMAGES", "Unknown damage.", .9m, null, null)],
+                [new LegalFactSemanticProposal("F1", "Unknown damage.", LegalFactStates.Alleged, .9m)],
+                [new LegalSemanticRelationshipProposal("E1", "F1", LegalDocumentRelationshipTypes.Supports, null)], [], []))
+        };
+        var pack = new ResolvedDomainPack("PERSONAL_INJURY", "PERSONAL_INJURY", concepts, [], [], [], []);
+
+        var proposal = await new LegalDocumentSemanticInterpreter(router).InterpretAsync(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(),
+            pack.PackCode, concepts, [passage], "ambiguous", resolvedPack: pack);
+
+        Assert.Empty(proposal.EvidenceItems);
+        Assert.Empty(proposal.FactPropositions);
+    }
+
+    [Fact]
+    public async Task InterpretAsync_BindsInsurancePolicyToCanonicalCoverageDimension()
+    {
+        var passage = Assert.Single(BuildPassages(1, 120));
+        var concepts = new[]
+        {
+            Concept("INSURANCE_COVERAGE_LIMITS", "INSURANCE", 80),
+            Concept("INSURANCE_POLICY_COVERAGE", "INSURANCE_COVERAGE", 611),
+            Concept("LIABILITY_DUTY_BREACH", "LIABILITY", 10)
+        };
+        var router = new CapturingRouter
+        {
+            Output = JsonSerializer.Serialize(new LegalDocumentSemanticProposal("INSURANCE_POLICY", .9m,
+                [new LegalEvidenceSemanticProposal("E1", passage.LegalDocumentPassageId, "INSURANCE_POLICY", "INSURANCE_COVERAGE", "Policy lists a bodily injury limit.", .9m, "UNKNOWN_POLICY", null)],
+                [new LegalFactSemanticProposal("F1", "The policy states a bodily injury limit.", LegalFactStates.Alleged, .9m)],
+                [new LegalSemanticRelationshipProposal("E1", "F1", LegalDocumentRelationshipTypes.Supports, null)], [], []))
+        };
+        var pack = new ResolvedDomainPack("PERSONAL_INJURY", "PERSONAL_INJURY", concepts, [], [], [], [])
+        {
+            EvidenceTypes = [new DecisionDomainPackEvidenceTypeDto("INSURANCE_POLICY", "Insurance Policy", "INSURANCE_COVERAGE", null)]
+        };
+
+        var proposal = await new LegalDocumentSemanticInterpreter(router).InterpretAsync(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(),
+            pack.PackCode, concepts, [passage], "insurance", resolvedPack: pack);
+
+        var evidence = Assert.Single(proposal.EvidenceItems);
+        Assert.Equal("INSURANCE_POLICY_COVERAGE", evidence.DomainConceptCode);
+        Assert.Equal("INSURANCE_COVERAGE", evidence.DimensionCode);
+        Assert.Single(proposal.FactPropositions);
+    }
+
+    private static DecisionDomainConceptDto Concept(string code, string dimension, int order)
+        => new(Guid.NewGuid(), code, dimension, code, null, "MIXED", "MATTER_DOCUMENT", null, null, null, false, true, order, 1);
+
     private static List<LegalDocumentPassageDto> BuildPassages(int count, int textLength)
         => Enumerable.Range(0, count)
             .Select(index => new LegalDocumentPassageDto(
@@ -77,11 +161,12 @@ public sealed class LegalDocumentSemanticInterpreterBatchingTests
     private sealed class CapturingRouter : IAiProviderRouter
     {
         public List<(string SystemPrompt, string UserPrompt)> Requests { get; } = [];
+        public string Output { get; init; } = "{}";
 
         public Task<AiGenerationResult> GenerateAsync(Guid tenantId, string featureCode, string systemPrompt, string userPrompt, string? outputSchemaJson, string correlationId, AiExecutionContext? executionContext = null, string? modelCodeOverride = null, CancellationToken cancellationToken = default)
         {
             Requests.Add((systemPrompt, userPrompt));
-            return Task.FromResult(new AiGenerationResult("{}", "{}", 0, 0, null, "req", TimeSpan.Zero, "PROVIDER", "MODEL"));
+            return Task.FromResult(new AiGenerationResult(Output, Output, 0, 0, null, "req", TimeSpan.Zero, "PROVIDER", "MODEL"));
         }
 
         public Task<AiEmbeddingResult> CreateEmbeddingAsync(Guid tenantId, string featureCode, IReadOnlyCollection<string> inputs, string correlationId, CancellationToken cancellationToken = default)

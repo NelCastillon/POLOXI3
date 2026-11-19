@@ -16,6 +16,194 @@
                                     }
 
                                     @{
+                                        // Complete document roster: EVERY uploaded PDF must be visible here, even when it
+                                        // produced no extracted evidence yet (pending activation, extraction failure, or
+                                        // span-less passages). Owner._documents is the authoritative upload list; evidence
+                                        // counts are joined from the evidence graph by document version id.
+                                        var allDocs = Owner._documents ?? Array.Empty<Legal.Application.Features.Intelligence.Decision.LegalDocumentDto>();
+                                        // Every uploaded document IS evidence (it always carries a baseline DOCUMENT_INTAKE
+                                        // evidence record). The count shown here is the ATOMIC enrichment count — extracted
+                                        // semantic items on top of the intake baseline — so the intake record is excluded.
+                                        var graphEvidence = Owner._evidenceGraph?.Evidence ?? Array.Empty<Legal.Application.Features.Intelligence.Decision.LegalEvidenceGraphItemDto>();
+                                        var evidenceByVersion = graphEvidence
+                                            .Where(e => !string.Equals(e.GenerationOriginCode, "DOCUMENT_INTAKE", StringComparison.OrdinalIgnoreCase))
+                                            .GroupBy(e => e.LegalDocumentVersionId)
+                                            .ToDictionary(g => g.Key, g => g.Count());
+                                        int DocEvidenceCount(Legal.Application.Features.Intelligence.Decision.LegalDocumentDto d)
+                                            => d.Versions.Sum(v => evidenceByVersion.TryGetValue(v.LegalDocumentVersionId, out var c) ? c : 0);
+                                    }
+                                    @if (allDocs.Count > 0)
+                                    {
+                                        <div class="relm">
+                                            <div class="relm-head">
+                                                <div class="relm-head-main">
+                                                    <div class="relm-head-icon"><i class="bi bi-folder2-open"></i></div>
+                                                    <div>
+                                                        <h5>Uploaded document coverage</h5>
+                                                        <p class="relm-head-sub">
+                                                            Every document uploaded to this matter &mdash; the uploaded document is itself evidence, so
+                                                            all files are listed here as evidence with their atomic enrichment count and processing status.
+                                                            Files awaiting atomic extraction are shown as intake evidence, never as &ldquo;no evidence.&rdquo;
+                                                        </p>
+                                                    </div>
+                                                </div>
+                                                <div class="relm-kpis">
+                                                    <div class="relm-kpi">
+                                                        <span class="relm-kpi-val">@allDocs.Count</span>
+                                                        <span class="relm-kpi-lbl">Document@(allDocs.Count == 1 ? "" : "s")</span>
+                                                    </div>
+                                                    <div class="relm-kpi relm-kpi--ok">
+                                                        <span class="relm-kpi-val">@allDocs.Count(d => DocEvidenceCount(d) > 0)</span>
+                                                        <span class="relm-kpi-lbl">Enriched</span>
+                                                    </div>
+                                                    <div class="relm-kpi">
+                                                        <span class="relm-kpi-val">@allDocs.Count(d => DocEvidenceCount(d) == 0)</span>
+                                                        <span class="relm-kpi-lbl">Intake only</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div class="relm-list">
+                                                @foreach (var doc in allDocs.OrderBy(d => d.FileName, StringComparer.OrdinalIgnoreCase))
+                                                {
+                                                    var evCount = DocEvidenceCount(doc);
+                                                    var latestVersion = doc.Versions.OrderByDescending(v => v.VersionNumber).FirstOrDefault();
+                                                var versionIds = doc.Versions.Select(v => v.LegalDocumentVersionId).ToHashSet();
+                                                var documentEvidence = graphEvidence.Where(e => e.LegalDocumentId == doc.LegalDocumentId || versionIds.Contains(e.LegalDocumentVersionId))
+                                                    .OrderBy(e => e.DocumentVersionNumber).ThenBy(e => e.PageNumber ?? int.MaxValue).ToArray();
+                                                var documentAssertions = (Owner._evidenceGraph?.SourceAssertions ?? Array.Empty<Legal.Application.Features.Intelligence.Decision.LegalSourceAssertionDto>())
+                                                    .Where(a => versionIds.Contains(a.LegalDocumentVersionId)).ToArray();
+                                                var documentEvidenceIds = documentEvidence.Select(e => e.LegalEvidenceItemId).ToHashSet();
+                                                var documentLinks = (Owner._evidenceGraph?.Propositions ?? Array.Empty<Legal.Application.Features.Intelligence.Decision.LegalEvidenceGraphPropositionDto>())
+                                                    .SelectMany(p => p.Support.Where(s => documentEvidenceIds.Contains(s.LegalEvidenceItemId)).Select(s => (Proposition: p, Support: s))).ToArray();
+                                                    <div class="relm-prop evidence-file">
+                                                        <div class="relm-prop-head">
+                                                            <span class="relm-state relm-state-ok">EVIDENCE</span>
+                                                            @if (evCount > 0)
+                                                            {
+                                                                <span class="relm-state relm-state-ok" title="Atomic semantic items were extracted from this document">ENRICHED</span>
+                                                            }
+                                                            else
+                                                            {
+                                                                <span class="relm-state relm-state-warn" title="This document is evidence; atomic semantic extraction has not produced items yet">INTAKE</span>
+                                                            }
+                                                            @if (latestVersion is not null && latestVersion.LegalDocumentVersionId != Guid.Empty)
+                                                            {
+                                                                <button type="button" class="relm-prop-text relm-doc-link"
+                                                                        title="@($"Open {doc.FileName}")"
+                                                                         @onclick="() => Owner.OpenPassagePreview(latestVersion.LegalDocumentVersionId, doc.FileName, (string?)null)"
+                                                                        @onclick:stopPropagation="true">
+                                                                    <i class="bi bi-file-earmark-pdf"></i> @doc.FileName
+                                                                </button>
+                                                            }
+                                                            else
+                                                            {
+                                                                <span class="relm-prop-text"><i class="bi bi-file-earmark-pdf"></i> @doc.FileName</span>
+                                                            }
+                                                        </div>
+                                                        <div class="relm-prop-meta">
+                                                            <span class="relm-chip relm-chip--count"><i class="bi bi-link-45deg"></i> @evCount extracted item@(evCount == 1 ? "" : "s")</span>
+                                                            @if (Owner._evidenceGraph is not null)
+                                                            {
+                                                                <span class="relm-chip">@documentEvidence.Count(e => string.Equals(e.GenerationOriginCode, "DOCUMENT_INTAKE", StringComparison.OrdinalIgnoreCase)) intake anchor@(documentEvidence.Count(e => string.Equals(e.GenerationOriginCode, "DOCUMENT_INTAKE", StringComparison.OrdinalIgnoreCase)) == 1 ? "" : "s")</span>
+                                                                <span class="relm-chip">@documentLinks.Length proposition link@(documentLinks.Length == 1 ? "" : "s")</span>
+                                                                <span class="relm-chip">@documentAssertions.Length source assertion@(documentAssertions.Length == 1 ? "" : "s")</span>
+                                                            }
+                                                            @if (!string.IsNullOrWhiteSpace(doc.DocumentTypeCode))
+                                                            {
+                                                                <span class="relm-chip">@doc.DocumentTypeCode.Replace('_', ' ')</span>
+                                                            }
+                                                            @if (!string.IsNullOrWhiteSpace(doc.StatusCode))
+                                                            {
+                                                                <span class="relm-chip">@doc.StatusCode.Replace('_', ' ')</span>
+                                                            }
+                                                            @if (latestVersion is not null && !string.IsNullOrWhiteSpace(latestVersion.ProcessingStatusCode))
+                                                            {
+                                                                <span class="relm-chip">processing @latestVersion.ProcessingStatusCode.Replace('_', ' ')</span>
+                                                            }
+                                                            @if (evCount == 0 && Owner._evidenceGraph is not null)
+                                                            {
+                                                                <span class="relm-chip relm-chip--conf" title="No semantic evidence is saved for this document. The processing status above is independent of semantic enrichment.">No saved semantic evidence</span>
+                                                            }
+                                                        </div>
+                                                        <details class="evidence-file-details">
+                                                            <summary><i class="bi bi-diagram-3"></i> View saved evidence and provenance</summary>
+                                                            <div class="evidence-file-content">
+                                                                <div class="evidence-file-overview">
+                                                                    <span>Uploaded @doc.CreatedDateUtc.ToString("g") UTC</span>
+                                                                    @if (!string.IsNullOrWhiteSpace(doc.DomainPackCode)) { <span>Domain pack: @doc.DomainPackCode.Replace('_', ' ')</span> }
+                                                                    @if (latestVersion is not null)
+                                                                    {
+                                                                        <span>Version @latestVersion.VersionNumber</span>
+                                                                        <span>@latestVersion.FileSizeBytes.ToString("N0") bytes</span>
+                                                                        @if (!string.IsNullOrWhiteSpace(latestVersion.ExtractionProviderCode)) { <span>Extraction: @latestVersion.ExtractionProviderCode.Replace('_', ' ')</span> }
+                                                                        <span>Scan: @latestVersion.MalwareStatusCode.Replace('_', ' ')</span>
+                                                                    }
+                                                                </div>
+                                                                @if (Owner._evidenceGraphError is not null)
+                                                                {
+                                                                    <p class="evidence-file-empty" role="alert">@Owner._evidenceGraphError</p>
+                                                                }
+                                                                else if (Owner._evidenceGraph is null)
+                                                                {
+                                                                    <p class="evidence-file-empty">Evidence graph is loading; saved evidence details are not yet available.</p>
+                                                                }
+                                                                else if (documentEvidence.Length == 0)
+                                                                {
+                                                                    <p class="evidence-file-empty">No evidence item is saved for this document in the matter evidence graph.</p>
+                                                                }
+                                                                @foreach (var ev in documentEvidence)
+                                                                {
+                                                                    var linked = documentLinks.Where(link => link.Support.LegalEvidenceItemId == ev.LegalEvidenceItemId).ToArray();
+                                                                    var assertions = documentAssertions.Where(a => a.LegalEvidenceItemId == ev.LegalEvidenceItemId || linked.Any(link => link.Support.LegalPropositionSupportId == a.LegalPropositionSupportId)).ToArray();
+                                                                    <article class="evidence-file-item">
+                                                                        <div class="evidence-file-item-head">
+                                                                            <span class="relm-state @(string.Equals(ev.GenerationOriginCode, "DOCUMENT_INTAKE", StringComparison.OrdinalIgnoreCase) ? "relm-state-warn" : "relm-state-ok")">@ev.GenerationOriginCode.Replace('_', ' ')</span>
+                                                                            <strong>@ev.EvidenceTypeCode.Replace('_', ' ')</strong>
+                                                                            <span class="relm-chip">@ev.EvidenceStateCode.Replace('_', ' ')</span>
+                                                                        </div>
+                                                                        <p>@ev.Summary</p>
+                                                                        <div class="relm-prop-meta">
+                                                                            @if (!string.IsNullOrWhiteSpace(ev.DimensionCode)) { <span class="relm-chip relm-chip--dim">Factor: @ev.DimensionCode.Replace('_', ' ')</span> }
+                                                                            @if (!string.IsNullOrWhiteSpace(ev.DomainConceptCode)) { <span class="relm-chip">Concept: @ev.DomainConceptCode.Replace('_', ' ')</span> }
+                                                                            @if (!string.IsNullOrWhiteSpace(ev.VerificationProfileCode)) { <span class="relm-chip">Verification: @ev.VerificationProfileCode.Replace('_', ' ')</span> }
+                                                                            @if (!string.IsNullOrWhiteSpace(ev.RawEvidenceTypeCode)) { <span class="relm-chip">Original type: @ev.RawEvidenceTypeCode</span> }
+                                                                            @if (ev.Confidence is { } confidence) { <span class="relm-chip">Confidence: @confidence.ToString("P0")</span> }
+                                                                            @if (ev.ExtractionConfidence is { } extractionConfidence) { <span class="relm-chip">Extraction: @extractionConfidence.ToString("P0")</span> }
+                                                                            @if (ev.PageNumber is { } evidencePage) { <span class="relm-chip">Page @evidencePage</span> }
+                                                                            @if (!string.IsNullOrWhiteSpace(ev.SectionPath)) { <span class="relm-chip">@ev.SectionPath</span> }
+                                                                            <span class="relm-chip">Version @ev.DocumentVersionNumber</span>
+                                                                        </div>
+                                                                        @if (ev.LegalDocumentVersionId != Guid.Empty)
+                                                                        {
+                                                                            <button type="button" class="evidence-file-source" @onclick="() => Owner.OpenPassagePreview(ev.LegalDocumentVersionId, doc.FileName, string.Empty, string.Empty, string.Empty, ev.Summary, ev.PassageText, ev.PageNumber, ev.SectionPath)">
+                                                                                <i class="bi bi-file-earmark-pdf"></i> View source PDF@(ev.PageNumber is { } sourcePage ? $" · page {sourcePage}" : "")
+                                                                            </button>
+                                                                        }
+                                                                        @if (!string.IsNullOrWhiteSpace(ev.PassageText)) { <blockquote class="evidence-file-quote">@ev.PassageText</blockquote> }
+                                                                        @foreach (var link in linked)
+                                                                        {
+                                                                            <div class="evidence-file-link"><i class="bi bi-arrow-return-right"></i><span>@link.Support.RelationshipTypeCode.Replace('_', ' '): @link.Proposition.PropositionText <small>(@link.Proposition.FactStateCode.Replace('_', ' ')@(link.Proposition.IsDecisionAuthoritative ? ", decision-authoritative" : ""))</small></span></div>
+                                                                            @if (!string.IsNullOrWhiteSpace(link.Support.AssessmentReason)) { <p class="evidence-file-reason">@link.Support.AssessmentReason</p> }
+                                                                        }
+                                                                        @foreach (var assertion in assertions)
+                                                                        {
+                                                                            <div class="evidence-file-assertion"><i class="bi bi-pin-angle"></i><span>Source assertion · @assertion.VerificationStateCode.Replace('_', ' ') · @assertion.AnchorMethodCode.Replace('_', ' ') · span @assertion.StartOffset–@assertion.EndOffset<br /><q>@assertion.QuotedText</q></span></div>
+                                                                        }
+                                                                    </article>
+                                                                }
+                                                                @foreach (var assertion in documentAssertions.Where(a => a.LegalEvidenceItemId is null && !documentLinks.Any(link => link.Support.LegalPropositionSupportId == a.LegalPropositionSupportId)))
+                                                                {
+                                                                    <div class="evidence-file-assertion"><i class="bi bi-pin-angle"></i><span>Unlinked source assertion · @assertion.VerificationStateCode.Replace('_', ' ') · <q>@assertion.QuotedText</q></span></div>
+                                                                }
+                                                            </div>
+                                                        </details>
+                                                    </div>
+                                                }
+                                            </div>
+                                        </div>
+                                    }
+
+                                    @{
                                         var corpusProps = Owner._evidenceGraph?.Propositions
                                             ?.Where(p => p.Support.Count > 0)
                                             .ToArray() ?? Array.Empty<Legal.Application.Features.Intelligence.Decision.LegalEvidenceGraphPropositionDto>();
@@ -25,114 +213,352 @@
                                     }
                                     @if (corpusProps.Length > 0)
                                     {
-                                        <div class="dfi-admission">
-                                            <div class="dfi-admission-head">
-                                                <h5>Atomic propositions matched to document evidence</h5>
-                                                <p class="dfi-panel-sub">
-                                                    @corpusProps.Length proposition(s) derived from your uploaded corpus &middot;
-                                                    @corpusProps.Count(p => p.IsDecisionAuthoritative) decision-authoritative.
-                                                    Each row links an atomic proposition to the extracted document evidence that supports, contradicts, or contextualizes it.
-                                                </p>
+                                        <div class="relm">
+                                            <div class="relm-head">
+                                                <div class="relm-head-main">
+                                                    <div class="relm-head-icon"><i class="bi bi-diagram-3-fill"></i></div>
+                                                    <div>
+                                                        <h5>Atomic propositions &harr; document evidence</h5>
+                                                        <p class="relm-head-sub">
+                                                            Each proposition is typed as
+                                                            <span class="relm-tone relm-tone-factual">factual</span>,
+                                                            <span class="relm-tone relm-tone-legal">legal</span>, or an
+                                                            <span class="relm-tone relm-tone-application">application</span> conclusion, then linked to the extracted document evidence that
+                                                            <span class="relm-tone relm-tone-supports">supports</span>,
+                                                            <span class="relm-tone relm-tone-contradicts">contradicts</span>, or
+                                                            <span class="relm-tone relm-tone-context">contextualizes</span> it &mdash; with the exact source, page, section, and verbatim passage.
+                                                        </p>
+                                                    </div>
+                                                </div>
+                                                <div class="relm-kpis">
+                                                    <div class="relm-kpi">
+                                                        <span class="relm-kpi-val">@corpusProps.Length</span>
+                                                        <span class="relm-kpi-lbl">Proposition@(corpusProps.Length == 1 ? "" : "s")</span>
+                                                    </div>
+                                                    <div class="relm-kpi relm-kpi--ok">
+                                                        <span class="relm-kpi-val">@corpusProps.Count(p => p.IsDecisionAuthoritative)</span>
+                                                        <span class="relm-kpi-lbl">Decision-authoritative</span>
+                                                    </div>
+                                                    <div class="relm-kpi relm-kpi--link">
+                                                        <span class="relm-kpi-val">@corpusProps.Sum(p => p.Support.Count)</span>
+                                                        <span class="relm-kpi-lbl">Evidence links</span>
+                                                    </div>
+                                                    <div class="relm-kpi relm-kpi--factual" title="Factual assertions — grounded in admitted document evidence">
+                                                        <span class="relm-kpi-val">@corpusProps.Count(p => NormalizeKind(p.PropositionKindCode) == Legal.Application.Features.Intelligence.Decision.LegalPropositionKinds.Factual)</span>
+                                                        <span class="relm-kpi-lbl">Factual</span>
+                                                    </div>
+                                                    <div class="relm-kpi relm-kpi--legal" title="Legal rule statements — grounded in verified authority">
+                                                        <span class="relm-kpi-val">@corpusProps.Count(p => NormalizeKind(p.PropositionKindCode) == Legal.Application.Features.Intelligence.Decision.LegalPropositionKinds.Legal)</span>
+                                                        <span class="relm-kpi-lbl">Legal</span>
+                                                    </div>
+                                                    <div class="relm-kpi relm-kpi--application" title="Application conclusions — whether the facts satisfy the governing rule">
+                                                        <span class="relm-kpi-val">@corpusProps.Count(p => NormalizeKind(p.PropositionKindCode) == Legal.Application.Features.Intelligence.Decision.LegalPropositionKinds.Application)</span>
+                                                        <span class="relm-kpi-lbl">Application</span>
+                                                    </div>
+                                                </div>
                                             </div>
-                                            <ul class="dfi-admission-list">
-                                                @foreach (var prop in corpusProps.OrderByDescending(p => p.IsDecisionAuthoritative).ThenByDescending(p => p.Confidence ?? 0m))
+                                            <div class="relm-search">
+                                                <i class="bi bi-search relm-search-icon"></i>
+                                                <input type="search" class="relm-search-input"
+                                                       placeholder="Search propositions, evidence, and passages…"
+                                                       value="@_search"
+                                                       @oninput="OnSearchInput" />
+                                                @if (!string.IsNullOrWhiteSpace(_search))
                                                 {
-                                                    <li class="dfi-admission-item">
-                                                        <div class="dfi-admission-main">
-                                                            <span class="dfi-pill dfi-pill-@(prop.IsDecisionAuthoritative ? "ok" : "warn")">@prop.FactStateCode</span>
-                                                            <span class="dfi-admission-title">@prop.PropositionText</span>
+                                                    <button type="button" class="relm-search-clear" title="Clear search" @onclick="ClearSearch">
+                                                        <i class="bi bi-x-lg"></i>
+                                                    </button>
+                                                }
+                                            </div>
+                                            <div class="relm-list">
+                                                @{
+                                                    // Document evidence is the source of truth: propositions extracted from the
+                                                    // uploaded corpus (document-backed support, or DYNAMIC_LLM origin) are the top
+                                                    // propositions and must rank first, ahead of authoritative/confidence ordering.
+                                                    bool IsDocumentBacked(Legal.Application.Features.Intelligence.Decision.LegalEvidenceGraphPropositionDto p)
+                                                        => string.Equals(p.GenerationOriginCode, "DYNAMIC_LLM", StringComparison.OrdinalIgnoreCase)
+                                                           || p.Support.Any(s => evidenceById.TryGetValue(s.LegalEvidenceItemId, out var e)
+                                                                                 && e is not null && e.LegalDocumentVersionId != Guid.Empty);
+                                                    int DocumentEvidenceLinks(Legal.Application.Features.Intelligence.Decision.LegalEvidenceGraphPropositionDto p)
+                                                        => p.Support.Count(s => evidenceById.TryGetValue(s.LegalEvidenceItemId, out var e)
+                                                                                && e is not null && e.LegalDocumentVersionId != Guid.Empty);
+                                                    var visibleProps = corpusProps
+                                                        .Where(p => MatchesSearch(p, evidenceById))
+                                                        .OrderByDescending(p => IsDocumentBacked(p))
+                                                        .ThenByDescending(p => DocumentEvidenceLinks(p))
+                                                        .ThenByDescending(p => p.IsDecisionAuthoritative)
+                                                        .ThenByDescending(p => p.Confidence ?? 0m)
+                                                        .ToArray();
+                                                }
+                                                @if (visibleProps.Length == 0)
+                                                {
+                                                    <p class="relm-search-empty"><i class="bi bi-search"></i> No propositions, evidence, or passages match &ldquo;@_search&rdquo;.</p>
+                                                }
+                                                @foreach (var prop in visibleProps)
+                                                {
+                                                    <div class="relm-prop @(prop.IsDecisionAuthoritative ? "relm-prop--auth" : "")">
+                                                         <div class="relm-prop-head">
+                                                            <span class="relm-kind @KindClass(prop.PropositionKindCode)" title="@KindTitle(prop.PropositionKindCode)">
+                                                                <i class="bi @KindIcon(prop.PropositionKindCode)"></i> @KindLabel(prop.PropositionKindCode)
+                                                            </span>
+                                                            <span class="relm-state relm-state-@(prop.IsDecisionAuthoritative ? "ok" : "warn")">@prop.FactStateCode.Replace('_', ' ')</span>
+                                                            <span class="relm-prop-text">@Highlight(prop.PropositionText)</span>
                                                         </div>
-                                                        <div class="dfi-admission-meta">
+                                                        <div class="relm-prop-meta">
                                                             @if (prop.Confidence is { } pc)
                                                             {
-                                                                <span class="dfi-admission-tag">confidence @pc.ToString("P0")</span>
+                                                                <span class="relm-chip relm-chip--conf"><i class="bi bi-graph-up-arrow"></i> confidence @pc.ToString("P0")</span>
                                                             }
                                                             @if (prop.IsDecisionAuthoritative)
                                                             {
-                                                                <span class="dfi-admission-tag"><i class="bi bi-shield-check"></i> authoritative</span>
+                                                                <span class="relm-chip relm-chip--auth"><i class="bi bi-shield-check"></i> authoritative</span>
                                                             }
-                                                            <span class="dfi-admission-tag">@prop.Support.Count supporting evidence link(s)</span>
+                                                            <span class="relm-chip relm-chip--count"><i class="bi bi-link-45deg"></i> @prop.Support.Count supporting evidence link@(prop.Support.Count == 1 ? "" : "s")</span>
+                                                            @{
+                                                                // Factor/dimension and evidence-type are inherited from the admitted evidence
+                                                                // items that support this proposition. Surface the distinct set so each
+                                                                // document-derived proposition is visibly linked to its factor and evidence type.
+                                                                var propEvidence = prop.Support
+                                                                    .Select(s => evidenceById.TryGetValue(s.LegalEvidenceItemId, out var e) ? e : null)
+                                                                    .Where(e => e is not null)
+                                                                    .Select(e => e!)
+                                                                    .ToList();
+                                                                var propDimensions = propEvidence
+                                                                    .Select(e => e.DimensionCode)
+                                                                    .Where(d => !string.IsNullOrWhiteSpace(d))
+                                                                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                                                                    .ToList();
+                                                                var propEvidenceTypes = propEvidence
+                                                                    .Select(e => e.EvidenceTypeCode)
+                                                                    .Where(t => !string.IsNullOrWhiteSpace(t))
+                                                                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                                                                    .ToList();
+                                                            }
+                                                            @foreach (var dim in propDimensions)
+                                                            {
+                                                                <span class="relm-chip relm-chip--dim" title="Factor / dimension this proposition is linked to"><i class="bi bi-diagram-3"></i> @dim.Replace('_', ' ')</span>
+                                                            }
+                                                            @foreach (var et in propEvidenceTypes)
+                                                            {
+                                                                <span class="relm-chip relm-chip--etype" title="Evidence type supporting this proposition"><i class="bi bi-patch-check"></i> @et.Replace('_', ' ')</span>
+                                                            }
                                                         </div>
-                                                        <ul class="dfi-support-list">
+                                                        <div class="relm-links">
                                                             @foreach (var sup in prop.Support)
                                                             {
                                                                 evidenceById.TryGetValue(sup.LegalEvidenceItemId, out var ev);
-                                                                <li class="dfi-support-row">
-                                                                    <span class="dfi-pill @LegalPersonalInjuryDecision2.DiRelationToneClass(sup.RelationshipTypeCode)" title="@sup.AssessmentReason">@sup.RelationshipTypeCode</span>
-                                                                    <span class="dfi-support-text">
-                                                                        @(ev is null ? "(evidence detail unavailable)" : ev.Summary)
-                                                                    </span>
-                                                                    @if (ev is not null)
-                                                                    {
-                                                                        <div class="dfi-support-meta">
+                                                                <div class="relm-link">
+                                                                    <div class="relm-link-rail">
+                                                                        <span class="relm-rel @LegalPersonalInjuryDecision2.DiRelationToneClass(sup.RelationshipTypeCode)" title="@sup.AssessmentReason">@sup.RelationshipTypeCode</span>
+                                                                        <span class="relm-connector"><i class="bi bi-arrow-down"></i></span>
+                                                                    </div>
+                                                                    <div class="relm-evidence">
+                                                                        <div class="relm-evidence-summary">
+                                                                            @(ev is null ? (MarkupString)"(evidence detail unavailable)" : Highlight(ev.Summary))
+                                                                        </div>
+                                                                        @if (ev is not null)
+                                                                        {
+                                                                            <div class="relm-evidence-tags">
+                                                                                @if (!string.IsNullOrWhiteSpace(ev.DocumentFileName))
+                                                                                {
+                                                                                    @if (ev.LegalDocumentVersionId != Guid.Empty)
+                                                                                    {
+                                                                                        <button type="button" class="relm-tag relm-tag--doc"
+                                                                                                title="@($"Preview {ev.DocumentFileName} with this passage highlighted")"
+                                                                                                    @onclick="() => Owner.OpenPassagePreview(ev.LegalDocumentVersionId, ev.DocumentFileName, prop.PropositionText, sup.RelationshipTypeCode, sup.AssessmentReason, ev.Summary, ev.PassageText, ev.PageNumber, ev.SectionPath)"
+                                                                                                    @onclick:stopPropagation="true">
+                                                                                                <i class="bi bi-file-earmark-text"></i> @ev.DocumentFileName@(ev.DocumentVersionNumber > 0 ? $" v{ev.DocumentVersionNumber}" : "")
+                                                                                        </button>
+                                                                                    }
+                                                                                    else
+                                                                                    {
+                                                                                        <span class="relm-tag relm-tag--doc relm-tag--static">
+                                                                                            <i class="bi bi-file-earmark-text"></i> @ev.DocumentFileName@(ev.DocumentVersionNumber > 0 ? $" v{ev.DocumentVersionNumber}" : "")
+                                                                                        </span>
+                                                                                    }
+                                                                                }
+                                                                                @if (ev.PageNumber is { } pg)
+                                                                                {
+                                                                                    <span class="relm-tag relm-tag--page"><i class="bi bi-file-text"></i> p.@pg</span>
+                                                                                }
+                                                                                @if (!string.IsNullOrWhiteSpace(ev.SectionPath))
+                                                                                {
+                                                                                    <span class="relm-tag" title="Section"><i class="bi bi-signpost-split"></i> @ev.SectionPath</span>
+                                                                                }
+                                                                                @if (!string.IsNullOrWhiteSpace(ev.DocumentTypeCode))
+                                                                                {
+                                                                                    <span class="relm-tag">@ev.DocumentTypeCode.Replace('_', ' ')</span>
+                                                                                }
+                                                                                @if (!string.IsNullOrWhiteSpace(ev.EvidenceTypeCode))
+                                                                                {
+                                                                                    <span class="relm-tag">@ev.EvidenceTypeCode.Replace('_', ' ')</span>
+                                                                                }
+                                                                                @if (!string.IsNullOrWhiteSpace(ev.DimensionCode))
+                                                                                {
+                                                                                    <span class="relm-tag relm-tag--dim">@ev.DimensionCode.Replace('_', ' ')</span>
+                                                                                }
+                                                                                @if (!string.IsNullOrWhiteSpace(ev.EvidenceStateCode))
+                                                                                {
+                                                                                    <span class="relm-tag relm-tag--state"><i class="bi bi-patch-check"></i> @ev.EvidenceStateCode.Replace('_', ' ')</span>
+                                                                                }
+                                                                                @if (ev.Confidence is { } evc)
+                                                                                {
+                                                                                    <span class="relm-tag relm-tag--conf">confidence @evc.ToString("P0")</span>
+                                                                                }
+                                                                            </div>
+                                                                            @if (!string.IsNullOrWhiteSpace(ev.PassageText))
+                                                                            {
+                                                                                @if (ev.LegalDocumentVersionId != Guid.Empty)
+                                                                                {
+                                                                                    <blockquote class="relm-passage relm-passage--clickable"
+                                                                                                role="button"
+                                                                                                title="Preview this passage highlighted in the source document"
+                                                                                                @onclick="() => Owner.OpenPassagePreview(ev.LegalDocumentVersionId, ev.DocumentFileName, prop.PropositionText, sup.RelationshipTypeCode, sup.AssessmentReason, ev.Summary, ev.PassageText, ev.PageNumber, ev.SectionPath)"
+                                                                                                @onclick:stopPropagation="true">&ldquo;@Highlight(ev.PassageText)&rdquo;<i class="bi bi-highlighter relm-passage-icon"></i></blockquote>
+                                                                                }
+                                                                                else
+                                                                                {
+                                                                                    <blockquote class="relm-passage">&ldquo;@Highlight(ev.PassageText)&rdquo;</blockquote>
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                        @if (!string.IsNullOrWhiteSpace(sup.AssessmentReason))
+                                                                        {
+                                                                            <div class="relm-reason"><i class="bi bi-chat-left-quote"></i> @sup.AssessmentReason</div>
+                                                                        }
+                                                                    </div>
+                                                                </div>
+                                                            }
+                                                        </div>
+                                                    </div>
+                                                            }
+                                                        </div>
+                                                    </div>
+                                                }
+
+                                                @{
+                                                    // Source of truth: EVERY admitted document-evidence item must be displayed, even when it
+                                                    // is not linked to a supported proposition. Collect the evidence item ids already shown
+                                                    // through the proposition ↔ evidence map above, then surface the remainder here so no
+                                                    // uploaded document passage is hidden.
+                                                    var linkedEvidenceIds = new HashSet<Guid>(
+                                                        corpusProps.SelectMany(p => p.Support).Select(s => s.LegalEvidenceItemId));
+                                                    var allEvidence = Owner._evidenceGraph?.Evidence
+                                                        ?? Array.Empty<Legal.Application.Features.Intelligence.Decision.LegalEvidenceGraphItemDto>();
+                                                    var unlinkedEvidence = allEvidence
+                                                        .Where(e => !linkedEvidenceIds.Contains(e.LegalEvidenceItemId))
+                                                        // Document-intake baseline records (the document-as-evidence anchor) are already
+                                                        // represented in the uploaded-document roster above; exclude them here so this
+                                                        // section surfaces only atomic extracted evidence not tied to a proposition.
+                                                        .Where(e => !string.Equals(e.GenerationOriginCode, "DOCUMENT_INTAKE", StringComparison.OrdinalIgnoreCase))
+                                                        .Where(e => MatchesEvidenceSearch(e))
+                                                        .OrderBy(e => e.DocumentFileName)
+                                                        .ThenBy(e => e.PageNumber ?? int.MaxValue)
+                                                        .ToArray();
+                                                }
+                                                @if (unlinkedEvidence.Length > 0)
+                                                {
+                                                    <div class="relm">
+                                                        <div class="relm-head">
+                                                            <div class="relm-head-main">
+                                                                <div class="relm-head-icon"><i class="bi bi-files"></i></div>
+                                                                <div>
+                                                                    <h5>All document evidence</h5>
+                                                                    <p class="relm-head-sub">
+                                                                        Additional admitted evidence extracted from your uploaded corpus that is not yet
+                                                                        linked to a supported proposition &mdash; shown here because document evidence is the
+                                                                        source of truth and must always be visible.
+                                                                    </p>
+                                                                </div>
+                                                            </div>
+                                                            <div class="relm-kpis">
+                                                                <div class="relm-kpi relm-kpi--link">
+                                                                    <span class="relm-kpi-val">@unlinkedEvidence.Length</span>
+                                                                    <span class="relm-kpi-lbl">Evidence item@(unlinkedEvidence.Length == 1 ? "" : "s")</span>
+                                                                </div>
+                                                                <div class="relm-kpi">
+                                                                    <span class="relm-kpi-val">@unlinkedEvidence.Select(e => e.DocumentFileName).Distinct(StringComparer.OrdinalIgnoreCase).Count()</span>
+                                                                    <span class="relm-kpi-lbl">Documents</span>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                        <div class="relm-list">
+                                                            @foreach (var ev in unlinkedEvidence)
+                                                            {
+                                                                <div class="relm-prop">
+                                                                    <div class="relm-evidence">
+                                                                        <div class="relm-evidence-summary">@Highlight(ev.Summary)</div>
+                                                                        <div class="relm-evidence-tags">
                                                                             @if (!string.IsNullOrWhiteSpace(ev.DocumentFileName))
                                                                             {
                                                                                 @if (ev.LegalDocumentVersionId != Guid.Empty)
                                                                                 {
-                                                                                    <button type="button" class="dfi-support-source dfi-support-source--link"
-                                                                                            title="@($"Preview {ev.DocumentFileName}")"
-                                                                                            @onclick="() => Owner.OpenDocumentPreview(ev.LegalDocumentVersionId, ev.DocumentFileName)"
+                                                                                    <button type="button" class="relm-tag relm-tag--doc"
+                                                                                            title="@($"Preview {ev.DocumentFileName} with this passage highlighted")"
+                                                                                            @onclick="() => Owner.OpenPassagePreview(ev.LegalDocumentVersionId, ev.DocumentFileName, string.Empty, string.Empty, string.Empty, ev.Summary, ev.PassageText, ev.PageNumber, ev.SectionPath)"
                                                                                             @onclick:stopPropagation="true">
-                                                                                        <i class="bi bi-file-earmark-text"></i> @ev.DocumentFileName
-                                                                                        @(ev.DocumentVersionNumber > 0 ? $" v{ev.DocumentVersionNumber}" : "")
+                                                                                        <i class="bi bi-file-earmark-text"></i> @ev.DocumentFileName@(ev.DocumentVersionNumber > 0 ? $" v{ev.DocumentVersionNumber}" : "")
                                                                                     </button>
                                                                                 }
                                                                                 else
                                                                                 {
-                                                                                    <span class="dfi-support-source">
-                                                                                        <i class="bi bi-file-earmark-text"></i> @ev.DocumentFileName
-                                                                                        @(ev.DocumentVersionNumber > 0 ? $" v{ev.DocumentVersionNumber}" : "")
+                                                                                    <span class="relm-tag relm-tag--doc relm-tag--static">
+                                                                                        <i class="bi bi-file-earmark-text"></i> @ev.DocumentFileName@(ev.DocumentVersionNumber > 0 ? $" v{ev.DocumentVersionNumber}" : "")
                                                                                     </span>
                                                                                 }
                                                                             }
                                                                             @if (ev.PageNumber is { } pg)
                                                                             {
-                                                                                <span class="dfi-admission-tag"><i class="bi bi-file-text"></i> p.@pg</span>
+                                                                                <span class="relm-tag relm-tag--page"><i class="bi bi-file-text"></i> p.@pg</span>
                                                                             }
                                                                             @if (!string.IsNullOrWhiteSpace(ev.SectionPath))
                                                                             {
-                                                                                <span class="dfi-admission-tag" title="Section">@ev.SectionPath</span>
+                                                                                <span class="relm-tag" title="Section"><i class="bi bi-signpost-split"></i> @ev.SectionPath</span>
                                                                             }
                                                                             @if (!string.IsNullOrWhiteSpace(ev.DocumentTypeCode))
                                                                             {
-                                                                                <span class="dfi-admission-tag">@ev.DocumentTypeCode.Replace('_', ' ')</span>
+                                                                                <span class="relm-tag">@ev.DocumentTypeCode.Replace('_', ' ')</span>
                                                                             }
                                                                             @if (!string.IsNullOrWhiteSpace(ev.EvidenceTypeCode))
                                                                             {
-                                                                                <span class="dfi-admission-tag">@ev.EvidenceTypeCode.Replace('_', ' ')</span>
+                                                                                <span class="relm-tag">@ev.EvidenceTypeCode.Replace('_', ' ')</span>
                                                                             }
                                                                             @if (!string.IsNullOrWhiteSpace(ev.DimensionCode))
                                                                             {
-                                                                                <span class="dfi-admission-tag">@ev.DimensionCode.Replace('_', ' ')</span>
+                                                                                <span class="relm-tag relm-tag--dim">@ev.DimensionCode.Replace('_', ' ')</span>
                                                                             }
                                                                             @if (!string.IsNullOrWhiteSpace(ev.EvidenceStateCode))
                                                                             {
-                                                                                <span class="dfi-admission-tag">@ev.EvidenceStateCode.Replace('_', ' ')</span>
+                                                                                <span class="relm-tag relm-tag--state"><i class="bi bi-patch-check"></i> @ev.EvidenceStateCode.Replace('_', ' ')</span>
                                                                             }
                                                                             @if (ev.Confidence is { } evc)
                                                                             {
-                                                                                <span class="dfi-admission-tag">confidence @evc.ToString("P0")</span>
+                                                                                <span class="relm-tag relm-tag--conf">confidence @evc.ToString("P0")</span>
                                                                             }
                                                                         </div>
                                                                         @if (!string.IsNullOrWhiteSpace(ev.PassageText))
                                                                         {
-                                                                            <blockquote class="dfi-support-passage">&ldquo;@ev.PassageText&rdquo;</blockquote>
+                                                                            @if (ev.LegalDocumentVersionId != Guid.Empty)
+                                                                            {
+                                                                                <blockquote class="relm-passage relm-passage--clickable"
+                                                                                            role="button"
+                                                                                            title="Preview this passage highlighted in the source document"
+                                                                                            @onclick="() => Owner.OpenPassagePreview(ev.LegalDocumentVersionId, ev.DocumentFileName, string.Empty, string.Empty, string.Empty, ev.Summary, ev.PassageText, ev.PageNumber, ev.SectionPath)"
+                                                                                            @onclick:stopPropagation="true">&ldquo;@Highlight(ev.PassageText)&rdquo;<i class="bi bi-highlighter relm-passage-icon"></i></blockquote>
+                                                                            }
+                                                                            else
+                                                                            {
+                                                                                <blockquote class="relm-passage">&ldquo;@Highlight(ev.PassageText)&rdquo;</blockquote>
+                                                                            }
                                                                         }
-                                                                    }
-                                                                    @if (!string.IsNullOrWhiteSpace(sup.AssessmentReason))
-                                                                    {
-                                                                        <span class="dfi-support-reason">@sup.AssessmentReason</span>
-                                                                    }
-                                                                </li>
+                                                                    </div>
+                                                                </div>
                                                             }
-                                                        </ul>
-                                                    </li>
+                                                        </div>
+                                                    </div>
                                                 }
-                                            </ul>
-                                        </div>
-                                    }
 
-                                    @if (Owner.TotalEvidenceCount == 0)
+                                                @if (Owner.TotalEvidenceCount == 0)
                                     {
                                         <p class="dfi-empty">No corpus evidence from your uploaded documents was admitted in the referenced execution.</p>
                                         @if ((Owner._response?.DecisionEvidenceCoverage ?? 0m) > 0m)
@@ -236,4 +662,122 @@
 
 @code {
     [Parameter] public LegalPersonalInjuryDecision2 Owner { get; set; } = default!;
+
+    private string? _search;
+
+    private void OnSearchInput(ChangeEventArgs e)
+        => _search = e.Value?.ToString();
+
+    private void ClearSearch()
+        => _search = null;
+
+    // A proposition stays visible when the query matches its text, any of its evidence
+    // summaries, relationship reasons, document names, or verbatim passage text.
+    private bool MatchesSearch(
+        Legal.Application.Features.Intelligence.Decision.LegalEvidenceGraphPropositionDto prop,
+        IReadOnlyDictionary<Guid, Legal.Application.Features.Intelligence.Decision.LegalEvidenceGraphItemDto> evidenceById)
+    {
+        var q = _search?.Trim();
+        if (string.IsNullOrEmpty(q))
+            return true;
+
+        if (Contains(prop.PropositionText, q) || Contains(prop.FactStateCode, q))
+            return true;
+
+        foreach (var sup in prop.Support)
+        {
+            if (Contains(sup.RelationshipTypeCode, q) || Contains(sup.AssessmentReason, q))
+                return true;
+            if (evidenceById.TryGetValue(sup.LegalEvidenceItemId, out var ev) &&
+                (Contains(ev.Summary, q) || Contains(ev.PassageText, q) ||
+                 Contains(ev.DocumentFileName, q) || Contains(ev.SectionPath, q)))
+                return true;
+        }
+        return false;
+    }
+
+    private bool MatchesEvidenceSearch(
+        Legal.Application.Features.Intelligence.Decision.LegalEvidenceGraphItemDto ev)
+    {
+        var q = _search?.Trim();
+        if (string.IsNullOrEmpty(q))
+            return true;
+
+        return Contains(ev.Summary, q) || Contains(ev.PassageText, q) ||
+               Contains(ev.DocumentFileName, q) || Contains(ev.SectionPath, q) ||
+               Contains(ev.EvidenceTypeCode, q) || Contains(ev.DimensionCode, q);
+    }
+
+    private static bool Contains(string? text, string query)
+        => !string.IsNullOrEmpty(text) && text.Contains(query, StringComparison.OrdinalIgnoreCase);
+
+    // ── Evidence-Type Atomic-Proposition Bridge ───────────────────────────────
+    // Every atomic proposition is one of three kinds: a FACTUAL assertion ("what
+    // happened"), a LEGAL rule statement ("what rule governs"), or an APPLICATION
+    // conclusion ("whether the facts satisfy the rule"). We surface the kind as a
+    // distinct, color-coded badge so the factual chain and the legal chain stay
+    // visibly separate and never collapse into one undifferentiated confidence.
+    private static string NormalizeKind(string? kindCode)
+        => (kindCode ?? Legal.Application.Features.Intelligence.Decision.LegalPropositionKinds.Factual)
+            .Trim().ToUpperInvariant();
+
+    private static string KindLabel(string? kindCode) => NormalizeKind(kindCode) switch
+    {
+        Legal.Application.Features.Intelligence.Decision.LegalPropositionKinds.Legal => "Legal",
+        Legal.Application.Features.Intelligence.Decision.LegalPropositionKinds.Application => "Application",
+        _ => "Factual",
+    };
+
+    private static string KindIcon(string? kindCode) => NormalizeKind(kindCode) switch
+    {
+        Legal.Application.Features.Intelligence.Decision.LegalPropositionKinds.Legal => "bi-bank2",
+        Legal.Application.Features.Intelligence.Decision.LegalPropositionKinds.Application => "bi-diagram-2",
+        _ => "bi-file-earmark-text",
+    };
+
+    private static string KindClass(string? kindCode) => NormalizeKind(kindCode) switch
+    {
+        Legal.Application.Features.Intelligence.Decision.LegalPropositionKinds.Legal => "relm-kind--legal",
+        Legal.Application.Features.Intelligence.Decision.LegalPropositionKinds.Application => "relm-kind--application",
+        _ => "relm-kind--factual",
+    };
+
+    private static string KindTitle(string? kindCode) => NormalizeKind(kindCode) switch
+    {
+        Legal.Application.Features.Intelligence.Decision.LegalPropositionKinds.Legal
+            => "Legal proposition — a statement of the governing rule, grounded in verified authority.",
+        Legal.Application.Features.Intelligence.Decision.LegalPropositionKinds.Application
+            => "Application conclusion — whether the facts satisfy the governing rule, bridging the factual and legal chains.",
+        _ => "Factual proposition — an assertion about what happened, grounded in admitted document evidence.",
+    };
+
+    // Wraps every case-insensitive occurrence of the active search term in a <mark> so the
+    // matching words are highlighted in-place without altering the surrounding text.
+    private MarkupString Highlight(string? text)
+    {
+        if (string.IsNullOrEmpty(text))
+            return (MarkupString)string.Empty;
+
+        var q = _search?.Trim();
+        if (string.IsNullOrEmpty(q))
+            return (MarkupString)System.Net.WebUtility.HtmlEncode(text);
+
+        var sb = new System.Text.StringBuilder();
+        var from = 0;
+        while (from < text.Length)
+        {
+            var idx = text.IndexOf(q, from, StringComparison.OrdinalIgnoreCase);
+            if (idx < 0)
+            {
+                sb.Append(System.Net.WebUtility.HtmlEncode(text[from..]));
+                break;
+            }
+            sb.Append(System.Net.WebUtility.HtmlEncode(text[from..idx]));
+            sb.Append("<mark class=\"relm-search-hit\">");
+            sb.Append(System.Net.WebUtility.HtmlEncode(text.Substring(idx, q.Length)));
+            sb.Append("</mark>");
+            from = idx + q.Length;
+        }
+        return (MarkupString)sb.ToString();
+    }
 }

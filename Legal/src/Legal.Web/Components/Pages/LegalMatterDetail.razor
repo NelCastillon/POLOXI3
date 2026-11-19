@@ -115,7 +115,8 @@
                         <button class="um-btn um-btn-light um-btn-sm" @onclick="CloseAsync" disabled="@_busy" title="Close matter"><i class="bi bi-archive"></i> Close</button>
                     }
                     <button class="um-btn um-btn-light um-btn-sm" @onclick="LoadAsync" disabled="@_loading" title="Refresh"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
-                    <button class="um-btn um-btn-danger um-btn-sm" @onclick="() => _showDelete = true" disabled="@_busy" title="Delete matter"><i class="bi bi-trash"></i> Delete</button>
+                    <button class="um-btn um-btn-light um-btn-sm" @onclick="OpenReset" disabled="@_busy" title="Reset matter — clears all uploaded documents & evidence so you can re-run Decision2 from a fresh intake"><i class="bi bi-arrow-counterclockwise"></i> Reset Matter</button>
+                    <button class="um-btn um-btn-danger um-btn-sm" @onclick="OpenDelete" disabled="@_busy" title="Delete matter"><i class="bi bi-trash"></i> Delete</button>
                     <a class="um-btn um-btn-sm matter-detail-chatjudz-btn" href="@($"/legal/chatjudz?matterId={_matter.DecisionMatterId}")" title="Ask Chat Judz about this matter"><i class="bi bi-stars"></i> Chat Judz</a>
                     <button class="um-btn um-btn-sm matter-detail-run-btn matter-detail-run-btn--right @(_showRunAssessment ? "matter-detail-run-btn--open" : null)" @onclick="() => _showRunAssessment = !_showRunAssessment" disabled="@_busy" title="History & Assessment Management"><i class="bi bi-clock-history"></i> History &amp; Assessment @(_showRunAssessment ? "▲" : "▼")</button>
                 </div>
@@ -345,7 +346,7 @@
                         }
                     </div>
                     <div class="um-modal-footer">
-                        <button type="button" class="um-btn um-btn-danger" @onclick="() => _showDelete = true" disabled="@_busy">
+                        <button type="button" class="um-btn um-btn-danger" @onclick="OpenDelete" disabled="@_busy">
                             <i class="bi bi-trash"></i> Delete matter
                         </button>
                         <button type="button" class="um-btn um-btn-ghost ms-auto" @onclick="PopulateForm" disabled="@_busy">Reset</button>
@@ -576,26 +577,160 @@
 
     @if (_showDelete && _matter is not null)
     {
-        <div class="um-modal-backdrop" @onclick="() => _showDelete = false">
-            <div class="um-modal um-modal-sm" @onclick:stopPropagation="true">
-                <div class="um-modal-header">
-                    <i class="bi bi-trash"></i>
-                    <span>Delete matter</span>
-                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showDelete = false"><i class="bi bi-x-lg"></i></button>
+        <div class="um-modal-backdrop mrst-backdrop" @onclick="CancelDelete">
+            <div class="um-modal mrst-modal" @onclick:stopPropagation="true" role="alertdialog" aria-modal="true" aria-labelledby="mdlt-title">
+                <div class="mrst-head">
+                    <div class="mrst-head-glow"></div>
+                    <div class="mrst-head-icon"><i class="bi bi-trash3-fill"></i></div>
+                    <div class="mrst-head-text">
+                        <span class="mrst-eyebrow"><i class="bi bi-shield-lock-fill"></i> Destructive action &middot; Requires confirmation</span>
+                        <h3 id="mdlt-title" class="mrst-title">Delete matter permanently</h3>
+                    </div>
+                    <button type="button" class="mrst-close" @onclick="CancelDelete" aria-label="Close" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
                 </div>
-                <div class="um-modal-body">
-                    <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-exclamation-triangle"></i></div>
-                    <h3 class="um-confirm-title">Delete this matter?</h3>
-                    <p class="um-confirm-text">"@_matter.Title" will be removed from your matter list. Its decision sessions are preserved but will no longer be grouped under this matter. This cannot be undone.</p>
+
+                <div class="mrst-body">
+                    <div class="mrst-matter">
+                        <i class="bi bi-folder2-open"></i>
+                        <div class="mrst-matter-meta">
+                            <span class="mrst-matter-label">Matter</span>
+                            <span class="mrst-matter-name">@_matter.Title</span>
+                        </div>
+                    </div>
+
+                    <p class="mrst-lead">
+                        This removes the matter from your workspace. Its decision sessions are preserved but will no
+                        longer be grouped under this matter. This action <strong>cannot be undone</strong>.
+                    </p>
+
+                    <div class="mrst-columns">
+                        <div class="mrst-panel mrst-panel--danger">
+                            <div class="mrst-panel-head"><i class="bi bi-trash3-fill"></i> Will be removed</div>
+                            <ul class="mrst-list">
+                                <li><i class="bi bi-card-heading"></i> The matter record &amp; details</li>
+                                <li><i class="bi bi-person-vcard"></i> Profile &amp; practice configuration</li>
+                                <li><i class="bi bi-diagram-3"></i> Grouping of its decision sessions</li>
+                                <li><i class="bi bi-list-check"></i> Matter listing &amp; cockpit entry</li>
+                            </ul>
+                        </div>
+                        <div class="mrst-panel mrst-panel--safe">
+                            <div class="mrst-panel-head"><i class="bi bi-shield-check"></i> Will be preserved</div>
+                            <ul class="mrst-list">
+                                <li><i class="bi bi-clock-history"></i> Prior decision sessions &amp; runs</li>
+                                <li><i class="bi bi-archive"></i> Append-only audit history</li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div class="mrst-confirm">
+                        <label for="mdlt-confirm-input" class="mrst-confirm-label">
+                            Type <span class="mrst-confirm-token">DELETE</span> to confirm
+                        </label>
+                        <input id="mdlt-confirm-input" type="text" class="mrst-confirm-input" autocomplete="off"
+                               placeholder="DELETE" value="@_deleteConfirmText"
+                               @oninput="e => _deleteConfirmText = e.Value?.ToString() ?? string.Empty"
+                               disabled="@_busy" />
+                    </div>
+
                     @if (_deleteError is not null)
                     {
-                        <div class="alert alert-danger" style="border-left: 4px solid #dc3545;">@_deleteError</div>
+                        <div class="mrst-error" role="alert"><i class="bi bi-exclamation-octagon-fill"></i> @_deleteError</div>
                     }
                 </div>
-                <div class="um-modal-footer">
-                    <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button>
-                    <button type="button" class="um-btn um-btn-danger" @onclick="DeleteAsync" disabled="@_busy">
-                        <i class="bi bi-trash"></i> @(_busy ? "Deleting…" : "Delete matter")
+
+                <div class="mrst-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CancelDelete" disabled="@_busy">Cancel</button>
+                    <button type="button" class="um-btn um-btn-danger mrst-confirm-btn" @onclick="DeleteAsync" disabled="@(_busy || !_deleteConfirmed)">
+                        @if (_busy)
+                        {
+                            <span class="mrst-spinner" aria-hidden="true"></span> <span>Deleting&hellip;</span>
+                        }
+                        else
+                        {
+                            <i class="bi bi-trash3-fill"></i> <span>Delete matter</span>
+                        }
+                    </button>
+                </div>
+            </div>
+        </div>
+    }
+
+    @if (_showReset && _matter is not null)
+    {
+        <div class="um-modal-backdrop mrst-backdrop" @onclick="CancelReset">
+            <div class="um-modal mrst-modal" @onclick:stopPropagation="true" role="alertdialog" aria-modal="true" aria-labelledby="mrst-title">
+                <div class="mrst-head">
+                    <div class="mrst-head-glow"></div>
+                    <div class="mrst-head-icon"><i class="bi bi-arrow-counterclockwise"></i></div>
+                    <div class="mrst-head-text">
+                        <span class="mrst-eyebrow"><i class="bi bi-shield-lock-fill"></i> Destructive action &middot; Requires confirmation</span>
+                        <h3 id="mrst-title" class="mrst-title">Reset matter for a fresh run</h3>
+                    </div>
+                    <button type="button" class="mrst-close" @onclick="CancelReset" aria-label="Close" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
+                </div>
+
+                <div class="mrst-body">
+                    <div class="mrst-matter">
+                        <i class="bi bi-folder2-open"></i>
+                        <div class="mrst-matter-meta">
+                            <span class="mrst-matter-label">Matter</span>
+                            <span class="mrst-matter-name">@_matter.Title</span>
+                        </div>
+                    </div>
+
+                    <p class="mrst-lead">
+                        This permanently clears the entire document &amp; evidence corpus so the matter can be
+                        re-ingested from Intake and re-run through Decision2. This action <strong>cannot be undone</strong>.
+                    </p>
+
+                    <div class="mrst-columns">
+                        <div class="mrst-panel mrst-panel--danger">
+                            <div class="mrst-panel-head"><i class="bi bi-trash3-fill"></i> Will be permanently removed</div>
+                            <ul class="mrst-list">
+                                <li><i class="bi bi-file-earmark-x"></i> Uploaded documents &amp; all versions</li>
+                                <li><i class="bi bi-layout-text-window"></i> Pages, layout &amp; extracted passages</li>
+                                <li><i class="bi bi-diagram-3"></i> Evidence items, propositions &amp; supports</li>
+                                <li><i class="bi bi-link-45deg"></i> Source assertions &amp; lineage occurrences</li>
+                            </ul>
+                        </div>
+                        <div class="mrst-panel mrst-panel--safe">
+                            <div class="mrst-panel-head"><i class="bi bi-shield-check"></i> Will be preserved</div>
+                            <ul class="mrst-list">
+                                <li><i class="bi bi-card-heading"></i> Matter record &amp; details</li>
+                                <li><i class="bi bi-person-vcard"></i> Profile &amp; practice configuration</li>
+                                <li><i class="bi bi-sliders"></i> Evidence-type scope settings</li>
+                                <li><i class="bi bi-gear"></i> Matter type, subtype &amp; jurisdiction</li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div class="mrst-confirm">
+                        <label for="mrst-confirm-input" class="mrst-confirm-label">
+                            Type <span class="mrst-confirm-token">RESET</span> to confirm
+                        </label>
+                        <input id="mrst-confirm-input" type="text" class="mrst-confirm-input" autocomplete="off"
+                               placeholder="RESET" value="@_resetConfirmText"
+                               @oninput="e => _resetConfirmText = e.Value?.ToString() ?? string.Empty"
+                               disabled="@_busy" />
+                    </div>
+
+                    @if (_resetError is not null)
+                    {
+                        <div class="mrst-error" role="alert"><i class="bi bi-exclamation-octagon-fill"></i> @_resetError</div>
+                    }
+                </div>
+
+                <div class="mrst-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CancelReset" disabled="@_busy">Cancel</button>
+                    <button type="button" class="um-btn um-btn-danger mrst-confirm-btn" @onclick="ResetMatterAsync" disabled="@(_busy || !_resetConfirmed)">
+                        @if (_busy)
+                        {
+                            <span class="mrst-spinner" aria-hidden="true"></span> <span>Resetting&hellip;</span>
+                        }
+                        else
+                        {
+                            <i class="bi bi-arrow-counterclockwise"></i> <span>Reset matter</span>
+                        }
                     </button>
                 </div>
             </div>
@@ -617,9 +752,15 @@
     private bool _lookupsLoaded;
     private bool _showEdit;
     private bool _showDelete;
+    private bool _showReset;
     private bool _showRunAssessment;
+    private string _resetConfirmText = string.Empty;
+    private bool _resetConfirmed => string.Equals(_resetConfirmText.Trim(), "RESET", StringComparison.Ordinal);
+    private string _deleteConfirmText = string.Empty;
+    private bool _deleteConfirmed => string.Equals(_deleteConfirmText.Trim(), "DELETE", StringComparison.Ordinal);
     private string? _loadError;
     private string? _actionError;
+    private string? _resetError;
     private string? _editError;
     private string? _deleteError;
     private string? _toast;
@@ -928,8 +1069,71 @@
         }
     }
 
+    // Resets the matter for a fresh run: hard-deletes the entire uploaded document + evidence corpus
+    // (all documents, versions, pages, passages, document-derived evidence, propositions and supports)
+    // then synchronously recomputes the surviving (now empty) corpus state. The matter record, its
+    // profile and configuration are preserved so the user can re-upload from Intake and re-run Decision2.
+    private void OpenReset()
+    {
+        _resetConfirmText = string.Empty;
+        _resetError = null;
+        _showReset = true;
+    }
+
+    private void CancelReset()
+    {
+        if (_busy) return;
+        _showReset = false;
+        _resetConfirmText = string.Empty;
+        _resetError = null;
+    }
+
+    private async Task ResetMatterAsync()
+    {
+        if (!_resetConfirmed) return;
+        _busy = true;
+        _resetError = null;
+        StateHasChanged();
+        try
+        {
+            var outcome = await Api.PurgeLegalMatterDocumentsAsync(MatterId, null);
+            _showReset = false;
+            _resetConfirmText = string.Empty;
+            await LoadAsync();
+            var removed = outcome?.Purge.DocumentsRemoved ?? 0;
+            ShowToast(removed > 0
+                ? $"Matter reset. {removed} document(s) and all derived evidence cleared — re-upload from Intake to re-run Decision2."
+                : "Matter reset. The matter is ready for a fresh intake.", false);
+        }
+        catch (Exception ex)
+        {
+            _resetError = $"Reset failed: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+            StateHasChanged();
+        }
+    }
+
+    private void OpenDelete()
+    {
+        _deleteConfirmText = string.Empty;
+        _deleteError = null;
+        _showDelete = true;
+    }
+
+    private void CancelDelete()
+    {
+        if (_busy) return;
+        _showDelete = false;
+        _deleteConfirmText = string.Empty;
+        _deleteError = null;
+    }
+
     private async Task DeleteAsync()
     {
+        if (!_deleteConfirmed) return;
         _busy = true;
         _deleteError = null;
         StateHasChanged();

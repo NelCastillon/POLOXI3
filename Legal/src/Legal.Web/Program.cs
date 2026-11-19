@@ -78,7 +78,11 @@ if (!app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 app.UseDefaultFiles();
-app.UseStaticFiles();
+// Ensure ES modules (.mjs) — e.g. the vendored pdf.js build under wwwroot/lib/pdfjs — are
+// served with the JavaScript MIME type; otherwise the browser refuses the dynamic import.
+var contentTypeProvider = new Microsoft.AspNetCore.StaticFiles.FileExtensionContentTypeProvider();
+contentTypeProvider.Mappings[".mjs"] = "text/javascript";
+app.UseStaticFiles(new StaticFileOptions { ContentTypeProvider = contentTypeProvider });
 app.UseAntiforgery();
 app.UseAuthentication();
 app.UseAuthorization();
@@ -151,6 +155,44 @@ app.MapPost("/auth/logout", async (HttpContext http) =>
     await http.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
     return Results.Redirect("/login");
 });
+
+// ── Same-origin document content proxy ───────────────────────────────────────────
+// Streams an authorized document original from the API through the Web host so browser
+// viewers (pdf.js fetch, <object>) request it same-origin and avoid cross-origin/CORS
+// failures. The authenticated cookie is present on this request; ActingUserHandler
+// forwards the caller's signed identity to the API. Range headers are forwarded so the
+// viewer can stream large PDFs.
+app.MapGet("/documents/versions/{documentVersionId:guid}/content",
+    async (Guid documentVersionId, HttpContext http, ApiClient apiClient, ILoggerFactory loggerFactory, CancellationToken cancellationToken) =>
+{
+    var logger = loggerFactory.CreateLogger("DocumentContentProxy");
+    var range = http.Request.Headers.Range.ToString();
+    using var upstream = await apiClient.GetLegalDocumentVersionContentResponseAsync(
+        documentVersionId, string.IsNullOrWhiteSpace(range) ? null : range, cancellationToken);
+
+    http.Response.StatusCode = (int)upstream.StatusCode;
+    if (!upstream.IsSuccessStatusCode)
+    {
+        var body = await upstream.Content.ReadAsStringAsync(cancellationToken);
+        logger.LogWarning(
+            "Document content proxy: API returned {StatusCode} for version {DocumentVersionId}. Body: {Body}",
+            (int)upstream.StatusCode, documentVersionId, body);
+        return;
+    }
+
+    http.Response.ContentType = upstream.Content.Headers.ContentType?.ToString() ?? "application/octet-stream";
+    if (upstream.Content.Headers.ContentLength is { } length)
+        http.Response.ContentLength = length;
+    if (upstream.Content.Headers.ContentDisposition is { } disposition)
+        http.Response.Headers.ContentDisposition = disposition.ToString();
+    if (upstream.Headers.AcceptRanges.Count > 0)
+        http.Response.Headers.AcceptRanges = string.Join(", ", upstream.Headers.AcceptRanges);
+    if (upstream.Content.Headers.ContentRange is { } contentRange)
+        http.Response.Headers.ContentRange = contentRange.ToString();
+
+    await using var stream = await upstream.Content.ReadAsStreamAsync(cancellationToken);
+    await stream.CopyToAsync(http.Response.Body, cancellationToken);
+}).RequireAuthorization();
 
 // ── Clio Manage OAuth endpoints (connect / callback / disconnect) ───────────
 app.MapClioOAuth();

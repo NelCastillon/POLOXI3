@@ -100,6 +100,46 @@ public static class DecisionCoreMath
     public static double EvidenceVerificationValue(double identity, double citation, double holding, double weight, double propositionFit)
         => Clamp01(identity) * Clamp01(citation) * Clamp01(holding) * Clamp01(weight) * Clamp01(propositionFit);
 
+    // Saturation constant for the matter-level evidence-corpus strength curve: larger ⇒ support
+    // saturates faster as atomic evidence accumulates. Chosen so a handful of strong items already
+    // yields substantial strength while additional items show diminishing returns (no single document
+    // can peg the dimension to 1.0).
+    private const double EvidenceSaturationK = 3.0;
+
+    // Weak presence floor contributed by intake-only (uploaded but not atomically enriched) documents.
+    // The uploaded file IS evidence, so a matter with documents is never treated as evidence-free — but
+    // intake alone can never establish real support, so its contribution is capped well below verified
+    // atomic evidence. Floor grows with intake count but saturates quickly at this ceiling.
+    private const double IntakeFloorCeiling = 0.15;
+
+    // Matter-level evidence corpus strength ∈ [0,1], seeding every candidate's EvidenceSupport (§9,§16).
+    // Deterministic and LLM-free (§3): derived solely from the admitted proposition→evidence graph.
+    //   • netSupportSignal = Σ(SUPPORTS edge weight) − Σ(CONTRADICTS edge weight), each weight =
+    //     evidence.Confidence × proposition.Confidence over VERIFIED assertions only.
+    //   • atomicEvidenceCount gates whether any real support exists; the saturating curve
+    //     1 − e^(−signal/k) rises with corroboration but with diminishing returns.
+    //   • intakeOnlyDocumentCount contributes only a small presence floor (never full support).
+    // When the matter has no atomic evidence at all, the intake floor is returned (or 0 when nothing is
+    // uploaded), letting the caller fall back to its neutral seed.
+    public static double EvidenceCorpusStrength(double netSupportSignal, int atomicEvidenceCount, int intakeOnlyDocumentCount)
+    {
+        // Intake-only presence floor: saturates toward IntakeFloorCeiling as uploaded-but-unenriched
+        // documents accumulate. Never, on its own, rises to real support.
+        var intakeFloor = intakeOnlyDocumentCount <= 0
+            ? 0d
+            : IntakeFloorCeiling * (1d - Math.Exp(-intakeOnlyDocumentCount / 2.0));
+
+        if (atomicEvidenceCount <= 0 || netSupportSignal <= 0d)
+            return Clamp01(intakeFloor);
+
+        // Saturating strength from net verified support. Contradiction is already subtracted into the
+        // signal, so a net-negative signal collapses to the intake floor above.
+        var atomicStrength = 1d - Math.Exp(-netSupportSignal / EvidenceSaturationK);
+
+        // Atomic corpus strength dominates; intake only lifts the baseline when atomic support is weak.
+        return Clamp01(Math.Max(atomicStrength, intakeFloor));
+    }
+
     // Jaccard token similarity for candidate diversity/redundancy (§8): Diversity = 1 − max Sim; RP = max Sim.
     public static double Similarity(string? a, string? b)
     {

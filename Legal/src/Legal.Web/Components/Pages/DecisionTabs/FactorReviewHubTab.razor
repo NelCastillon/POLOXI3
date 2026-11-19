@@ -1,0 +1,191 @@
+@namespace Legal.Web.Components.Pages.DecisionTabs
+@using Legal.Web.Components.Pages
+@using Legal.Application.Features.Intelligence.Decision
+
+<div class="di-workspace">
+    <div class="di-head">
+        <div class="di-head-icon"><i class="bi bi-diagram-3"></i></div>
+        <div class="di-head-body">
+            <span>Factor review hub</span>
+            <h4>Fact &amp; law &rarr; application for every factor</h4>
+            <p class="dfi-panel-sub">
+                Each factor is shown with its supporting evidence, contradictory evidence, applicable law, unresolved
+                questions, and the reviewed application conclusion &mdash; keeping factual support (&ldquo;what happened&rdquo;),
+                legal support (&ldquo;what rule governs&rdquo;), and the application inference (&ldquo;do the facts satisfy the rule&rdquo;) separate.
+            </p>
+        </div>
+        <button type="button" class="um-btn um-btn-ghost um-btn-sm di-refresh" @onclick="Owner.LoadFactorReviewHubAsync" disabled="@Owner._factorReviewHubLoading" title="Reload factor review hub">
+            <i class="bi @(Owner._factorReviewHubLoading ? "bi-arrow-repeat di-spin" : "bi-arrow-clockwise")"></i>
+        </button>
+    </div>
+
+    @if (Owner._factorReviewHubError is not null)
+    {
+        <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@Owner._factorReviewHubError</div>
+    }
+    else if (Owner._factorReviewHubLoading && Owner._factorReviewHub is null)
+    {
+        <div class="di-empty"><i class="bi bi-hourglass-split"></i><p>Loading factor review hub&hellip;</p></div>
+    }
+    else if (Owner._factorReviewHub is null || Owner._factorReviewHub.Factors.Count == 0)
+    {
+        <div class="di-empty">
+            <i class="bi bi-inbox"></i>
+            <p>No reviewable factors yet. Application inferences appear here once facts and governing law are linked for a factor.</p>
+        </div>
+    }
+    else
+    {
+        <div class="di-kpi-row">
+            <div class="di-kpi"><span class="di-kpi-val">@Owner._factorReviewHub.Factors.Count</span><span class="di-kpi-lbl">Factors</span></div>
+            <div class="di-kpi di-kpi--ok"><span class="di-kpi-val">@Owner._factorReviewHub.Factors.Sum(f => f.SupportingCount)</span><span class="di-kpi-lbl">Supporting</span></div>
+            <div class="di-kpi"><span class="di-kpi-val">@Owner._factorReviewHub.Factors.Sum(f => f.ContradictingCount)</span><span class="di-kpi-lbl">Contradicting</span></div>
+            <div class="di-kpi"><span class="di-kpi-val">@Owner._factorReviewHub.Factors.Sum(f => f.UnresolvedCount)</span><span class="di-kpi-lbl">Unresolved</span></div>
+        </div>
+
+        <div class="relm-list">
+            @foreach (var factor in Owner._factorReviewHub.Factors)
+            {
+                var label = !string.IsNullOrWhiteSpace(factor.FactorLabel)
+                    ? factor.FactorLabel
+                    : (!string.IsNullOrWhiteSpace(factor.FactorCode) ? factor.FactorCode : factor.DimensionCode);
+                <details class="relm-prop" open>
+                    <summary class="relm-prop-head" style="cursor:pointer;">
+                        <div>
+                            <strong>@label</strong>
+                            <span class="relm-head-sub" style="display:block;">@factor.DimensionCode@(string.IsNullOrWhiteSpace(factor.FactorCode) ? "" : $" \u00B7 {factor.FactorCode}")</span>
+                        </div>
+                        <div class="relm-kpis">
+                            <span class="relm-chip relm-chip--ok" title="Supporting">@factor.SupportingCount supp.</span>
+                            <span class="relm-chip" title="Contradicting">@factor.ContradictingCount contra.</span>
+                            <span class="relm-chip" title="Unresolved">@factor.UnresolvedCount open</span>
+                        </div>
+                    </summary>
+
+                    <div style="padding:.5rem .25rem;">
+                        @* ── Application conclusions (facts + rule → application) ── *@
+                        <div class="frh-section">
+                            <h6><i class="bi bi-check2-square"></i> Application conclusions</h6>
+                            @if (factor.ApplicationInferences.Count == 0)
+                            {
+                                <p class="dfi-panel-sub">No application inference recorded for this factor yet.</p>
+                            }
+                            else
+                            {
+                                @foreach (var app in factor.ApplicationInferences)
+                                {
+                                    <div class="frh-app">
+                                        <div class="frh-app-head">
+                                            <span class="relm-chip @DispositionClass(app.DispositionCode)">@app.DispositionCode</span>
+                                            <span class="relm-chip">@app.ReviewStateCode</span>
+                                            @if (app.Confidence is { } conf)
+                                            {
+                                                <span class="relm-chip" title="Application confidence (distinct from classification/support confidence)">@conf.ToString("P0")</span>
+                                            }
+                                        </div>
+                                        <p class="frh-app-text">@app.ConclusionText</p>
+                                        @if (!string.IsNullOrWhiteSpace(app.Rationale))
+                                        {
+                                            <p class="dfi-panel-sub">@app.Rationale</p>
+                                        }
+                                    </div>
+                                }
+                            }
+                        </div>
+
+                        @* ── Factual support (what happened) ── *@
+                        <div class="frh-section">
+                            <h6><i class="bi bi-file-earmark-text"></i> Factual support</h6>
+                            @if (factor.FactualPropositions.Count == 0)
+                            {
+                                <p class="dfi-panel-sub">No factual propositions linked.</p>
+                            }
+                            else
+                            {
+                                @foreach (var p in factor.FactualPropositions)
+                                {
+                                    <div class="frh-prop">
+                                        <span class="relm-chip @RelationshipClass(p.RelationshipCode)">@p.RelationshipCode</span>
+                                        <span class="frh-prop-text">@p.PropositionText</span>
+                                        <span class="relm-chip">@p.FactStateCode</span>
+                                        @if (p.IsDecisionAuthoritative)
+                                        {
+                                            <span class="relm-chip relm-chip--ok" title="Decision-authoritative">authoritative</span>
+                                        }
+                                    </div>
+                                }
+                            }
+                        </div>
+
+                        @* ── Direct evidence (raw evidence linked to the application) ── *@
+                        <div class="frh-section">
+                            <h6><i class="bi bi-paperclip"></i> Direct evidence</h6>
+                            @if (factor.Evidence.Count == 0)
+                            {
+                                <p class="dfi-panel-sub">No direct evidence linked.</p>
+                            }
+                            else
+                            {
+                                @foreach (var e in factor.Evidence)
+                                {
+                                    <div class="frh-prop">
+                                        <span class="relm-chip @RelationshipClass(e.RelationshipCode)">@e.RelationshipCode</span>
+                                        <span class="frh-prop-text">@e.Summary</span>
+                                        <span class="relm-chip">@e.EvidenceTypeCode</span>
+                                        <span class="relm-chip">@e.EvidenceStateCode</span>
+                                    </div>
+                                }
+                            }
+                        </div>
+
+                        @* ── Legal support (what rule governs) ── *@
+                        <div class="frh-section">
+                            <h6><i class="bi bi-bank"></i> Legal rule &amp; authority</h6>
+                            @if (factor.LegalPropositions.Count == 0 && factor.Authorities.Count == 0)
+                            {
+                                <p class="dfi-panel-sub">No governing rule or verified authority linked.</p>
+                            }
+                            else
+                            {
+                                @foreach (var p in factor.LegalPropositions)
+                                {
+                                    <div class="frh-prop">
+                                        <span class="relm-chip @RelationshipClass(p.RelationshipCode)">@p.RelationshipCode</span>
+                                        <span class="frh-prop-text">@p.PropositionText</span>
+                                    </div>
+                                }
+                                @foreach (var a in factor.Authorities)
+                                {
+                                    <div class="frh-prop">
+                                        <span class="relm-chip">@a.DispositionCode</span>
+                                        <span class="frh-prop-text">@a.Proposition</span>
+                                        @if (!string.IsNullOrWhiteSpace(a.SupportingPassage))
+                                        {
+                                            <span class="dfi-panel-sub" style="display:block;">&ldquo;@a.SupportingPassage&rdquo;</span>
+                                        }
+                                    </div>
+                                }
+                            }
+                        </div>
+                    </div>
+                </details>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public LegalPersonalInjuryDecision2 Owner { get; set; } = default!;
+
+    private static string DispositionClass(string? code) => code switch
+    {
+        LegalApplicationDispositions.Satisfied => "relm-chip--ok",
+        LegalApplicationDispositions.NotSatisfied => "relm-chip--danger",
+        _ => string.Empty
+    };
+
+    private static string RelationshipClass(string? code)
+        => string.Equals(code, LegalDocumentRelationshipTypes.Contradicts, StringComparison.OrdinalIgnoreCase)
+            ? "relm-chip--danger"
+            : (string.Equals(code, LegalDocumentRelationshipTypes.Supports, StringComparison.OrdinalIgnoreCase) ? "relm-chip--ok" : string.Empty);
+}

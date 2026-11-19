@@ -183,29 +183,32 @@ public sealed class LegalDocumentSemanticInterpreter(IAiProviderRouter aiRouter)
         ResolvedDomainPack? resolvedPack)
     {
         var allowedPassages = passages.Select(item => item.LegalDocumentPassageId).ToHashSet();
-        var conceptsByCode = concepts.ToDictionary(item => item.ConceptCode, StringComparer.OrdinalIgnoreCase);
-        // When a Domain Pack supplies concepts, evidence must bind to one of its concepts. On the intake
-        // corpus-activation path no Domain Pack is provided (concepts is empty); requiring a concept match
-        // there would discard every extracted evidence item, leaving documents perpetually "not activated".
-        // So concept binding is enforced only when a concept set actually exists.
-        var requireConceptBinding = conceptsByCode.Count > 0;
         // Canonical evidence-type binding (same governance pattern as entity/event codes): when the Domain Pack
         // supplies an Evidence Type vocabulary, each item's evidenceTypeCode is resolved exact -> normalized ->
         // UNCLASSIFIED. The item is never dropped; the model's raw code is preserved for review. With no pack
         // vocabulary the code is left as emitted (packless intake path).
         var evidenceTypeBinder = EvidenceTypeCodeBinder.Create(resolvedPack?.EvidenceTypes ?? []);
+        var conceptBinder = DomainConceptCodeBinder.Create(concepts);
+        var evidenceTypeDimensions = (resolvedPack?.EvidenceTypes ?? [])
+            .Where(type => !string.IsNullOrWhiteSpace(type.EvidenceTypeCode) && !string.IsNullOrWhiteSpace(type.DimensionCode))
+            .GroupBy(type => type.EvidenceTypeCode, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First().DimensionCode!, StringComparer.OrdinalIgnoreCase);
         var evidence = proposal.EvidenceItems
             .Where(item => !string.IsNullOrWhiteSpace(item.ProposalKey) &&
                            !string.IsNullOrWhiteSpace(item.Summary) &&
                            item.PassageId.HasValue &&
-                           allowedPassages.Contains(item.PassageId.Value) &&
-                           (!requireConceptBinding ||
-                            (!string.IsNullOrWhiteSpace(item.DomainConceptCode) &&
-                             conceptsByCode.ContainsKey(item.DomainConceptCode))))
+                           allowedPassages.Contains(item.PassageId.Value))
             .Select(item =>
             {
-                var concept = item.DomainConceptCode is not null && conceptsByCode.TryGetValue(item.DomainConceptCode, out var match) ? match : null;
                 var boundEvidenceTypeCode = evidenceTypeBinder.Bind(item.EvidenceTypeCode);
+                evidenceTypeDimensions.TryGetValue(boundEvidenceTypeCode, out var evidenceTypeDimension);
+                var concept = conceptBinder.Bind(item.DomainConceptCode, boundEvidenceTypeCode, evidenceTypeDimension, item.DimensionCode);
+                return (item, boundEvidenceTypeCode, concept);
+            })
+            .Where(bound => concepts.Count == 0 || bound.concept is not null)
+            .Select(bound =>
+            {
+                var (item, boundEvidenceTypeCode, concept) = bound;
                 return item with
                 {
                     EvidenceTypeCode = boundEvidenceTypeCode,
@@ -331,6 +334,13 @@ public sealed class LegalDocumentSemanticInterpreter(IAiProviderRouter aiRouter)
         When DomainEvidenceTypes are supplied, every evidenceItems.evidenceTypeCode MUST be one of the supplied
         evidenceTypeCode values, copied exactly. Choose the single closest type for the passage content; do not invent,
         rename, or reformat codes. Use UNCLASSIFIED only when no supplied type reasonably applies.
+
+        When DomainConcepts are supplied, set every evidenceItems.domainConceptCode to one of the supplied
+        DomainConcepts.conceptCode values, copied exactly (choose the single closest concept for the passage content;
+        do not invent, rename, or reformat codes). If you are unsure which concept applies, still emit the evidence
+        item with your best dimensionCode and evidenceTypeCode; a deterministic binder may resolve an
+        unambiguous pack concept. Unresolved items remain outside the governed evidence graph. When no
+        DomainConcepts are supplied, leave domainConceptCode empty.
         All facts are allegations pending independent verification. Return strict JSON matching the schema.
         """;
 

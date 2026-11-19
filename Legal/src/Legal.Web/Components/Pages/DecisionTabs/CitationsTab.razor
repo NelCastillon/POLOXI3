@@ -497,14 +497,71 @@
                 }
                 else if (!string.IsNullOrWhiteSpace(resp.FinalAnswer))
                 {
-                    <section class="poloxi-answer-card poloxi-reveal">
-                        <div class="poloxi-answer-head">
+                    @* Premium Result surface: lead with the authoritative, deterministic Candidate x Branch
+                       ranking as a scannable table (rank, authority, match score bar) built from the real
+                       resp.Candidates data — never fabricated — then keep the full synthesis prose below as
+                       supporting detail. Falls back to prose-only when no ranked candidates exist. *@
+                    var citResultRanked = DeepRankedCandidates(resp);
+                    var citResultLeader = citResultRanked.Count > 0 ? citResultRanked[0] : null;
+                    var citResultRunnerUp = citResultRanked.Count > 1 ? citResultRanked[1] : null;
+                    var citResultMargin = citResultLeader is not null && citResultRunnerUp is not null
+                        ? citResultLeader.CompositeScore - citResultRunnerUp.CompositeScore
+                        : (decimal?)null;
+                    <section class="poloxi-answer-card poloxi-reveal cit-result-card">
+                        <div class="poloxi-answer-head cit-result-head">
                             <div>
-                                <span class="poloxi-answer-kicker">Deep Citations — Legal Authority Search</span>
+                                <span class="poloxi-answer-kicker"><i class="bi bi-search"></i> Deep Citations — Legal Authority Search</span>
                                 <h2>Result</h2>
                             </div>
+                            @if (citResultLeader is not null)
+                            {
+                                <div class="cit-result-leaderpill" title="Highest-scoring authority in the deterministic Candidate × Branch competition">
+                                    <span class="cit-result-leaderpill-label"><i class="bi bi-trophy-fill"></i> Leading authority</span>
+                                    <span class="cit-result-leaderpill-name">@citResultLeader.DisplayName</span>
+                                    <span class="cit-result-leaderpill-score">@citResultLeader.CompositeScore.ToString("P0")</span>
+                                </div>
+                            }
                         </div>
-                        <div class="poloxi-answer-section poloxi-reveal">
+
+                        @if (citResultRanked.Count > 0)
+                        {
+                            <div class="poloxi-answer-section poloxi-reveal cit-result-section">
+                                <div class="cit-result-table-head">
+                                    <h3><i class="bi bi-list-ol"></i> Final authority ranking</h3>
+                                    <span class="cit-result-table-sub" title="Authoritative deterministic ordering from the Candidate × Branch competition — never the pre-competition LLM composition.">Deterministic Candidate × Branch competition@(citResultMargin is { } m ? $" · {m.ToString("P1")} lead" : null)</span>
+                                </div>
+                                <div class="cit-result-table" role="table" aria-label="Final authority ranking">
+                                    <div class="cit-result-row cit-result-row--header" role="row">
+                                        <span role="columnheader" class="cit-col-rank">#</span>
+                                        <span role="columnheader" class="cit-col-auth">Legal authority</span>
+                                        <span role="columnheader" class="cit-col-bar">Match strength</span>
+                                        <span role="columnheader" class="cit-col-score">Score</span>
+                                    </div>
+                                    @foreach (var (candidate, index) in citResultRanked.Select((c, i) => (c, i)))
+                                    {
+                                        <div class="cit-result-row poloxi-reveal @(index == 0 ? "cit-result-row--leader" : null)" role="row" style="animation-delay:@($"{index * 60}ms")">
+                                            <span role="cell" class="cit-col-rank">
+                                                <span class="cit-result-medal @(index == 0 ? "cit-result-medal--gold" : index == 1 ? "cit-result-medal--silver" : index == 2 ? "cit-result-medal--bronze" : null)">@(index + 1)</span>
+                                            </span>
+                                            <span role="cell" class="cit-col-auth">
+                                                <strong>@candidate.DisplayName</strong>
+                                                @if (index == 0)
+                                                {
+                                                    <span class="cit-result-winner-tag"><i class="bi bi-check-circle-fill"></i> POLOXI winner</span>
+                                                }
+                                            </span>
+                                            <span role="cell" class="cit-col-bar">
+                                                <span class="cit-result-track"><span class="cit-result-fill" style="width:@candidate.CompositeScore.ToString("P0", System.Globalization.CultureInfo.InvariantCulture)"></span></span>
+                                            </span>
+                                            <span role="cell" class="cit-col-score">@candidate.CompositeScore.ToString("P0")</span>
+                                        </div>
+                                    }
+                                </div>
+                            </div>
+                        }
+
+                        <div class="poloxi-answer-section poloxi-reveal cit-result-synthesis">
+                            <h3><i class="bi bi-card-text"></i> Deliverable synthesis</h3>
                             <p class="poloxi-answer-narrative">@resp.FinalAnswer</p>
                         </div>
                     </section>
@@ -1169,8 +1226,9 @@
         : "NOT_APPLICABLE";
 
     // V2.4: the final visible ranking deterministically follows the Candidate × Branch competition.
+    // No display cap — every non-violating candidate the pipeline ranked is shown.
     private IReadOnlyList<WideCandidateDto> FinalRankedCandidates => _deepResponse is null ? []
-        : _deepResponse.Candidates.Where(c => !c.IsConstraintViolation).OrderBy(c => c.RankNumber).Take(10).ToArray();
+        : _deepResponse.Candidates.Where(c => !c.IsConstraintViolation).OrderBy(c => c.RankNumber).ToArray();
 
     private bool ShouldShowComparisonPanel => _deepResponse is not null
         && (FinalRankedCandidates.Count > 0
@@ -1187,7 +1245,7 @@
             .OrderByDescending(c => c.InterpretiveSupportCount)
             .ThenByDescending(c => c.BranchScores.Count > 0 ? c.BranchScores.Average(s => s.EvidenceScore) : 0m)
             .ThenBy(c => c.DisplayName, StringComparer.OrdinalIgnoreCase)
-            .Take(Math.Max(FinalRankedCandidates.Count, 1)).ToArray();
+            .ToArray();
 
     private IReadOnlyList<WideInterpretiveResultItemDto> LlmRawItems => _deepResponse is null ? []
         : _deepResponse.LlmRawItems.OrderBy(x => x.RankNumber).ToArray();

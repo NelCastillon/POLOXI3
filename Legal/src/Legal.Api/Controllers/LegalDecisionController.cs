@@ -142,7 +142,12 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
         var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, CapabilityCode, lookup.MatterId, null, cancellationToken);
         if (denied is not null) return denied;
 
-        if (!string.Equals(lookup.MalwareStatusCode, "CLEAN", StringComparison.OrdinalIgnoreCase))
+        // Only block preview when the AV scan found a threat or is still pending. Both CLEAN and
+        // NOT_DETECTED are safe outcomes ("no malware detected"); treat them as previewable.
+        var malwareStatus = lookup.MalwareStatusCode?.Trim();
+        var isSafe = string.Equals(malwareStatus, "CLEAN", StringComparison.OrdinalIgnoreCase)
+                     || string.Equals(malwareStatus, "NOT_DETECTED", StringComparison.OrdinalIgnoreCase);
+        if (!isSafe)
             return StatusCode(StatusCodes.Status409Conflict, "The document original is not available for preview.");
 
         var read = await documentBinaryStore.OpenReadAsync(TenantId, lookup.StorageReference, cancellationToken);
@@ -584,6 +589,39 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
             return BadRequest("Matter id in the route must match the request body.");
         var assertionId = await documentCorpusRepository.AppendSourceAssertionAsync(TenantId, ActorUserId, request, cancellationToken);
         return Ok(new { LegalSourceAssertionId = assertionId });
+    }
+
+    // Factor-centric review hub: supporting evidence, contradictory evidence, applicable law, unresolved
+    // questions, and the reviewed application conclusion for each factor — the end-to-end chain.
+    [HttpGet("matters/{matterId:guid}/factor-review-hub")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> MatterFactorReviewHub(Guid matterId, CancellationToken cancellationToken)
+        => Ok(await documentCorpusRepository.GetMatterFactorReviewHubAsync(TenantId, matterId, cancellationToken));
+
+    // Records a reviewable application inference (facts + rule → application) with its typed input edges
+    // back to the factual chain (evidence → factual proposition) and legal chain (authority → legal rule).
+    [HttpPost("matters/{matterId:guid}/application-inferences")]
+    [Authorize(Policy = IntelligencePolicies.Configure)]
+    public async Task<IActionResult> CreateApplicationInference(Guid matterId, [FromBody] LegalApplicationInferenceCreateRequest request, CancellationToken cancellationToken)
+    {
+        if (matterId != request.MatterId)
+            return BadRequest("Matter id in the route must match the request body.");
+        var validationError = LegalApplicationInferencePolicy.Validate(request);
+        if (validationError is not null)
+            return BadRequest(validationError);
+        var inferenceId = await documentCorpusRepository.CreateApplicationInferenceAsync(TenantId, ActorUserId, request, cancellationToken);
+        return Ok(new { LegalApplicationInferenceId = inferenceId });
+    }
+
+    // Updates the reviewable disposition/state/confidence of an application inference (e.g. ACCEPTED).
+    [HttpPost("matters/{matterId:guid}/application-inferences/{applicationInferenceId:guid}/review")]
+    [Authorize(Policy = IntelligencePolicies.Configure)]
+    public async Task<IActionResult> ReviewApplicationInference(Guid matterId, Guid applicationInferenceId, [FromBody] LegalApplicationInferenceReviewRequest request, CancellationToken cancellationToken)
+    {
+        if (matterId != request.MatterId)
+            return BadRequest("Matter id in the route must match the request body.");
+        await documentCorpusRepository.ReviewApplicationInferenceAsync(TenantId, ActorUserId, applicationInferenceId, request, cancellationToken);
+        return Ok();
     }
 
     // Attorney Decision Input (Human Intelligence): DB-backed canonical decision nodes with attorney

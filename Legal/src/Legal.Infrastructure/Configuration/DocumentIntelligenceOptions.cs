@@ -33,6 +33,12 @@ public sealed class DocumentIntelligenceOptions
     public int NativeTextMinimumCharactersPerPage { get; set; } = 80;
     public decimal NativeTextMinimumReadableCharacterRatio { get; set; } = 0.85m;
 
+    // Native-text pages are split into paragraph-level passages on blank-line boundaries so evidence
+    // is attributed to a discrete paragraph rather than an entire page. A paragraph shorter than this
+    // threshold is merged into the surrounding block to avoid fragmenting on stray line breaks. Set to
+    // 0 to keep the whole page as a single passage (legacy behavior).
+    public int NativeTextMinimumCharactersPerParagraph { get; set; } = 40;
+
     // ── Media & Machine Evidence processing capability configuration ──────────────────────────────
     // Image analysis (PHOTO) via an Azure OpenAI vision-capable chat deployment. When the endpoint,
     // key, or deployment is missing the analyzer reports CapabilityUnavailable and the reviewer

@@ -1738,7 +1738,41 @@ public sealed partial class LegalDecisionService(
         }
 
 
-        var candidates = ScoreCandidates(proposal, settings, sessionId, request.TenantId, out var branches, cancellationToken);
+        // Evidence Tab corpus → EvidenceSupport seed (§9,§16): deterministically aggregate the admitted
+        // proposition→evidence graph for this matter and normalize it into a shared baseline all candidates
+        // start from. Matter-scoped (no candidate FK exists), so recompetition applies candidate-specific
+        // deltas on top. Fail-soft: any aggregation failure leaves the seed null and the LLM/neutral seed
+        // is used, so a corpus-read problem never blocks decision generation.
+        double? evidenceCorpusSeed = null;
+        if (request.MatterId is { } evidenceMatterId && evidenceMatterId != Guid.Empty)
+        {
+            try
+            {
+                var corpus = await documentCorpusRepository.GetMatterEvidenceCorpusStrengthAsync(
+                    request.TenantId, evidenceMatterId, cancellationToken);
+                // Only override the per-candidate seed when real atomic corpus evidence exists; a matter with
+                // only intake baselines (or none) still produces a small floor we can seed from.
+                if (corpus.AtomicEvidenceCount > 0 || corpus.IntakeOnlyDocumentCount > 0)
+                {
+                    evidenceCorpusSeed = DecisionCoreMath.EvidenceCorpusStrength(
+                        corpus.NetSupportSignal, corpus.AtomicEvidenceCount, corpus.IntakeOnlyDocumentCount);
+                    Record("EVIDENCE_CORPUS_STRENGTH", "COMPETITION", new
+                    {
+                        matterId = evidenceMatterId,
+                        corpus.NetSupportSignal,
+                        corpus.AtomicEvidenceCount,
+                        corpus.IntakeOnlyDocumentCount,
+                        evidenceSupportSeed = evidenceCorpusSeed,
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Evidence corpus strength unavailable for matter {MatterId}; falling back to neutral/LLM evidence seed.", evidenceMatterId);
+            }
+        }
+
+        var candidates = ScoreCandidates(proposal, settings, sessionId, request.TenantId, evidenceCorpusSeed, out var branches, cancellationToken);
         if (applicableDomainConcepts.Count > 0)
         {
             var governance = ApplyDomainGuardrails(
@@ -5372,15 +5406,19 @@ public sealed partial class LegalDecisionService(
             children);
     }
 
-    private List<DecisionCandidatePersistence> ScoreCandidates(IReadOnlyList<ProposedCandidate> proposal, DecisionCoreSettings settings, Guid sessionId, Guid tenantId, out List<DecisionBranchPersistence> branches, CancellationToken cancellationToken)
+    private List<DecisionCandidatePersistence> ScoreCandidates(IReadOnlyList<ProposedCandidate> proposal, DecisionCoreSettings settings, Guid sessionId, Guid tenantId, double? evidenceCorpusSeed, out List<DecisionBranchPersistence> branches, CancellationToken cancellationToken)
     {
         branches = [];
         var scored = new List<DecisionCandidatePersistence>();
         var index = 0;
         foreach (var p in proposal)
         {
-            var composite = DecisionCoreMath.CompositeScore(p.LegalSupport, p.FactSupport, p.EvidenceSupport, p.AuthoritySupport, p.Verification);
-            var ceiling = DecisionCoreMath.CertaintyCeiling(p.LegalSupport, p.FactSupport, p.EvidenceSupport, p.AuthoritySupport);
+            // When a deterministic matter-level evidence corpus seed is available it is authoritative over
+            // the LLM self-reported evidenceSupport (§3): real admitted evidence outranks a model estimate.
+            // Absent a corpus seed, the candidate's own EvidenceSupport (LLM/neutral) is retained.
+            var evidenceSupport = evidenceCorpusSeed ?? p.EvidenceSupport;
+            var composite = DecisionCoreMath.CompositeScore(p.LegalSupport, p.FactSupport, evidenceSupport, p.AuthoritySupport, p.Verification);
+            var ceiling = DecisionCoreMath.CertaintyCeiling(p.LegalSupport, p.FactSupport, evidenceSupport, p.AuthoritySupport);
             // Redundancy penalty / diversity vs the other proposed candidates (§8).
             var redundancy = proposal.Where(o => !ReferenceEquals(o, p)).Select(o => DecisionCoreMath.Similarity(p.DisplayName + " " + p.Outcome, o.DisplayName + " " + o.Outcome)).DefaultIfEmpty(0d).Max();
             var candidateId = Guid.NewGuid();
@@ -5388,7 +5426,7 @@ public sealed partial class LegalDecisionService(
             scored.Add(new DecisionCandidatePersistence(
                 candidateId, $"C{index + 1}", p.DisplayName, p.Outcome,
                 (decimal)DecisionCoreMath.Clamp01(p.LegalSupport), (decimal)DecisionCoreMath.Clamp01(p.FactSupport),
-                (decimal)DecisionCoreMath.Clamp01(p.EvidenceSupport), (decimal)DecisionCoreMath.Clamp01(p.AuthoritySupport),
+                (decimal)DecisionCoreMath.Clamp01(evidenceSupport), (decimal)DecisionCoreMath.Clamp01(p.AuthoritySupport),
                 (decimal)DecisionCoreMath.Clamp01(p.Verification), (decimal)DecisionCoreMath.Clamp01(uncertainty),
                 (decimal)DecisionCoreMath.Clamp01(p.Discrimination), (decimal)DecisionCoreMath.Clamp01(p.RankingImpact),
                 (decimal)DecisionCoreMath.Clamp01(1d - redundancy), (decimal)DecisionCoreMath.Clamp01(redundancy),

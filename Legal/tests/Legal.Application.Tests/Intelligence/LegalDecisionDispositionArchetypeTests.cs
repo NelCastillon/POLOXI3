@@ -50,7 +50,7 @@ public sealed class LegalDecisionDispositionArchetypeTests
         return (decimal)result.GetType().GetField("Item1")!.GetValue(result)!;
     }
 
-    private static WideBranchRecord Element(int level = 1) => new(
+    private static WideBranchRecord Element(int level = 1, int evidenceCount = 1) => new(
         WideBranchId: Guid.NewGuid(),
         WideExecutionId: Guid.NewGuid(),
         ParentWideBranchId: null,
@@ -62,7 +62,7 @@ public sealed class LegalDecisionDispositionArchetypeTests
         CapabilityCode: null,
         SearchText: null,
         GroundingStatusCode: "GROUNDED",
-        EvidenceCount: 0,
+        EvidenceCount: evidenceCount,
         Confidence: 0m,
         ContinueNarrowing: false,
         StopReason: null,
@@ -72,6 +72,45 @@ public sealed class LegalDecisionDispositionArchetypeTests
 
     private static IReadOnlyList<(WideBranchRecord, decimal)> Vector(params decimal[] scores)
         => scores.Select(s => (Element(), s)).ToArray();
+
+    [Fact]
+    public void MissingElementEvidence_DoesNotProvePlaintiffOrDefense()
+    {
+        var ungrounded = new[] { (Element(evidenceCount: 0), 0m), (Element(evidenceCount: 0), 1m) };
+
+        Assert.Equal(0.5m, InvokeGatedComposite("PlaintiffMerits", ungrounded));
+        Assert.Equal(0.5m, InvokeGatedComposite("DefenseMerits", ungrounded));
+        Assert.Equal(0.5m, InvokeGatedComposite("Settlement", ungrounded));
+    }
+
+    [Fact]
+    public void ObservedFailedElement_FavorsDefenseWithoutInventingMissingFailures()
+    {
+        var observed = new[] { (Element(), 0.2m), (Element(evidenceCount: 0), 0m) };
+
+        Assert.True(InvokeGatedComposite("DefenseMerits", observed) > 0.5m);
+        Assert.True(InvokeGatedComposite("PlaintiffMerits", observed) < 0.5m);
+    }
+
+    [Fact]
+    public void DeeperBranches_DoNotReplaceTopLevelDispositionElements()
+    {
+        var topLevel = new[] { (Element(), 0.8m), (Element(), 0.7m) };
+        var withChild = topLevel.Append((Element(level: 2), 0m)).ToArray();
+
+        Assert.Equal(InvokeGatedComposite("PlaintiffMerits", topLevel),
+            InvokeGatedComposite("PlaintiffMerits", withChild));
+        Assert.Equal(InvokeGatedComposite("DefenseMerits", topLevel),
+            InvokeGatedComposite("DefenseMerits", withChild));
+    }
+
+    [Fact]
+    public void UnobservedElement_DoesNotMaximizeSettlementTension()
+    {
+        var partlyObserved = new[] { (Element(), 0.5m), (Element(evidenceCount: 0), 0.5m) };
+
+        Assert.Equal(0.75m, InvokeGatedComposite("Settlement", partlyObserved));
+    }
 
     [Theory]
     [InlineData("PLAINTIFF_MERITS", "PlaintiffMerits")]

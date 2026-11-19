@@ -81,8 +81,14 @@ public sealed class LegalMatterContextRetrieverTests
         public Task<IReadOnlyCollection<LegalDocumentDto>> GetMatterDocumentsAsync(Guid tenantId, Guid matterId, CancellationToken cancellationToken = default) => throw Unexpected();
         public Task<IReadOnlyCollection<LegalDocumentPassageDto>> GetDocumentPassagesAsync(Guid tenantId, Guid documentVersionId, CancellationToken cancellationToken = default) => throw Unexpected();
         public Task<LegalMatterEvidenceGraphDto> GetMatterEvidenceGraphAsync(Guid tenantId, Guid matterId, CancellationToken cancellationToken = default) => throw Unexpected();
+        public Task<LegalMatterFactorReviewHubDto> GetMatterFactorReviewHubAsync(Guid tenantId, Guid matterId, CancellationToken cancellationToken = default) => throw Unexpected();
+        public Task<Guid> CreateApplicationInferenceAsync(Guid tenantId, Guid userId, LegalApplicationInferenceCreateRequest request, CancellationToken cancellationToken = default) => throw Unexpected();
+        public Task ReviewApplicationInferenceAsync(Guid tenantId, Guid userId, Guid applicationInferenceId, LegalApplicationInferenceReviewRequest request, CancellationToken cancellationToken = default) => throw Unexpected();
+        public Task EnsureDocumentIntakeEvidenceAsync(Guid tenantId, Guid userId, Guid matterId, Guid documentVersionId, string documentFileName, CancellationToken cancellationToken = default) => throw Unexpected();
+        public Task<int> BackfillDocumentIntakeEvidenceAsync(Guid tenantId, Guid userId, Guid matterId, CancellationToken cancellationToken = default) => throw Unexpected();
         public Task<Guid> AppendSourceAssertionAsync(Guid tenantId, Guid userId, LegalSourceAssertionCreateRequest request, CancellationToken cancellationToken = default) => throw Unexpected();
         public Task<LegalMatterCorpusActivationStatus> GetMatterActivationStatusAsync(Guid tenantId, Guid matterId, CancellationToken cancellationToken = default) => throw Unexpected();
+        public Task<LegalMatterEvidenceCorpusStrength> GetMatterEvidenceCorpusStrengthAsync(Guid tenantId, Guid matterId, CancellationToken cancellationToken = default) => throw Unexpected();
         public Task<IReadOnlyCollection<LegalPendingCorpusVersion>> GetPendingCorpusVersionsAsync(Guid tenantId, Guid matterId, int maximumVersions, CancellationToken cancellationToken = default) => throw Unexpected();
         public Task SetVersionSemanticActivationStatusAsync(Guid tenantId, Guid userId, Guid documentVersionId, string statusCode, CancellationToken cancellationToken = default) => throw Unexpected();
         public Task<int> GenerateRandomTestCorpusAsync(Guid tenantId, Guid userId, Guid matterId, CancellationToken cancellationToken = default) => throw Unexpected();

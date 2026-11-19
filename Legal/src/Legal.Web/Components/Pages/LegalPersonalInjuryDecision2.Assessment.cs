@@ -170,7 +170,7 @@ public partial class LegalPersonalInjuryDecision2
                 foreach (var b in o.BranchScores.Where(b => b.EvidenceScore >= 0.6m).Take(4))
                 {
                     if (seenSupport.Add(b.BranchDisplayName))
-                        supporting.Add($"{b.BranchDisplayName} ({b.EvidenceScore:P0} scored support)");
+                        supporting.Add($"{b.BranchDisplayName} ({b.EvidenceScore:P0} branch score; evidence not implied)");
                 }
 
                 // Opposing conditions: ALWAYS present. Every candidate scored in the Candidate × Branch
@@ -200,7 +200,7 @@ public partial class LegalPersonalInjuryDecision2
                              .OrderBy(b => b.EvidenceScore))
                 {
                     if (seenOppose.Add(b.BranchDisplayName))
-                        opposing.Add($"{b.BranchDisplayName} — weak support for this outcome ({b.EvidenceScore:P0})");
+                        opposing.Add($"{b.BranchDisplayName} — low branch score ({b.EvidenceScore:P0}); not proof against this outcome");
                 }
                 // Guarantee a contrary view even when every dimension scored strongly for the leader: the
                 // strongest-scored competing outcome is itself the standing opposition to THIS candidate.
@@ -208,10 +208,12 @@ public partial class LegalPersonalInjuryDecision2
                 {
                     var rival = outcomes
                         .Where(x => x.Index != o.Index)
-                        .OrderByDescending(x => x.SupportPct)
+                        .OrderByDescending(x => x.CompositeScore)
                         .FirstOrDefault();
                     if (rival is not null)
-                        opposing.Add($"{rival.Title} — competing outcome holding {rival.SupportPct}% relative support");
+                        opposing.Add(competitionValid
+                            ? $"{rival.Title} — competing outcome with score {rival.ScorePct}/100"
+                            : $"{rival.Title} — another proposed outcome; not scored");
                 }
                 opposing = opposing.Take(6).ToList();
 
@@ -290,10 +292,12 @@ public partial class LegalPersonalInjuryDecision2
                 {
                     var rival = outcomes
                         .Where(x => x.Index != o.Index)
-                        .OrderByDescending(x => x.SupportPct)
+                        .OrderByDescending(x => x.CompositeScore)
                         .FirstOrDefault();
                     if (rival is not null)
-                        flipItems.Add($"New evidence closing the margin to {rival.Title} ({rival.SupportPct}% relative support) could flip this outcome");
+                        flipItems.Add(competitionValid
+                            ? $"New evidence closing the score margin to {rival.Title} ({rival.ScorePct}/100) could flip this outcome"
+                            : $"New evidence could distinguish this proposal from {rival.Title}");
                 }
                 flipItems = flipItems.Take(4).ToList();
 
@@ -303,9 +307,9 @@ public partial class LegalPersonalInjuryDecision2
                 // when present and otherwise read the competition the model actually ran, so the cards always
                 // carry real values — never a bare "0 of 0".
                 var branchDeps = o.BranchScores;
-                var branchEstablished = branchDeps.Count(b => b.EvidenceScore >= 0.6m);
-                var branchUnverified = branchDeps.Count(b => b.EvidenceScore < 0.6m);
-                var branchCritical = branchDeps.Count(b => b.EvidenceScore < 0.4m);
+                var branchEstablished = 0;
+                var branchUnverified = branchDeps.Count;
+                var branchCritical = 0;
 
                 var established = dep?.Established ?? branchEstablished;
                 var totalDeps = dep?.Total ?? (branchDeps.Count > 0 ? branchDeps.Count : o.CriticalDependencies);
@@ -321,7 +325,7 @@ public partial class LegalPersonalInjuryDecision2
                 else
                 {
                     foreach (var b in branchDeps.OrderByDescending(b => b.EvidenceScore).Take(6))
-                        dependencyItems.Add($"{b.BranchDisplayName} — {(b.EvidenceScore >= 0.6m ? "established" : "unverified")} ({b.EvidenceScore:P0})");
+                        dependencyItems.Add($"{b.BranchDisplayName} — establishment unverified (branch score {b.EvidenceScore:P0})");
                 }
                 var dependencyCritical = dep is not null ? o.CriticalDependencies : branchCritical;
                 var verificationMissing = dep is not null ? o.MissingEvidence : branchUnverified;
@@ -331,13 +335,13 @@ public partial class LegalPersonalInjuryDecision2
                 // the same proof layer shown in the Admitted evidence and Factor Inventory panels.
                 var evidenceItems = OvEvidenceAndFactorsFor(o.Title);
                 var evidenceSummary = o.EvidenceCoverage > 0m
-                    ? $"{o.EvidenceCoverage:P0} evidence coverage across scored dimensions"
+                    ? $"{o.EvidenceCoverage:P0} scored-axis coverage; evidence confidence {o.EvidenceConfidencePct}%"
                     : (evidenceItems.Count > 0
                         ? $"{evidenceItems.Count} linked factor/evidence reference(s); none independently verified yet (UNVERIFIED)"
                         : "No independently verified evidence admitted yet (UNVERIFIED)");
 
                 var poloxiSummary = competitionValid
-                    ? $"POLOXI competition ran — {o.SupportPct}% relative support, {o.ViabilityLabel.ToLowerInvariant()}"
+                    ? $"POLOXI competition ran — outcome score {o.ScorePct}/100, evidence confidence {o.EvidenceConfidencePct}%, {o.ViabilityLabel.ToLowerInvariant()}"
                     : $"No Candidate × Branch competition ran — advisory support only ({o.SupportPct}%)";
 
                 var mapped = o.MappedOutcomes.Count > 0
@@ -426,7 +430,7 @@ public partial class LegalPersonalInjuryDecision2
         var lead = competitionValid
             ? (o.IsLeader ? "leads the field" : "competes")
             : "is proposed";
-        var supportText = competitionValid ? $" at {o.SupportPct}% relative support" : string.Empty;
+        var supportText = competitionValid ? $" with outcome score {o.ScorePct}/100" : string.Empty;
         return $"{o.Title} {lead}{supportText} with {o.ViabilityLabel.ToLowerInvariant()}. "
             + $"{supportingCount} supporting condition(s), {opposingCount} opposing condition(s), "
             + $"and {questionCount} unresolved question(s) across all relevant branches.";
@@ -509,7 +513,7 @@ public partial class LegalPersonalInjuryDecision2
                     : "Proposed outcomes — competition has not yet established a leader.",
                 assessments.Select(a =>
                     competitionValid
-                        ? $"C{a.Index} {a.Title} — {a.SupportPct}% support, {a.ViabilityLabel.ToLowerInvariant()}"
+                        ? $"C{a.Index} {a.Title} — score {OvOutcomes.First(o => o.Index == a.Index).ScorePct}/100, {a.ViabilityLabel.ToLowerInvariant()}"
                         : $"C{a.Index} {a.Title} — proposed, {a.ViabilityLabel.ToLowerInvariant()}").ToList()));
 
             // What supports and undermines each outcome.

@@ -25,6 +25,7 @@ public abstract class StubCorpusRepository : ILegalDocumentCorpusRepository
     public Task<LegalMatterDocumentPurgeResult> PurgeMatterDocumentEvidenceAsync(Guid tenantId, Guid userId, Guid matterId, LegalMatterDocumentPurgeRequest request, CancellationToken cancellationToken = default) => throw NotUsed();
     public Task<Guid> AppendSourceAssertionAsync(Guid tenantId, Guid userId, LegalSourceAssertionCreateRequest request, CancellationToken cancellationToken = default) => throw NotUsed();
     public Task<LegalMatterCorpusActivationStatus> GetMatterActivationStatusAsync(Guid tenantId, Guid matterId, CancellationToken cancellationToken = default) => throw NotUsed();
+    public virtual Task<LegalMatterEvidenceCorpusStrength> GetMatterEvidenceCorpusStrengthAsync(Guid tenantId, Guid matterId, CancellationToken cancellationToken = default) => throw NotUsed();
     public Task<IReadOnlyCollection<LegalPendingCorpusVersion>> GetPendingCorpusVersionsAsync(Guid tenantId, Guid matterId, int maximumVersions, CancellationToken cancellationToken = default) => throw NotUsed();
     public Task SetVersionSemanticActivationStatusAsync(Guid tenantId, Guid userId, Guid documentVersionId, string statusCode, CancellationToken cancellationToken = default) => throw NotUsed();
     public Task<int> GenerateRandomTestCorpusAsync(Guid tenantId, Guid userId, Guid matterId, CancellationToken cancellationToken = default) => throw NotUsed();
@@ -56,4 +57,9 @@ public abstract class StubCorpusRepository : ILegalDocumentCorpusRepository
     public Task<Guid> CreateEvidenceLineageGroupAsync(Guid tenantId, Guid userId, Guid matterId, string? lineageLabel, string? originDescription, string independenceBasisCode, CancellationToken cancellationToken = default) => throw NotUsed();
     public Task<Guid> AddEvidenceLineageMemberAsync(Guid tenantId, Guid userId, Guid lineageGroupId, Guid occurrenceId, string roleCode, string? derivationNote, CancellationToken cancellationToken = default) => throw NotUsed();
     public Task<IReadOnlyCollection<LegalEvidenceLineageGroupDto>> GetEvidenceLineageAsync(Guid tenantId, Guid matterId, CancellationToken cancellationToken = default) => throw NotUsed();
+    public virtual Task<LegalMatterFactorReviewHubDto> GetMatterFactorReviewHubAsync(Guid tenantId, Guid matterId, CancellationToken cancellationToken = default) => throw NotUsed();
+    public Task<Guid> CreateApplicationInferenceAsync(Guid tenantId, Guid userId, LegalApplicationInferenceCreateRequest request, CancellationToken cancellationToken = default) => throw NotUsed();
+    public Task ReviewApplicationInferenceAsync(Guid tenantId, Guid userId, Guid applicationInferenceId, LegalApplicationInferenceReviewRequest request, CancellationToken cancellationToken = default) => throw NotUsed();
+    public Task EnsureDocumentIntakeEvidenceAsync(Guid tenantId, Guid userId, Guid matterId, Guid documentVersionId, string documentFileName, CancellationToken cancellationToken = default) => throw NotUsed();
+    public Task<int> BackfillDocumentIntakeEvidenceAsync(Guid tenantId, Guid userId, Guid matterId, CancellationToken cancellationToken = default) => throw NotUsed();
 }

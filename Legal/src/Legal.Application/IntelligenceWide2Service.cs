@@ -208,6 +208,13 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     private string? _matterJurisdiction;
     private readonly Dictionary<string,string> _deterministicExclusions=new(StringComparer.OrdinalIgnoreCase);
     private IReadOnlyList<LegalEvidenceGraphItemDto> _matterPassageIndex=[];
+    // Deterministic proposition ↔ document-evidence graph for the CURRENT matter, captured fail-soft from the
+    // SAME GetMatterEvidenceGraphAsync load used for corpus merge. This is the exact linkage the Evidence tab
+    // renders (atomic proposition → extracted document evidence that supports/contradicts/contextualizes it,
+    // with real document/page/section/verbatim-quote/dimension/verification/confidence). It is projected
+    // verbatim into the Deep Citations composer so the attorney brief grounds in the precise source anchors
+    // instead of re-deriving them. Empty for matter-less (general) Deep Citations runs. Per-run (scoped service).
+    private LegalMatterEvidenceGraphDto? _matterEvidenceGraph;
     private readonly List<WideBranchScopeRecord> _scopeLedger=new();
     private readonly Dictionary<string,int> _scopeLedgerByBranchCode=new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string,int> _scopePassageCounts=new(StringComparer.OrdinalIgnoreCase);
@@ -811,6 +818,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         _matterJurisdiction=null;
         _deterministicExclusions.Clear();
         _matterPassageIndex=[];
+        _matterEvidenceGraph=null;
         _scopeLedger.Clear();
         _scopeLedgerByBranchCode.Clear();
         _scopePassageCounts.Clear();
@@ -1376,6 +1384,10 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 try
                 {
                     var evidenceGraph=await documentCorpusRepository.GetMatterEvidenceGraphAsync(request.TenantId,corpusMatterId,cancellationToken);
+                    // Capture the loaded graph verbatim so the Deep Citations composer can project the exact
+                    // proposition ↔ document-evidence linkage (page/section/quote/dimension/verification) the
+                    // Evidence tab renders. Deterministic reuse of this SAME load; no extra round-trip.
+                    _matterEvidenceGraph=evidenceGraph;
                     // Optional embedding-based attachment (OFF by default). Null lookup = lexical-only (unchanged behavior).
                     var corpusSemanticLookup=await WideCorpusSemanticAttachment.BuildAsync(aiProviderRouter,logger,request.TenantId,executionId.ToString(),configuration,evidenceGraph,survivorsFinal,cancellationToken);
                     var corpusSemanticThreshold=corpusSemanticLookup is null?1m:configuration.CorpusBranchMinSemanticSimilarity;
@@ -2611,6 +2623,70 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     private static readonly System.Text.RegularExpressions.Regex AuthTokenAnchorRegex=
         new(@"\[AUTH-(\d{1,3})\]",System.Text.RegularExpressions.RegexOptions.Compiled|System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
+    // Deterministically projects the matter's proposition ↔ document-evidence graph (the SAME linkage the
+    // Evidence tab renders) into the Deep Citations composer context. Zero new reasoning: every row is read
+    // verbatim from _matterEvidenceGraph, which was loaded once per run. For each atomic proposition it emits
+    // the fact-state, confidence, decision-authoritative flag, and — for every supporting/contradicting/
+    // contextualizing evidence edge — the exact document file + version, page, section path, dimension,
+    // verification state, extraction confidence, the verbatim quoted passage, and the edge rationale. The
+    // composer is instructed to cite these precise anchors (Document p.N · Section) rather than re-deriving
+    // them. Returns empty for matter-less runs or when the graph produced no linked propositions.
+    private string BuildPropositionEvidenceLinkageSection()
+    {
+        var graph=_matterEvidenceGraph;
+        if(graph is null)return string.Empty;
+        var propositions=graph.Propositions?.Where(p=>p.Support.Count>0).ToArray()??[];
+        if(propositions.Length==0)return string.Empty;
+        var evidenceById=graph.Evidence?.GroupBy(e=>e.LegalEvidenceItemId).ToDictionary(g=>g.Key,g=>g.First())
+            ??new Dictionary<Guid,LegalEvidenceGraphItemDto>();
+        var authoritative=propositions.Count(p=>p.IsDecisionAuthoritative);
+        var builder=new StringBuilder();
+        builder.Append("\nPROPOSITION ↔ DOCUMENT-EVIDENCE LINKAGE (DETERMINISTIC — derived from the uploaded corpus; each atomic proposition is linked to the EXACT extracted document evidence that supports, contradicts, or contextualizes it. Cite these precise source anchors — Document p.PAGE · Section — when the brief relies on a matter fact; quote ONLY from the verbatim passage text; never fabricate a page, section, or quote):\n");
+        builder.Append("  SUMMARY: ").Append(propositions.Length).Append(" proposition(s) with document-evidence links · ")
+            .Append(authoritative).Append(" decision-authoritative.\n");
+        var propIndex=0;
+        foreach(var prop in propositions
+            .OrderByDescending(p=>p.IsDecisionAuthoritative).ThenByDescending(p=>p.Confidence??0m).Take(12))
+        {
+            propIndex++;
+            builder.Append("  [P-").Append(propIndex.ToString("D2")).Append("] ")
+                .Append('(').Append(prop.FactStateCode).Append(prop.IsDecisionAuthoritative?", AUTHORITATIVE":"").Append(')');
+            if(prop.Confidence is {} pc)builder.Append(" | confidence=").Append(pc.ToString("P0"));
+            builder.Append('\n');
+            builder.Append("      PROPOSITION: ").Append(Truncate(prop.PropositionText,500)).Append('\n');
+            foreach(var sup in prop.Support.Take(8))
+            {
+                evidenceById.TryGetValue(sup.LegalEvidenceItemId,out var ev);
+                builder.Append("      • ").Append(sup.RelationshipTypeCode);
+                if(ev is not null)
+                {
+                    if(!string.IsNullOrWhiteSpace(ev.DocumentFileName))
+                    {
+                        builder.Append(" | source=").Append(Truncate(ev.DocumentFileName,160));
+                        if(ev.DocumentVersionNumber>0)builder.Append(" v").Append(ev.DocumentVersionNumber);
+                    }
+                    if(ev.PageNumber is {} page)builder.Append(" | p.").Append(page);
+                    if(!string.IsNullOrWhiteSpace(ev.SectionPath))builder.Append(" | section=").Append(Truncate(ev.SectionPath,160));
+                    if(!string.IsNullOrWhiteSpace(ev.DimensionCode))builder.Append(" | dimension=").Append(ev.DimensionCode);
+                    if(!string.IsNullOrWhiteSpace(ev.EvidenceStateCode))builder.Append(" | state=").Append(ev.EvidenceStateCode);
+                    if(ev.Confidence is {} ec)builder.Append(" | confidence=").Append(ec.ToString("P0"));
+                    builder.Append('\n');
+                    if(!string.IsNullOrWhiteSpace(ev.PassageText))
+                        builder.Append("          QUOTE (verbatim): \"").Append(Truncate(ev.PassageText,500)).Append("\"\n");
+                    else if(!string.IsNullOrWhiteSpace(ev.Summary))
+                        builder.Append("          EVIDENCE: ").Append(Truncate(ev.Summary,400)).Append('\n');
+                }
+                else
+                {
+                    builder.Append(" | (evidence detail unavailable)\n");
+                }
+                if(!string.IsNullOrWhiteSpace(sup.AssessmentReason))
+                    builder.Append("          RATIONALE: ").Append(Truncate(sup.AssessmentReason,300)).Append('\n');
+            }
+        }
+        return builder.ToString();
+    }
+
     // Builds the structured, closed-universe AUTHORITY TABLE plus the CONTROL RULES block that eliminate
     // citation hallucination. Every verified authority gets an immutable [AUTH-xx] token anchor, its
     // verbatim citation text, a deterministically-derived Binding/Persuasive tier, its jurisdiction, the
@@ -2778,6 +2854,12 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 builder.Append('\n');
             }
         }
+        // DETERMINISTIC PROPOSITION ↔ DOCUMENT-EVIDENCE LINKAGE. Projected verbatim from the SAME evidence
+        // graph the Evidence tab renders (loaded once per run). Each atomic proposition carries its exact
+        // document file + version, page, section path, dimension, verification state, confidence, verbatim
+        // quote, and the SUPPORTS/CONTRADICTS/CONTEXT relationship + rationale for every linked source anchor.
+        // This is not new reasoning: it hands the composer the precise source citations to ground the brief.
+        builder.Append(BuildPropositionEvidenceLinkageSection());
         builder.Append("\nDECISION BRIEF OBJECTIVE: produce the BEST attorney-grade Decision Brief for THIS matter by INTEGRATING the matter + client profile, the admitted evidence, the verified authorities, the POLOXI interpretation results, and the WINNING DECISION OUTCOME's own decisive factors above. The brief must use the SAME analysis and factors that made the winning outcome prevail: the conclusion restates the POLOXI outcome verbatim in substance; the analysis walks the decisive factor dimensions in descending order and ties each to the admitted evidence and matter facts; the application maps the law to THIS matter's facts; the counterargument addresses the strongest alternative named above; and remainingUncertainty/decisiveMissingFact reflect the residual uncertainty. Do not recite coverage percentages as analysis, do not introduce new facts/authorities/scores/rankings beyond those supplied, label unverified material as such, and preserve genuine contradictions.");
         // PASSAGE LINKING: for every authority placed in keyAuthorities, populate its "linkedMatterPassage"
         // with the exact matter passage it grounds (a decisive factor, admitted-evidence excerpt, matter
@@ -3158,7 +3240,23 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             }
             else
             {
-                var result=await aiProviderRouter.GenerateAsync(request.TenantId,featureCode,systemPrompt,userPrompt,
+                // Full-narrative cap on the single (non-sharded) composer call: when the top-N cap is active,
+                // scope the LLM OUTPUT to the authored candidates ONLY (the same OUTPUT SCOPE contract the
+                // shard path uses). Without this the model would narrate EVERY candidate from the full
+                // userPrompt, so the cap would save nothing here - the latency win comes from narrating fewer
+                // candidates (output generation is linear in tokens). The full candidate set stays the
+                // comparative context; the remaining candidates are completed by the deterministic merge below.
+                var scopedUserPrompt=userPrompt;
+                if(authored.Length<ordered.Length)
+                {
+                    var scope=new StringBuilder();
+                    scope.Append("\nOUTPUT SCOPE (full-narrative cap): the CANDIDATES list above is the complete authoritative set and MUST be used as the comparative context for every judgment. In THIS response, produce the per-candidate narrative entries ONLY for the following candidates (exact names; include each exactly once; do not add any other candidate entries):\n");
+                    foreach(var candidate in authored.OrderBy(c=>c.RankNumber))
+                        scope.Append("- #").Append(candidate.RankNumber).Append(' ').Append(Truncate(candidate.DisplayName,200)).Append('\n');
+                    scope.Append("The top-level landscape block must still describe the WHOLE competition.\n");
+                    scopedUserPrompt=userPrompt+scope;
+                }
+                var result=await aiProviderRouter.GenerateAsync(request.TenantId,featureCode,systemPrompt,scopedUserPrompt,
                     CandidateLandscapeSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_CANDIDATE_LANDSCAPE",null,request.CorrelationId,"Intelligent Search Wide"),synthesisModel,cancellationToken);
                 proposal=JsonSerializer.Deserialize<CandidateLandscapeProposal>(result.Content,JsonOptions);
             }
@@ -4751,8 +4849,11 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     {
         if(scored.Count==0)return(0m,archetype.ToString(),"no element axes");
         var topLevel=scored.Min(s=>s.Branch.LevelNumber);
-        var elements=scored.Where(s=>s.Branch.LevelNumber==topLevel).Select(s=>s.Score).ToArray();
-        if(elements.Length==0)elements=scored.Select(s=>s.Score).ToArray();
+        var elementScores=scored.Where(s=>s.Branch.LevelNumber==topLevel).ToArray();
+        // A missing admitted source does not prove that an element failed. Preserve the scored
+        // candidate×branch cells elsewhere, but treat an ungrounded element as unknown here.
+        var elements=elementScores
+            .Select(s=>s.Branch.EvidenceCount>0?s.Score:0.5m).ToArray();
         var minP=elements.Min();
         var maxP=elements.Max();
         var meanP=elements.Average();
@@ -4771,13 +4872,14 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 break;
             case DispositionArchetype.Settlement:
                 var spread=elements.Select(p=>Math.Abs(p-.5m)).Average();
-                composite=Math.Clamp(1m-2m*spread,0m,1m);
+                var observedFraction=(decimal)elementScores.Count(s=>s.Branch.EvidenceCount>0)/elements.Length;
+                composite=.5m+(Math.Clamp(1m-2m*spread,0m,1m)-.5m)*observedFraction;
                 rationale=$"tension/uncertainty; mean distance from preponderance {spread:0.00}";
                 break;
             default:
                 var membership=scored.Sum(s=>rfnBranchWeights.TryGetValue(s.Branch.WideBranchId,out var w)&&w>0m?w:0m);
                 composite=membership>0m
-                    ?scored.Sum(s=>(rfnBranchWeights.TryGetValue(s.Branch.WideBranchId,out var w)&&w>0m?w:0m)*s.Score)/membership
+                    ?scored.Sum(s=>(rfnBranchWeights.TryGetValue(s.Branch.WideBranchId,out var w)&&w>0m?w:0m)*(s.Branch.EvidenceCount>0?s.Score:.5m))/membership
                     :meanP;
                 rationale="neutral membership-weighted average (unclassified archetype)";
                 break;
@@ -4811,14 +4913,20 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         if(outcomeCode is not null&&_outcomeCandidateDimensions.Count>0)
         {
             decimal directionAccum=0m,directionWeight=0m;
-            foreach(var item in scored)
+            var topLevel=scored.Min(s=>s.Branch.LevelNumber);
+            var mappedAxes=0;
+            foreach(var item in scored.Where(s=>s.Branch.LevelNumber==topLevel))
             {
                 var dimensionCode=ResolveScoredBranchDimensionCode(item.Branch);
-                if(dimensionCode is null)continue;
+                if(dimensionCode is null||item.Branch.EvidenceCount<=0)continue;
+                var mapping=_outcomeCandidateDimensions.FirstOrDefault(m=>
+                    string.Equals(m.OutcomeCode,outcomeCode,StringComparison.OrdinalIgnoreCase)&&
+                    string.Equals(m.DimensionCode,dimensionCode,StringComparison.OrdinalIgnoreCase));
+                if(mapping is null||mapping.Weight<=0m||mapping.DirectionCode?.Trim().ToUpperInvariant() is not ("SUPPORTS" or "OPPOSES"))continue;
                 var contribution=ResolveDirectionalContribution(outcomeCode,dimensionCode,item.Score);
-                if(contribution==0m)continue;
                 directionAccum+=contribution;
-                directionWeight+=1m;
+                directionWeight+=mapping.Weight;
+                mappedAxes++;
             }
             if(directionWeight>0m)
             {
@@ -4827,7 +4935,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 rationale=$"{gateRationale}; directional \u0394 {directionMean:+0.00;-0.00} over {directionWeight:0} mapped axes";
             }
         }
-        return(composite,rationale);
+        return(Math.Clamp(composite,0m,1m),rationale);
     }
 
     // R2 candidate/branch separation: on a legal EVALUATE run a hierarchy branch whose head IS a
@@ -9429,44 +9537,10 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                         })
                         .ToArray();
                     var dispositionArchetype=ClassifyDispositionArchetype(name);
-                    // LPI element-gated aggregation: replace the flat branch-weighted average with the
-                    // disposition's legal archetype gate so opposing outcomes (plaintiff merits vs. defense
-                    // vs. settlement) are scored complementarily over the SAME element vector and can never
-                    // collapse to the same mushy number. The per-branch effective scores remain the element
-                    // satisfaction probabilities; only the roll-up function changes.
+                    var dispositionResult=TryComputeDispositionComposite(name,dispositionScores,rfnBranchWeights);
                     var(gatedComposite,archetypeLabel,gateRationale)=ComputeGatedDispositionComposite(dispositionArchetype,dispositionScores,rfnBranchWeights);
-                    // Signed directional adjustment (migration 0451). The archetype gate alone is coarse: it
-                    // cannot distinguish two outcomes sharing an archetype, and it reuses the SAME element
-                    // vector for every candidate. The DB-backed candidate x dimension direction vectors fix
-                    // this by moving mirror outcomes in OPPOSITE directions on each shared axis. We resolve
-                    // this candidate's OutcomeCode, map each L1 DIM_ branch back to its DimensionCode, and
-                    // accumulate SUPPORTS(+) / OPPOSES(-) contributions (NEUTRAL/UNKNOWN/unmapped = 0, never
-                    // negative evidence). The weighted-mean adjustment is blended lightly so it differentiates
-                    // same-archetype rivals without overriding the element gate. Fail-soft: 0 when unconfigured.
-                    var dispositionOutcomeCode=ResolveOutcomeCodeForCandidate(name);
-                    var adjustedComposite=gatedComposite;
-                    var directionRationale=gateRationale;
-                    if(dispositionOutcomeCode is not null&&_outcomeCandidateDimensions.Count>0)
-                    {
-                        decimal directionAccum=0m,directionWeight=0m;
-                        foreach(var item in dispositionScores)
-                        {
-                            var dimensionCode=ResolveScoredBranchDimensionCode(item.Branch);
-                            if(dimensionCode is null)continue;
-                            var contribution=ResolveDirectionalContribution(dispositionOutcomeCode,dimensionCode,item.Score);
-                            if(contribution==0m)continue;
-                            directionAccum+=contribution;
-                            directionWeight+=1m;
-                        }
-                        if(directionWeight>0m)
-                        {
-                            var directionMean=directionAccum/directionWeight; // signed, roughly [-1,1]
-                            // Blend 15% of the signed directional mean into the gated composite, then re-clamp.
-                            adjustedComposite=Math.Clamp(gatedComposite+directionMean*0.15m,0m,1m);
-                            directionRationale=$"{gateRationale}; directional Δ {directionMean:+0.00;-0.00} over {directionWeight:0} mapped axes";
-                        }
-                    }
-                    var dispoComposite=Math.Clamp(adjustedComposite,0m,.75m);
+                    var dispoComposite=Math.Clamp(dispositionResult?.Composite??gatedComposite,0m,.75m);
+                    var directionRationale=dispositionResult?.Rationale??gateRationale;
                     var dispositionRows=dispositionScores.Select(item=>new WideCandidateBranchScoreRecord(Guid.NewGuid(),candidateId,item.Branch.WideBranchId,request.TenantId,item.Branch.DisplayName,item.Score)).ToArray();
                     entries.Add((new(candidateId,executionId,request.TenantId,Truncate(name,300)!,$"Registered competing legal disposition scored by LPI element gate [{archetypeLabel}: {directionRationale}] against the decision-factor axes; the scoring model omitted this candidate from the matrix response. Evidence confidence is established separately.",dispoComposite,0,false,null,dispositionRows),false,dispoComposite));
                     evidenceConfidences[name]=Math.Clamp((distinctHosts<=1?.40m:Math.Min(1m,.40m+.15m*(distinctHosts-1))),0m,1m);

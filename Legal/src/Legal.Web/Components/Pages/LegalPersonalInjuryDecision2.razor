@@ -399,6 +399,9 @@
                             case "Evidence":
                                     <EvidenceTab Owner="this" />
                                     break;
+                                case "Factor Review Hub":
+                                    <FactorReviewHubTab Owner="this" />
+                                    break;
                                     case "Competition":
                                     <CompetitionTab Owner="this" />
                                     break;
@@ -2239,7 +2242,18 @@
                                         </div>
                                         @if (!string.IsNullOrWhiteSpace(ev.Excerpt))
                                         {
-                                            <p class="abg-popup-branch-interp">@ev.Excerpt</p>
+                                            @if (evDocId is { } evPassageVid && evPassageVid != Guid.Empty)
+                                            {
+                                                <p class="abg-popup-branch-interp abg-popup-branch-interp--clickable"
+                                                   role="button"
+                                                   title="Preview this passage highlighted in the source document"
+                                                   @onclick="() => OpenPassagePreview(evPassageVid, string.IsNullOrWhiteSpace(ev.LegalDocumentFileName) ? ev.Title : ev.LegalDocumentFileName, ev.Excerpt)"
+                                                   @onclick:stopPropagation="true">@ev.Excerpt<i class="bi bi-highlighter abg-popup-branch-interp-icon"></i></p>
+                                            }
+                                            else
+                                            {
+                                                <p class="abg-popup-branch-interp">@ev.Excerpt</p>
+                                            }
                                         }
                                         <div class="abg-popup-branch-meta">
                                             @if (!string.IsNullOrWhiteSpace(ev.ModuleCode))
@@ -2355,6 +2369,18 @@
         }
 
         <FactorReferencePopup Reference="_referenceDetail" OnClose="CloseReferenceDetail" />
+
+        <PassagePreviewDialog Visible="_passagePreviewVisible"
+                              DocumentVersionId="_passagePreviewVersionId"
+                              FileName="@_passagePreviewFileName"
+                              PropositionText="@_passagePreviewPropositionText"
+                              RelationshipTypeCode="@_passagePreviewRelationship"
+                              AssessmentReason="@_passagePreviewReason"
+                              EvidenceSummary="@_passagePreviewEvidenceSummary"
+                              PassageText="@_passagePreviewText"
+                              PageNumber="_passagePreviewPage"
+                              SectionPath="@_passagePreviewSection"
+                              OnClose="ClosePassagePreview" />
 </LegalWorkspace>
 
 @code {
@@ -2566,6 +2592,67 @@
         _documentPreviewTitle = "Document preview";
     }
 
+    // Premium side-by-side passage preview: shows the clicked passage text next to the actual
+    // source PDF with the passage highlighted inside the document. Reuses the shared
+    // PassagePreviewDialog so the same interaction is available anywhere evidence is listed.
+    private bool _passagePreviewVisible;
+    private Guid _passagePreviewVersionId;
+    private string? _passagePreviewFileName;
+    private string? _passagePreviewPropositionText;
+    private string? _passagePreviewRelationship;
+    private string? _passagePreviewReason;
+    private string? _passagePreviewEvidenceSummary;
+    private string? _passagePreviewText;
+    private int? _passagePreviewPage;
+    private string? _passagePreviewSection;
+
+    // Opens the premium side-by-side passage/PDF preview with the passage highlighted in the
+    // source document. Called from the evidence popup and the evidence tabs.
+    internal void OpenPassagePreview(Guid documentVersionId, string? fileName, string? passageText)
+        => OpenPassagePreview(documentVersionId, fileName, passageText, null, null);
+
+    internal void OpenPassagePreview(Guid documentVersionId, string? fileName, string? passageText, int? pageNumber, string? sectionPath)
+        => OpenPassagePreview(documentVersionId, fileName, null, null, null, null, passageText, pageNumber, sectionPath);
+
+    // Full overload: shows the semantic reasoning chain (proposition → why linked → evidence →
+    // source passage) on the left, while passageText remains the only text that physically exists
+    // in the PDF and is therefore the run highlighted on the right.
+    internal void OpenPassagePreview(Guid documentVersionId, string? fileName, string? propositionText,
+        string? relationshipTypeCode, string? assessmentReason, string? evidenceSummary,
+        string? passageText, int? pageNumber, string? sectionPath)
+    {
+        if (documentVersionId == Guid.Empty)
+            return;
+        _passagePreviewVersionId = documentVersionId;
+        _passagePreviewFileName = fileName;
+        _passagePreviewPropositionText = propositionText;
+        _passagePreviewRelationship = relationshipTypeCode;
+        _passagePreviewReason = assessmentReason;
+        _passagePreviewEvidenceSummary = evidenceSummary;
+        _passagePreviewText = passageText;
+        _passagePreviewPage = pageNumber;
+        _passagePreviewSection = sectionPath;
+        _passagePreviewVisible = true;
+        // The invoking button may live in a child tab component (e.g. EvidenceTab); the dialog is
+        // hosted here, so force this page to re-render or the popup never appears.
+        StateHasChanged();
+    }
+
+    private void ClosePassagePreview()
+    {
+        _passagePreviewVisible = false;
+        _passagePreviewPropositionText = null;
+        _passagePreviewRelationship = null;
+        _passagePreviewReason = null;
+        _passagePreviewEvidenceSummary = null;
+        _passagePreviewText = null;
+        _passagePreviewFileName = null;
+        _passagePreviewVersionId = Guid.Empty;
+        _passagePreviewPage = null;
+        _passagePreviewSection = null;
+        StateHasChanged();
+    }
+
     // Enterprise drill-down popup for an Ambiguity-first group: shows every branch and all
     // grouped result details. Reads only live DTO data; never re-ranks or fabricates results.
     private WideAmbiguityGroupDto? _ambiguityPopupGroup;
@@ -2706,6 +2793,32 @@
     internal bool _evidenceGraphLoading;
     internal string? _evidenceGraphError;
     internal Guid? _diSelectedDocumentId;
+
+    // ── Factor review hub (document → assertion → issue → governing law → assessment → next action) ──
+    internal Legal.Application.Features.Intelligence.Decision.LegalMatterFactorReviewHubDto? _factorReviewHub;
+    internal bool _factorReviewHubLoading;
+    internal string? _factorReviewHubError;
+
+    internal async Task LoadFactorReviewHubAsync()
+    {
+        if (MatterId is not { } matterId || matterId == Guid.Empty || _factorReviewHubLoading)
+            return;
+        _factorReviewHubLoading = true;
+        _factorReviewHubError = null;
+        try
+        {
+            _factorReviewHub = await Api.GetLegalMatterFactorReviewHubAsync(matterId);
+        }
+        catch (Exception ex)
+        {
+            _factorReviewHubError = $"Failed to load the factor review hub: {ex.Message}";
+        }
+        finally
+        {
+            _factorReviewHubLoading = false;
+            StateHasChanged();
+        }
+    }
 
     // ── Document retrieval review workspace (park-only, like Legal Authority) ────────────────────────
     // DB/API-backed: the server extracts atomic propositions from matter documents and parks them for
@@ -7984,13 +8097,15 @@
 
     // ── Decision Intelligence console (reads existing response + matter fields only) ──
     internal string _dfiTab = "Overview";
-    private static readonly string[] DfiTabs = ["Overview", "Decision Analysis", "Decision Contract", "Dimension", "Dimension Details", "Factor Matrix", "Evidence", "Document Intelligence", "Media & Machine Evidence", "Legal Authority", "Citations", "Competition", "Readiness", "Decision Change Intelligence (DCI)", "Continuous Decision Calibration (CDC)", "Channel Scoring (LPI)", "Human Intelligence", "Investigation", "Run History", "Audit"];
+    private static readonly string[] DfiTabs = ["Overview", "Decision Analysis", "Decision Contract", "Dimension", "Dimension Details", "Factor Matrix", "Evidence", "Factor Review Hub", "Document Intelligence", "Media & Machine Evidence", "Legal Authority", "Citations", "Competition", "Readiness", "Decision Change Intelligence (DCI)", "Continuous Decision Calibration (CDC)", "Channel Scoring (LPI)", "Human Intelligence", "Investigation", "Run History", "Audit"];
 
     private void SelectDfiTab(string tab)
     {
         _dfiTab = tab;
         if (tab == "Document Intelligence" && _evidenceGraph is null && !_evidenceGraphLoading)
             _ = LoadEvidenceGraphAsync();
+        if (tab == "Factor Review Hub" && _factorReviewHub is null && !_factorReviewHubLoading)
+            _ = LoadFactorReviewHubAsync();
         if (tab == "Document Intelligence" && _uploadBatches.Count == 0 && _evidenceOccurrences.Count == 0 && !_provenanceLoading)
             _ = LoadProvenanceAsync();
         if (tab == "Document Intelligence" && !_docReviewLoaded && !_docReviewLoading)
@@ -8494,8 +8609,8 @@
             {
                 "leader" => all.Where(o => o.IsLeader).ToList(),
                 "competing" => all.Where(o => !o.IsLeader).ToList(),
-                "evidence" => all.Where(o => o.Tags.Any(t => t.Label == "Evidence backed")).ToList(),
-                "support" => all.Where(o => o.SupportPct > 0).ToList(),
+                "evidence" => all.Where(o => o.EvidenceConfidence > 0m).ToList(),
+                "support" => all.Where(o => o.BranchWinCount > 0 && o.CompositeScore > 0m).ToList(),
                 "coverage" => all.Where(o => o.EvidenceCoveragePct > 0).ToList(),
                 "interpretive" => all.Where(o => o.InterpretiveSupport > 0).ToList(),
                 "branches" => all.Where(o => o.BranchWinCount > 0).ToList(),
@@ -8537,6 +8652,7 @@
         string? EstimatedCostBand,
         IReadOnlyList<WideCandidateBranchScoreDto> BranchScores)
     {
+        public bool DependencyInventoryAvailable { get; init; }
         // LLM-composed, candidate-landscape overview narrative (55-90 words) for this outcome. When present
         // it replaces the raw Detail text in the Overview card. Null degrades to the existing Detail.
         public string? Narrative { get; init; }
@@ -8551,6 +8667,10 @@
         // so a scored card can carry 0 coverage. The card discloses this as UNVERIFIED so a POLOXI score is
         // never mistaken for an evidence-grounded, attorney-ready determination.
         public decimal EvidenceCoverage { get; init; }
+        public decimal EvidenceConfidence { get; init; }
+        public decimal? ScoreMargin { get; init; }
+        public int ScorePct => (int)Math.Round(Math.Clamp(CompositeScore, 0m, 1m) * 100m);
+        public int EvidenceConfidencePct => (int)Math.Round(Math.Clamp(EvidenceConfidence, 0m, 1m) * 100m);
 
         // Advisory Domain Pack mapping (UseDomainPack only): the canonical pack OutcomeCandidate(s) that the
         // Candidate Landscape composer semantically mapped this LLM-proposed outcome to. Presentation/routing
@@ -8590,8 +8710,8 @@
                 if (!string.IsNullOrWhiteSpace(Narrative)) return Narrative!;
                 if (!string.IsNullOrWhiteSpace(Detail)) return Detail!;
                 var lead = IsLeader ? "Current leader" : "Competing outcome";
-                return $"{lead} with {SupportPct}% relative support and {ViabilityLabel.ToLowerInvariant()}. "
-                    + $"{EvidenceCoveragePct}% evidence coverage, {InterpretiveSupport} interpretive mention(s), "
+                return $"{lead} with outcome score {ScorePct}/100 and {ViabilityLabel.ToLowerInvariant()}. "
+                    + $"{EvidenceConfidencePct}% evidence confidence, {InterpretiveSupport} interpretive mention(s), "
                     + $"scored across {BranchWinCount} decision branch(es).";
             }
         }
@@ -8612,8 +8732,8 @@
                     + "did not run for this matter (evidence/readiness gates), so no composite score or relative support is available.";
             }
             var dimText = dims == 1 ? "1 scored dimension" : $"{dims} scored dimensions";
-            return $"POLOXI · Rank #{Index} · composite score {CompositeScore:P0} aggregated across {dimText} "
-                + $"(Candidate × Branch matrix); support {SupportPct}% = this score ÷ sum of all candidates' scores.";
+            return $"POLOXI · Rank #{Index} · outcome score {ScorePct}/100 aggregated across {dimText} "
+                + $"(Candidate × Branch matrix); evidence confidence {EvidenceConfidencePct}%. Not a calibrated probability.";
         }
     }
 
@@ -8748,11 +8868,8 @@
     {
         get
         {
-            // Decision Outcome cards are intentionally limited to the two decisive outcomes: the WINNING
-            // outcome (rank 1) and the strongest OPPOSING outcome (rank 2). The full candidate field stays
-            // fully scored and ranked in _response.Candidates (nothing in the POLOXI competition is dropped
-            // or truncated); only this presentation projection is capped. The ordering below places survivors
-            // first by rank, so Take(OvDecisionOutcomeCardCap) yields the leader plus its strongest challenger.
+            // Compare at most two outcomes from ONE decision contract. An outcome from a separate
+            // contract is not the leader's opponent, even if it is second in the overall ranking.
             const int OvDecisionOutcomeCardCap = 2;
             // Always surface the full competing field, not just the surviving leader. FinalRankedCandidates
             // drops IsConstraintViolation candidates, so a matter whose only survivor is the leader would
@@ -8760,12 +8877,13 @@
             // "Liability Accepted Outcome" that was excluded for lack of credible support). Build the pool
             // from every candidate, ordering survivors first (by rank) and excluded competitors after (by
             // composite score). Excluded competitors are disclosed by the viability/excluded tags below.
+            //
+            // The full ordered field supplies the per-contract denominators before the card cap is applied.
             var ranked = _response is null ? FinalRankedCandidates
                 : _response.Candidates
                     .OrderBy(c => c.IsConstraintViolation)
                     .ThenBy(c => c.RankNumber)
                     .ThenByDescending(c => c.CompositeScore)
-                    .Take(OvDecisionOutcomeCardCap)
                     .ToArray();
             // Fallback: when no candidate cleared the evidence-admission gate (e.g. "Evidence unverified"
             // matters), still render the Decision Outcomes comparison from the provisional/ranked pool so
@@ -8776,7 +8894,6 @@
                 ranked = _response.Candidates
                     .OrderBy(c => c.IsConstraintViolation)
                     .ThenByDescending(c => c.CompositeScore)
-                    .Take(OvDecisionOutcomeCardCap)
                     .ToArray();
             }
             // Decision Outcome cards are populated ONLY from persisted decision candidates — never from
@@ -8844,48 +8961,38 @@
                         null,
                         null,
                         [])
-                        { Narrative = OvNarrativeFor(title), FullNarrative = OvFullNarrativeFor(title), MappedOutcomes = OvMappedOutcomesFor(title), Lifecycle = OvLifecycleFor(title) });
+                        { Narrative = OvNarrativeFor(title), FullNarrative = OvFullNarrativeFor(title), MappedOutcomes = OvMappedOutcomesFor(title), Lifecycle = OvLifecycleFor(title), DependencyInventoryAvailable = pTotal > 0 });
                     if (proposed.Count >= 10) break;
                 }
                 return proposed;
             }
-            var top = ranked.ToList();
-            var scoreSum = ranked.Sum(c => c.CompositeScore);
-            // Absolute-support floor: supportPct is a RELATIVE share (CompositeScore / scoreSum), so a lone
-            // survivor with a negligible composite would otherwise render as 100% even though no candidate
-            // earned credible support. When the total composite support across the field is below a small
-            // floor, report 0% ("No credible support") instead of a misleading relative winner. The floor is
-            // deliberately small so a genuinely-supported field is never suppressed.
+            // Match the backend candidate-landscape competition: incompatible decision contracts do not
+            // share a denominator. Include the FULL ranked pool, including excluded competitors, per contract.
+            string ContractKey(WideCandidateDto candidate) => candidate.DecisionContractCode?.Trim().ToUpperInvariant() ?? string.Empty;
+            var scoreSums = ranked.GroupBy(ContractKey).ToDictionary(group => group.Key, group => group.Sum(candidate => candidate.CompositeScore));
             const decimal OvCredibleSupportFloor = 0.05m;
-            var hasCredibleSupport = scoreSum >= OvCredibleSupportFloor;
-            // Branch-evidence fallback: CompositeScore = Min(composite, CertaintyCeiling), and the certainty
-            // ceiling = min(legal, fact, evidence, authority). On an unverified / no-admitted-evidence matter
-            // the evidence (and often verification) dimension is ~0, which clamps EVERY candidate composite to
-            // ~0 even though the Candidate × Branch dimensions carry real EvidenceScores. In that case the
-            // composite-relative support collapses to 0% for the whole field, which is misleading. When the
-            // composite field is not credible but the branches DO carry evidence, derive support from the mean
-            // branch EvidenceScore actually present on each candidate (a real, traceable signal) instead of 0.
-            decimal MeanBranchEvidence(WideCandidateDto c) =>
-                c.BranchScores.Count > 0 ? c.BranchScores.Average(b => b.EvidenceScore) : 0m;
-            var branchEvidenceSum = ranked.Sum(MeanBranchEvidence);
-            var useBranchFallback = !hasCredibleSupport && branchEvidenceSum >= OvCredibleSupportFloor;
             var summaries = DfiCandidateDependencySummaries
                 .ToDictionary(s => s.CandidateTitle, s => s, StringComparer.OrdinalIgnoreCase);
+            // Select the leading candidate's actual contract competition. Keep excluded competitors in
+            // the ranked pool and denominator, but never substitute an unrelated contract's leader as
+            // the opposing outcome when this contract has only one candidate.
+            var leadingContract = ContractKey(ranked[0]);
+            var top = ranked.Where(candidate => ContractKey(candidate) == leadingContract)
+                .Take(OvDecisionOutcomeCardCap).ToList();
             var outcomes = new List<OvOutcome>();
             for (var i = 0; i < top.Count; i++)
             {
                 var c = top[i];
+                var scoreSum = scoreSums[ContractKey(c)];
+                var hasCredibleSupport = scoreSum >= OvCredibleSupportFloor;
                 summaries.TryGetValue(c.DisplayName, out var sum);
                 var total = sum?.Total ?? 0;
                 var established = sum?.Established ?? 0;
                 var missing = total - established;
                 var vulns = sum?.Required.Count(d => string.Equals(d.Tone, "danger", StringComparison.OrdinalIgnoreCase)) ?? 0;
-                var supportPct =
-                    (hasCredibleSupport && scoreSum > 0)
-                        ? (int)Math.Round((double)(c.CompositeScore / scoreSum) * 100)
-                        : (useBranchFallback && branchEvidenceSum > 0)
-                            ? (int)Math.Round((double)(MeanBranchEvidence(c) / branchEvidenceSum) * 100)
-                            : 0;
+                var supportPct = hasCredibleSupport && scoreSum > 0
+                    ? (int)Math.Round((double)(c.CompositeScore / scoreSum) * 100)
+                    : 0;
 
                 var tier = c.SupportTierCode;
                 var viabilityLabel = tier switch
@@ -8904,11 +9011,11 @@
 
                 var tags = new List<(string, string)>
                 {
-                    (i == 0 ? "Higher likelihood" : missing > established ? "Higher risk" : "Moderate risk",
+                    (i == 0 ? "Higher score" : missing > established ? "Dependency gaps" : "Competing score",
                         i == 0 ? "ok" : missing > established ? "danger" : "warn"),
                     (viabilityLabel, viabilityTone),
-                    (c.EvidenceCoverage >= 0.6m ? "Evidence backed" : "Evidence dependent",
-                        c.EvidenceCoverage >= 0.6m ? "ok" : "warn"),
+                    (c.EvidenceConfidence > 0m ? "Evidence confidence reported" : "Evidence unverified",
+                        c.EvidenceConfidence > 0m ? "info" : "warn"),
                 };
                 if (c.IsConstraintViolation)
                 {
@@ -8932,7 +9039,7 @@
                     c.EstimatedResolutionLabel,
                     c.EstimatedCostBand,
                     c.BranchScores.Take(8).ToArray())
-                    { Narrative = OvNarrativeFor(c.DisplayName), FullNarrative = OvFullNarrativeFor(c.DisplayName), EvidenceCoverage = c.EvidenceCoverage, MappedOutcomes = OvMappedOutcomesFor(c.DisplayName), Lifecycle = OvLifecycleFor(c.DisplayName, OvAssessmentStateFor(c, i == 0 && hasCredibleSupport)) });
+                    { Narrative = OvNarrativeFor(c.DisplayName), FullNarrative = OvFullNarrativeFor(c.DisplayName), EvidenceCoverage = c.EvidenceCoverage, EvidenceConfidence = c.EvidenceConfidence, ScoreMargin = top.Count > 1 ? c.CompositeScore - top[1 - i].CompositeScore : null, MappedOutcomes = OvMappedOutcomesFor(c.DisplayName), Lifecycle = OvLifecycleFor(c.DisplayName, OvAssessmentStateFor(c, i == 0 && hasCredibleSupport)), DependencyInventoryAvailable = sum is not null && total > 0 });
             }
             return outcomes;
         }
@@ -10939,10 +11046,13 @@
 
             var model = string.IsNullOrWhiteSpace(_selectedModelCode) ? null : _selectedModelCode;
             var guard = 0;
-            var lastPending = status.PendingVersions;
-            // Process bounded batches until no prepared versions remain — or until a batch makes no
-            // forward progress (pending count did not drop), which means those versions cannot be
-            // enriched (e.g. no CHAT route). Re-running the same stuck versions only wastes time/money.
+            // Process bounded batches until no prepared versions remain — or until a batch activates
+            // ZERO documents, which means every remaining version is genuinely stuck (e.g. no CHAT route
+            // or extraction that cannot bind), so re-running them only wastes time/money. We key the
+            // stop decision off ActivatedThisCall (versions this batch actually drove to a terminal
+            // ENRICHED outcome), NOT a before/after PendingVersions comparison: a batch that enriches a
+            // SUBSET while others remain is genuine forward progress and the loop must continue draining
+            // the backlog instead of abandoning the remaining documents after the first batch.
             while (guard++ < 50)
             {
                 var token = _searchCancellation?.Token ?? default;
@@ -10961,10 +11071,10 @@
                 await InvokeAsync(StateHasChanged);
                 if (result.IsComplete)
                     break;
-                // Stop if this batch did not reduce the pending backlog — no genuine progress was made.
-                if (result.PendingVersions >= lastPending)
+                // Stop only when a whole batch made NO forward progress (activated nothing). As long as
+                // each batch keeps enriching at least one document, keep going until the backlog is empty.
+                if (result.ActivatedThisCall <= 0)
                     break;
-                lastPending = result.PendingVersions;
             }
 
             await LoadEvidenceGraphAsync();
@@ -11005,9 +11115,10 @@
                 {
                     _activationNotice =
                         $"{final.PendingVersions} document version(s) could not be activated into the reasoning engine, " +
-                        "so no propositions or evidence were derived for them. This usually means the tenant has no active " +
-                        "CHAT model route configured for LEGAL_DOCUMENT_SEMANTIC_EXTRACTION. The answer was still produced " +
-                        "from available sources, but the Evidence Graph may remain empty until routing is fixed.";
+                        "so no propositions or evidence were derived for them. The answer was still produced from " +
+                        "available sources, but the Evidence Graph may remain empty until this is resolved. " +
+                        "Verify the tenant's AI routing for LEGAL_DOCUMENT_SEMANTIC_EXTRACTION, that document passages " +
+                        "carry source spans, and that extracted evidence binds to the matter's domain-pack concepts.";
                 }
             }
         }

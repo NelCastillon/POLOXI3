@@ -30,6 +30,13 @@ public sealed class LegalMatterCorpusActivationService(
     public async Task<LegalMatterCorpusActivationStatus> ActivateAsync(Guid tenantId, Guid userId, Guid matterId, string? modelCode, int batchSize, CancellationToken cancellationToken = default)
     {
         var settings = await corpusRepository.GetRetrievalArchitectureSettingsAsync(cancellationToken);
+
+        // The uploaded document IS evidence. Backfill the document-intake baseline for every existing version
+        // in the matter — including those already marked terminal (ENRICHED or legacy NO_EVIDENCE) that the
+        // pending-only pass below will never revisit — so no document is ever classified as having "no
+        // evidence". This does not re-run LLM extraction; it only stamps the document-as-evidence anchor.
+        await corpusRepository.BackfillDocumentIntakeEvidenceAsync(tenantId, userId, matterId, cancellationToken);
+
         var pending = await corpusRepository.GetPendingCorpusVersionsAsync(
             tenantId, matterId, Math.Clamp(batchSize, 1, 25), cancellationToken);
 
@@ -60,6 +67,12 @@ public sealed class LegalMatterCorpusActivationService(
             var effectiveDomainPackCode = string.IsNullOrWhiteSpace(version.DomainPackCode) ? matterDomainPackCode : version.DomainPackCode;
             try
             {
+                // The uploaded document IS evidence. Register a baseline document-intake evidence record for
+                // EVERY version, independent of whether the passage-gated LLM extraction below admits any
+                // atomic items. This guarantees no document is ever classified as having "no evidence".
+                await corpusRepository.EnsureDocumentIntakeEvidenceAsync(
+                    tenantId, userId, matterId, version.LegalDocumentVersionId, version.FileName, cancellationToken);
+
                 if (settings.Stage1SemanticEnrichmentEnabled)
                 {
                     var passages = await corpusRepository.GetDocumentPassagesAsync(
@@ -129,17 +142,17 @@ public sealed class LegalMatterCorpusActivationService(
                 }
 
                 activated++;
+                var activationStatus = evidenceExtracted > 0 ? "ENRICHED" : "NO_EVIDENCE";
                 batchDetails.Add(new LegalCorpusActivationDocumentDetail(
                     version.LegalDocumentId, version.LegalDocumentVersionId, version.FileName,
-                    "ENRICHED", "Extracting evidence", passagesRead, evidenceExtracted,
-                    conceptBound, version.DomainPackCode, Succeeded: true));
+                    activationStatus, evidenceExtracted > 0 ? "Evidence extracted" : "No semantic evidence extracted",
+                    passagesRead, evidenceExtracted,
+                    conceptBound, effectiveDomainPackCode, Succeeded: true));
 
-                // Persist a terminal activation outcome so this version is never re-read on later passes,
-                // even when it legitimately produced no evidence. ENRICHED when evidence was derived,
-                // NO_EVIDENCE when the document carried no admissible facts (still "done", just empty).
-                var terminalStatus = evidenceExtracted > 0 ? "ENRICHED" : "NO_EVIDENCE";
+                // An attempted extraction with zero governed items is terminal to avoid repeating paid
+                // calls on each decision run, but must never masquerade as semantic enrichment.
                 await corpusRepository.SetVersionSemanticActivationStatusAsync(
-                    tenantId, userId, version.LegalDocumentVersionId, terminalStatus, cancellationToken);
+                    tenantId, userId, version.LegalDocumentVersionId, activationStatus, cancellationToken);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {

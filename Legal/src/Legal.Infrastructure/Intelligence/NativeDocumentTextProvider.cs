@@ -51,9 +51,67 @@ public sealed class NativeDocumentTextProvider(IOptions<DocumentIntelligenceOpti
         return (decimal)readable / nonWhitespace >= Math.Clamp(options.Value.NativeTextMinimumReadableCharacterRatio, 0m, 1m);
     }
 
-    private static DocumentExtractedPage Page(int number, string text, bool reliable) => new(
+    private DocumentExtractedPage Page(int number, string text, bool reliable) => new(
         number, text, LegalDocumentExtractionMethods.NativeText, 1m, null, null, null,
-        [new DocumentExtractedParagraph(1, text, null, null, 1m)], IsNativeTextReliable: reliable);
+        BuildParagraphs(text), IsNativeTextReliable: reliable);
+
+    // Splits a page's native text into paragraph-level passages on blank-line boundaries so each unit of
+    // evidence is anchored to a discrete paragraph rather than an entire page. Lines are regrouped into
+    // blocks separated by one or more blank lines; blocks shorter than the configured minimum are merged
+    // into the previous block to avoid fragmenting on stray line breaks. When paragraph splitting yields a
+    // single block (or is disabled via a 0 threshold) the whole page remains one passage.
+    private IReadOnlyCollection<DocumentExtractedParagraph> BuildParagraphs(string text)
+    {
+        var minimum = options.Value.NativeTextMinimumCharactersPerParagraph;
+        if (minimum <= 0 || string.IsNullOrWhiteSpace(text))
+            return [new DocumentExtractedParagraph(1, text, null, null, 1m)];
+
+        var blocks = new List<string>();
+        var current = new StringBuilder();
+        foreach (var rawLine in text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n'))
+        {
+            if (string.IsNullOrWhiteSpace(rawLine))
+            {
+                FlushBlock(blocks, current);
+                continue;
+            }
+            if (current.Length > 0)
+                current.Append('\n');
+            current.Append(rawLine.TrimEnd());
+        }
+        FlushBlock(blocks, current);
+
+        // Merge blocks that fall under the minimum length into the previous block so short headings or
+        // stray wrapped lines stay attached to the paragraph they belong to.
+        var merged = new List<string>();
+        foreach (var block in blocks)
+        {
+            if (merged.Count > 0 && CountNonWhitespace(block) < minimum)
+                merged[^1] = merged[^1] + "\n" + block;
+            else
+                merged.Add(block);
+        }
+
+        if (merged.Count <= 1)
+            return [new DocumentExtractedParagraph(1, text, null, null, 1m)];
+
+        var sequence = 0;
+        return merged
+            .Select(block => new DocumentExtractedParagraph(++sequence, block, null, null, 1m))
+            .ToArray();
+    }
+
+    private static void FlushBlock(List<string> blocks, StringBuilder current)
+    {
+        if (current.Length == 0)
+            return;
+        var block = current.ToString().Trim();
+        if (block.Length > 0)
+            blocks.Add(block);
+        current.Clear();
+    }
+
+    private static int CountNonWhitespace(string text) => text.Count(character => !char.IsWhiteSpace(character));
 
     private static DocumentExtractionResult Result(IReadOnlyCollection<DocumentExtractedPage> pages, IReadOnlyCollection<int> fallbackPages) => new(
         LegalDocumentExtractionMethods.NativeText, "native-text", "1", DateTime.UtcNow,

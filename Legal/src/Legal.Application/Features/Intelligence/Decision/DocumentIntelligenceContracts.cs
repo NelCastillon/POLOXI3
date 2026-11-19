@@ -45,6 +45,46 @@ public static class LegalFactStates
     public const string Invalidated = "INVALIDATED";
 }
 
+// The single most important classification distinction for Judz: a proposition is either a FACTUAL
+// assertion ("what happened"), a LEGAL rule statement ("what rule governs"), or an APPLICATION
+// conclusion ("whether the facts satisfy the rule"). Factual support and legal support are kept on
+// separate relationship chains so one overall confidence never hides different kinds of uncertainty.
+public static class LegalPropositionKinds
+{
+    public const string Factual = "FACTUAL";
+    public const string Legal = "LEGAL";
+    public const string Application = "APPLICATION";
+}
+
+// Whether a factor's legal requirement appears satisfied, given the facts and the governing rule.
+public static class LegalApplicationDispositions
+{
+    public const string Satisfied = "SATISFIED";
+    public const string NotSatisfied = "NOT_SATISFIED";
+    public const string PartiallySatisfied = "PARTIALLY_SATISFIED";
+    public const string Indeterminate = "INDETERMINATE";
+}
+
+// Reviewable lifecycle of an application inference, kept separate from evidence/fact states.
+public static class LegalApplicationReviewStates
+{
+    public const string Proposed = "PROPOSED";
+    public const string UnderReview = "UNDER_REVIEW";
+    public const string Accepted = "ACCEPTED";
+    public const string Rejected = "REJECTED";
+    public const string Superseded = "SUPERSEDED";
+}
+
+// The typed role an input plays when feeding an application inference. Factual inputs (evidence and
+// factual propositions) and legal inputs (authority and legal propositions) stay visibly separate.
+public static class LegalApplicationInputRoles
+{
+    public const string FactualProposition = "FACTUAL_PROPOSITION";
+    public const string LegalProposition = "LEGAL_PROPOSITION";
+    public const string Evidence = "EVIDENCE";
+    public const string Authority = "AUTHORITY";
+}
+
 public static class LegalDocumentRelationshipTypes
 {
     public const string Supports = "SUPPORTS";
@@ -440,6 +480,23 @@ public sealed record LegalCorpusActivationDocumentDetail(
     // of a generic "no CHAT route" guess. Null on success.
     string? FailureReason = null);
 
+// Deterministic, matter-level aggregation of the admitted evidence corpus (the exact graph the
+// Evidence Tab renders), used to seed every decision candidate's EvidenceSupport dimension in the
+// Core math. The schema is matter-scoped (Legal_MatterFactProposition has no candidate FK), so this
+// is a shared corpus-strength baseline; per-candidate differentiation is applied later by the
+// recompetition deltas. Raw signal components are returned so normalization stays in DecisionCoreMath.
+public sealed record LegalMatterEvidenceCorpusStrength(
+    // Net weighted support signal across proposition→evidence edges: Σ(SUPPORTS edge weight) −
+    // Σ(CONTRADICTS edge weight), where each edge weight = evidence.Confidence × proposition.Confidence
+    // and only verified source assertions contribute. Can be negative when contradiction dominates.
+    double NetSupportSignal,
+    // Count of distinct admitted atomic (DYNAMIC_LLM) evidence items for the matter — the corpus depth
+    // signal that drives the saturating strength curve.
+    int AtomicEvidenceCount,
+    // Count of document versions carrying only DOCUMENT_INTAKE baseline evidence (uploaded but not yet
+    // atomically enriched). These contribute a weak presence floor only, never full support.
+    int IntakeOnlyDocumentCount);
+
 // A prepared-but-not-activated document version: extracted text exists, but Stage 1 semantic
 // enrichment (atomic propositions) has not yet produced any evidence rows for it.
 public sealed record LegalPendingCorpusVersion(
@@ -509,7 +566,8 @@ public sealed record LegalFactPropositionDto(
     string GenerationOriginCode,
     decimal? Confidence,
     bool IsDecisionAuthoritative,
-    IReadOnlyCollection<LegalPropositionSupportDto> Support);
+    IReadOnlyCollection<LegalPropositionSupportDto> Support,
+    string PropositionKindCode = LegalPropositionKinds.Factual);
 
 public sealed record LegalPropositionSupportDto(
     Guid LegalPropositionSupportId,
@@ -639,7 +697,8 @@ public sealed record LegalEvidenceGraphPropositionDto(
     string GenerationOriginCode,
     decimal? Confidence,
     bool IsDecisionAuthoritative,
-    IReadOnlyCollection<LegalPropositionSupportDto> Support);
+    IReadOnlyCollection<LegalPropositionSupportDto> Support,
+    string PropositionKindCode = LegalPropositionKinds.Factual);
 
 // Aggregate matter-level payload for the Document Intelligence tab.
 public sealed record LegalMatterEvidenceGraphDto(
@@ -648,6 +707,181 @@ public sealed record LegalMatterEvidenceGraphDto(
     IReadOnlyCollection<LegalEvidenceGraphItemDto> Evidence,
     IReadOnlyCollection<LegalEvidenceGraphPropositionDto> Propositions,
     IReadOnlyCollection<LegalSourceAssertionDto> SourceAssertions);
+
+// ── Application inference (facts + rule → application) ───────────────────────────────────────────
+// A separate, reviewable inference about whether a factor's legal requirement appears satisfied. It
+// links back to BOTH the factual chain (evidence → factual proposition) and the legal chain
+// (authority → legal proposition) through typed input edges. Its confidence and review state are kept
+// distinct from classification confidence and passage-support strength.
+public sealed record LegalApplicationInferenceInputDto(
+    Guid LegalApplicationInferenceInputId,
+    Guid LegalApplicationInferenceId,
+    string InputRoleCode,
+    Guid? LegalFactPropositionId,
+    Guid? LegalEvidenceItemId,
+    Guid? VerifiedLegalPropositionId,
+    string RelationshipCode,
+    string? Rationale);
+
+public sealed record LegalApplicationInferenceDto(
+    Guid LegalApplicationInferenceId,
+    Guid MatterId,
+    string DimensionCode,
+    string? FactorCode,
+    Guid? TargetNodeId,
+    Guid? LegalApplicationPropositionId,
+    string ConclusionText,
+    string DispositionCode,
+    string ReviewStateCode,
+    decimal? Confidence,
+    string? Rationale,
+    string GenerationOriginCode,
+    Guid? SupersededByApplicationInferenceId,
+    DateTime CreatedDateUtc,
+    IReadOnlyCollection<LegalApplicationInferenceInputDto> Inputs);
+
+public sealed record LegalApplicationInferenceInputRequest(
+    [Required] string InputRoleCode,
+    Guid? LegalFactPropositionId,
+    Guid? LegalEvidenceItemId,
+    Guid? VerifiedLegalPropositionId,
+    string RelationshipCode = LegalDocumentRelationshipTypes.Supports,
+    string? Rationale = null);
+
+public sealed record LegalApplicationInferenceCreateRequest(
+    Guid MatterId,
+    [Required, StringLength(60)] string DimensionCode,
+    [StringLength(80)] string? FactorCode,
+    Guid? TargetNodeId,
+    Guid? LegalApplicationPropositionId,
+    [Required, StringLength(3000)] string ConclusionText,
+    string DispositionCode = LegalApplicationDispositions.Indeterminate,
+    string ReviewStateCode = LegalApplicationReviewStates.Proposed,
+    [Range(0, 1)] decimal? Confidence = null,
+    string? Rationale = null,
+    string GenerationOriginCode = "DYNAMIC_LLM",
+    IReadOnlyCollection<LegalApplicationInferenceInputRequest>? Inputs = null);
+
+public sealed record LegalApplicationInferenceReviewRequest(
+    Guid MatterId,
+    [Required] string ReviewStateCode,
+    string? DispositionCode = null,
+    [Range(0, 1)] decimal? Confidence = null,
+    string? Rationale = null);
+
+// Pure, side-effect-free validation invariants for an application inference, mirroring the CK
+// constraints on POLOXI.Legal_MatterApplicationInference(Input) so the write path is unit-testable.
+public static class LegalApplicationInferencePolicy
+{
+    private static readonly string[] Dispositions =
+    [
+        LegalApplicationDispositions.Satisfied, LegalApplicationDispositions.NotSatisfied,
+        LegalApplicationDispositions.PartiallySatisfied, LegalApplicationDispositions.Indeterminate
+    ];
+
+    private static readonly string[] ReviewStates =
+    [
+        LegalApplicationReviewStates.Proposed, LegalApplicationReviewStates.UnderReview,
+        LegalApplicationReviewStates.Accepted, LegalApplicationReviewStates.Rejected,
+        LegalApplicationReviewStates.Superseded
+    ];
+
+    public static bool IsValidDisposition(string? code) => code is not null && Array.IndexOf(Dispositions, code) >= 0;
+
+    public static bool IsValidReviewState(string? code) => code is not null && Array.IndexOf(ReviewStates, code) >= 0;
+
+    // Enforces exactly-one-target-matches-role (CK_Legal_MatterApplicationInferenceInput_Target).
+    public static bool InputTargetMatchesRole(LegalApplicationInferenceInputRequest input)
+    {
+        var hasProp = input.LegalFactPropositionId is not null;
+        var hasEvidence = input.LegalEvidenceItemId is not null;
+        var hasAuthority = input.VerifiedLegalPropositionId is not null;
+        return input.InputRoleCode switch
+        {
+            LegalApplicationInputRoles.FactualProposition or LegalApplicationInputRoles.LegalProposition
+                => hasProp && !hasEvidence && !hasAuthority,
+            LegalApplicationInputRoles.Evidence => hasEvidence && !hasProp && !hasAuthority,
+            LegalApplicationInputRoles.Authority => hasAuthority && !hasProp && !hasEvidence,
+            _ => false
+        };
+    }
+
+    // Returns null when valid; otherwise a human-readable reason.
+    public static string? Validate(LegalApplicationInferenceCreateRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.DimensionCode))
+            return "An application inference must target a dimension.";
+        if (string.IsNullOrWhiteSpace(request.ConclusionText))
+            return "An application inference requires a conclusion.";
+        if (!IsValidDisposition(request.DispositionCode))
+            return $"Invalid application disposition code: {request.DispositionCode}.";
+        if (!IsValidReviewState(request.ReviewStateCode))
+            return $"Invalid application review state code: {request.ReviewStateCode}.";
+        if (request.Confidence is { } c && (c < 0 || c > 1))
+            return "Application confidence must be between 0 and 1.";
+        if (request.Inputs is not null)
+        {
+            foreach (var input in request.Inputs)
+            {
+                if (!InputTargetMatchesRole(input))
+                    return $"Application inference input role '{input.InputRoleCode}' does not match its single target reference.";
+            }
+        }
+        return null;
+    }
+}
+
+// ── Factor review hub (the end-to-end chain for one factor) ──────────────────────────────────────
+// Opening a factor should show its supporting evidence, contradictory evidence, applicable law,
+// unresolved questions, and the next action — with every item tracing to its exact source. This
+// aggregate groups the existing graph by factor (dimension + optional node/factor code) and layers
+// the application inference on top.
+public sealed record LegalFactorReviewPropositionDto(
+    Guid LegalFactPropositionId,
+    string PropositionKindCode,
+    string PropositionText,
+    string FactStateCode,
+    decimal? Confidence,
+    bool IsDecisionAuthoritative,
+    string RelationshipCode,
+    string? Rationale);
+
+public sealed record LegalFactorReviewAuthorityDto(
+    Guid VerifiedLegalPropositionId,
+    Guid NormalizedAuthorityId,
+    string Proposition,
+    string DispositionCode,
+    string? SupportingPassage);
+
+// Direct evidence linked to an application inference (EVIDENCE input role) — raw evidence that supports
+// or contradicts the application without first being promoted into a factual proposition.
+public sealed record LegalFactorReviewEvidenceDto(
+    Guid LegalEvidenceItemId,
+    string EvidenceTypeCode,
+    string DimensionCode,
+    string Summary,
+    string EvidenceStateCode,
+    decimal? Confidence,
+    string RelationshipCode,
+    string? Rationale);
+
+public sealed record LegalFactorReviewItemDto(
+    string DimensionCode,
+    string? FactorCode,
+    Guid? TargetNodeId,
+    string? FactorLabel,
+    IReadOnlyCollection<LegalFactorReviewPropositionDto> FactualPropositions,
+    IReadOnlyCollection<LegalFactorReviewPropositionDto> LegalPropositions,
+    IReadOnlyCollection<LegalFactorReviewAuthorityDto> Authorities,
+    IReadOnlyCollection<LegalFactorReviewEvidenceDto> Evidence,
+    IReadOnlyCollection<LegalApplicationInferenceDto> ApplicationInferences,
+    int SupportingCount,
+    int ContradictingCount,
+    int UnresolvedCount);
+
+public sealed record LegalMatterFactorReviewHubDto(
+    Guid MatterId,
+    IReadOnlyCollection<LegalFactorReviewItemDto> Factors);
 
 // ── Document cleanup (hard delete of document-derived evidence) ──────────────────────────────────
 // Request to purge document-derived evidence for a matter. When DocumentIds is null or empty, ALL

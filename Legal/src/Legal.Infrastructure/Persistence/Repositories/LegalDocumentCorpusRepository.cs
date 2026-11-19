@@ -218,7 +218,8 @@ public sealed class LegalDocumentCorpusRepository(ISqlConnectionFactory connecti
             ORDER BY document.FileName, passage.PageNumber, evidence.CreatedDateUtc;
 
             SELECT proposition.LegalFactPropositionId, proposition.DecisionMatterId AS MatterId, proposition.PropositionText,
-                   proposition.FactStateCode, proposition.GenerationOriginCode, proposition.Confidence, proposition.IsDecisionAuthoritative
+                   proposition.FactStateCode, proposition.GenerationOriginCode, proposition.Confidence, proposition.IsDecisionAuthoritative,
+                   proposition.PropositionKindCode
             FROM POLOXI.Legal_MatterFactProposition proposition
             WHERE proposition.TenantId=@TenantId AND proposition.DecisionMatterId=@MatterId AND proposition.IsDeleted=0
             ORDER BY proposition.IsDecisionAuthoritative DESC, proposition.CreatedDateUtc;
@@ -248,10 +249,320 @@ public sealed class LegalDocumentCorpusRepository(ISqlConnectionFactory connecti
         var propositions = propositionRows.Select(head => new LegalEvidenceGraphPropositionDto(
             head.LegalFactPropositionId, head.MatterId, head.PropositionText, head.FactStateCode,
             head.GenerationOriginCode, head.Confidence, head.IsDecisionAuthoritative,
-            supports.Where(support => support.LegalFactPropositionId == head.LegalFactPropositionId).ToArray()))
+            supports.Where(support => support.LegalFactPropositionId == head.LegalFactPropositionId).ToArray(),
+            head.PropositionKindCode))
             .ToArray();
 
         return new LegalMatterEvidenceGraphDto(matterId, documentCount, evidence, propositions, sourceAssertions);
+    }
+
+    public async Task<LegalMatterFactorReviewHubDto> GetMatterFactorReviewHubAsync(Guid tenantId, Guid matterId, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        using var multi = await connection.QueryMultipleAsync(new CommandDefinition(
+            """
+            -- Application inferences for the matter (facts + rule → application), factor-keyed. These are
+            -- the hub's anchors: each carries the factor identity (dimension + optional factor code / node).
+            -- Superseded inferences are excluded: a corrected conclusion replaces the older row, so the hub
+            -- shows only the current (live) conclusion per factor and never double-counts the trail.
+            SELECT app.LegalApplicationInferenceId, app.DecisionMatterId AS MatterId, app.DimensionCode, app.FactorCode,
+                   app.TargetNodeId, app.LegalApplicationPropositionId, app.ConclusionText, app.DispositionCode,
+                   app.ReviewStateCode, app.Confidence, app.Rationale, app.GenerationOriginCode,
+                   app.SupersededByApplicationInferenceId, app.CreatedDateUtc
+            FROM POLOXI.Legal_MatterApplicationInference app
+            WHERE app.TenantId=@TenantId AND app.DecisionMatterId=@MatterId AND app.IsDeleted=0
+                  AND app.SupersededByApplicationInferenceId IS NULL
+            ORDER BY app.DimensionCode, app.FactorCode, app.CreatedDateUtc DESC;
+
+            -- Inputs of those (live) application inferences.
+            SELECT input.LegalApplicationInferenceInputId, input.LegalApplicationInferenceId, input.InputRoleCode,
+                   input.LegalFactPropositionId, input.LegalEvidenceItemId, input.VerifiedLegalPropositionId,
+                   input.RelationshipCode, input.Rationale
+            FROM POLOXI.Legal_MatterApplicationInferenceInput input
+            INNER JOIN POLOXI.Legal_MatterApplicationInference app ON app.LegalApplicationInferenceId=input.LegalApplicationInferenceId AND app.IsDeleted=0
+            WHERE input.TenantId=@TenantId AND app.DecisionMatterId=@MatterId AND input.IsDeleted=0
+                  AND app.SupersededByApplicationInferenceId IS NULL;
+
+            -- Factual / legal propositions referenced by the inputs (typed via PropositionKindCode).
+            SELECT DISTINCT proposition.LegalFactPropositionId, proposition.PropositionKindCode, proposition.PropositionText,
+                   proposition.FactStateCode, proposition.Confidence, proposition.IsDecisionAuthoritative
+            FROM POLOXI.Legal_MatterFactProposition proposition
+            INNER JOIN POLOXI.Legal_MatterApplicationInferenceInput input ON input.LegalFactPropositionId=proposition.LegalFactPropositionId AND input.IsDeleted=0
+            INNER JOIN POLOXI.Legal_MatterApplicationInference app ON app.LegalApplicationInferenceId=input.LegalApplicationInferenceId AND app.IsDeleted=0
+            WHERE proposition.TenantId=@TenantId AND app.DecisionMatterId=@MatterId AND proposition.IsDeleted=0
+                  AND app.SupersededByApplicationInferenceId IS NULL;
+
+            -- Verified legal authority referenced by the inputs.
+            SELECT DISTINCT verified.VerifiedLegalPropositionId, verified.NormalizedAuthorityId, verified.Proposition,
+                   verified.DispositionCode, verified.SupportingPassage
+            FROM POLOXI.Legal_VerifiedLegalProposition verified
+            INNER JOIN POLOXI.Legal_MatterApplicationInferenceInput input ON input.VerifiedLegalPropositionId=verified.VerifiedLegalPropositionId AND input.IsDeleted=0
+            INNER JOIN POLOXI.Legal_MatterApplicationInference app ON app.LegalApplicationInferenceId=input.LegalApplicationInferenceId AND app.IsDeleted=0
+            WHERE verified.TenantId=@TenantId AND app.DecisionMatterId=@MatterId
+                  AND app.SupersededByApplicationInferenceId IS NULL;
+
+            -- Direct evidence items referenced by the inputs (EVIDENCE role: raw evidence linked to the
+            -- application without first being promoted into a factual proposition).
+            SELECT DISTINCT evidence.LegalEvidenceItemId, evidence.EvidenceTypeCode, evidence.DimensionCode,
+                   evidence.Summary, evidence.EvidenceStateCode, evidence.Confidence
+            FROM POLOXI.Legal_MatterEvidenceItem evidence
+            INNER JOIN POLOXI.Legal_MatterApplicationInferenceInput input ON input.LegalEvidenceItemId=evidence.LegalEvidenceItemId AND input.IsDeleted=0
+            INNER JOIN POLOXI.Legal_MatterApplicationInference app ON app.LegalApplicationInferenceId=input.LegalApplicationInferenceId AND app.IsDeleted=0
+            WHERE evidence.TenantId=@TenantId AND app.DecisionMatterId=@MatterId AND evidence.IsDeleted=0
+                  AND app.SupersededByApplicationInferenceId IS NULL;
+            """, new { TenantId = tenantId, MatterId = matterId }, cancellationToken: cancellationToken));
+
+        var inferenceRows = (await multi.ReadAsync<ApplicationInferenceRow>()).ToArray();
+        var inputRows = (await multi.ReadAsync<LegalApplicationInferenceInputDto>()).ToArray();
+        var propositionRows = (await multi.ReadAsync<FactorPropositionRow>()).ToArray();
+        var authorityRows = (await multi.ReadAsync<LegalFactorReviewAuthorityDto>()).ToArray();
+        var evidenceRows = (await multi.ReadAsync<FactorEvidenceRow>()).ToArray();
+
+        var inferences = inferenceRows.Select(row => new LegalApplicationInferenceDto(
+            row.LegalApplicationInferenceId, row.MatterId, row.DimensionCode, row.FactorCode, row.TargetNodeId,
+            row.LegalApplicationPropositionId, row.ConclusionText, row.DispositionCode, row.ReviewStateCode,
+            row.Confidence, row.Rationale, row.GenerationOriginCode, row.SupersededByApplicationInferenceId,
+            row.CreatedDateUtc,
+            inputRows.Where(input => input.LegalApplicationInferenceId == row.LegalApplicationInferenceId).ToArray()))
+            .ToArray();
+
+        var propositionLookup = propositionRows.ToDictionary(p => p.LegalFactPropositionId);
+        var authorityLookup = authorityRows.ToDictionary(a => a.VerifiedLegalPropositionId);
+        var evidenceLookup = evidenceRows.ToDictionary(e => e.LegalEvidenceItemId);
+
+        // Group application inferences by factor identity (dimension + optional factor code + node id).
+        var factors = inferences
+            .GroupBy(i => (i.DimensionCode, i.FactorCode, i.TargetNodeId))
+            .Select(group =>
+            {
+                var (dimensionCode, factorCode, targetNodeId) = group.Key;
+                var factorInferences = group.ToArray();
+                var allInputs = factorInferences.SelectMany(i => i.Inputs).ToArray();
+
+                LegalFactorReviewPropositionDto? ResolveProposition(LegalApplicationInferenceInputDto input)
+                {
+                    if (input.LegalFactPropositionId is not { } id || !propositionLookup.TryGetValue(id, out var proposition))
+                        return null;
+                    return new LegalFactorReviewPropositionDto(
+                        proposition.LegalFactPropositionId, proposition.PropositionKindCode, proposition.PropositionText,
+                        proposition.FactStateCode, proposition.Confidence, proposition.IsDecisionAuthoritative,
+                        input.RelationshipCode, input.Rationale);
+                }
+
+                var factual = allInputs
+                    .Where(i => string.Equals(i.InputRoleCode, LegalApplicationInputRoles.FactualProposition, StringComparison.Ordinal))
+                    .Select(ResolveProposition)
+                    .Where(p => p is not null)
+                    .Select(p => p!)
+                    .ToArray();
+
+                var legal = allInputs
+                    .Where(i => string.Equals(i.InputRoleCode, LegalApplicationInputRoles.LegalProposition, StringComparison.Ordinal))
+                    .Select(ResolveProposition)
+                    .Where(p => p is not null)
+                    .Select(p => p!)
+                    .ToArray();
+
+                var authorities = allInputs
+                    .Where(i => string.Equals(i.InputRoleCode, LegalApplicationInputRoles.Authority, StringComparison.Ordinal)
+                        && i.VerifiedLegalPropositionId is { } aid && authorityLookup.ContainsKey(aid))
+                    .Select(i => authorityLookup[i.VerifiedLegalPropositionId!.Value])
+                    .DistinctBy(a => a.VerifiedLegalPropositionId)
+                    .ToArray();
+
+                var evidence = allInputs
+                    .Where(i => string.Equals(i.InputRoleCode, LegalApplicationInputRoles.Evidence, StringComparison.Ordinal)
+                        && i.LegalEvidenceItemId is { } eid && evidenceLookup.ContainsKey(eid))
+                    .Select(i =>
+                    {
+                        var e = evidenceLookup[i.LegalEvidenceItemId!.Value];
+                        return new LegalFactorReviewEvidenceDto(
+                            e.LegalEvidenceItemId, e.EvidenceTypeCode, e.DimensionCode, e.Summary,
+                            e.EvidenceStateCode, e.Confidence, i.RelationshipCode, i.Rationale);
+                    })
+                    .DistinctBy(e => e.LegalEvidenceItemId)
+                    .ToArray();
+
+                var supporting = allInputs.Count(i => string.Equals(i.RelationshipCode, LegalDocumentRelationshipTypes.Supports, StringComparison.Ordinal));
+                var contradicting = allInputs.Count(i => string.Equals(i.RelationshipCode, LegalDocumentRelationshipTypes.Contradicts, StringComparison.Ordinal));
+                var unresolved = factorInferences.Count(i =>
+                    string.Equals(i.DispositionCode, LegalApplicationDispositions.Indeterminate, StringComparison.Ordinal)
+                    || string.Equals(i.ReviewStateCode, LegalApplicationReviewStates.Proposed, StringComparison.Ordinal)
+                    || string.Equals(i.ReviewStateCode, LegalApplicationReviewStates.UnderReview, StringComparison.Ordinal));
+
+                return new LegalFactorReviewItemDto(
+                    dimensionCode, factorCode, targetNodeId, null,
+                    factual, legal, authorities, evidence, factorInferences,
+                    supporting, contradicting, unresolved);
+            })
+            .OrderBy(f => f.DimensionCode, StringComparer.Ordinal)
+            .ThenBy(f => f.FactorCode, StringComparer.Ordinal)
+            .ToArray();
+
+        return new LegalMatterFactorReviewHubDto(matterId, factors);
+    }
+
+    public async Task<Guid> CreateApplicationInferenceAsync(Guid tenantId, Guid userId, LegalApplicationInferenceCreateRequest request, CancellationToken cancellationToken = default)
+    {
+        var validationError = LegalApplicationInferencePolicy.Validate(request);
+        if (validationError is not null)
+            throw new ArgumentException(validationError, nameof(request));
+
+        var inferenceId = Guid.NewGuid();
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        using var transaction = connection.BeginTransaction();
+
+        // Tenant isolation: the target matter must belong to the acting tenant before anything is written.
+        var matterBelongs = await connection.ExecuteScalarAsync<int>(new CommandDefinition(
+            """
+            SELECT COUNT(1) FROM POLOXI.Legal_DecisionMatter
+            WHERE DecisionMatterId=@MatterId AND TenantId=@TenantId AND IsDeleted=0;
+            """,
+            new { MatterId = request.MatterId, TenantId = tenantId },
+            transaction, cancellationToken: cancellationToken));
+        if (matterBelongs == 0)
+            throw new ArgumentException($"Matter {request.MatterId} does not belong to this tenant.", nameof(request));
+
+        await connection.ExecuteAsync(new CommandDefinition(
+            """
+            INSERT INTO POLOXI.Legal_MatterApplicationInference
+                (LegalApplicationInferenceId, DecisionMatterId, DimensionCode, FactorCode, TargetNodeId,
+                 LegalApplicationPropositionId, ConclusionText, DispositionCode, ReviewStateCode, Confidence,
+                 Rationale, GenerationOriginCode, TenantId, CreatedByUserId)
+            VALUES
+                (@Id, @MatterId, @DimensionCode, @FactorCode, @TargetNodeId,
+                 @PropositionId, @ConclusionText, @DispositionCode, @ReviewStateCode, @Confidence,
+                 @Rationale, @GenerationOriginCode, @TenantId, @UserId);
+            """,
+            new
+            {
+                Id = inferenceId,
+                MatterId = request.MatterId,
+                request.DimensionCode,
+                request.FactorCode,
+                request.TargetNodeId,
+                PropositionId = request.LegalApplicationPropositionId,
+                request.ConclusionText,
+                request.DispositionCode,
+                request.ReviewStateCode,
+                request.Confidence,
+                request.Rationale,
+                request.GenerationOriginCode,
+                TenantId = tenantId,
+                UserId = userId
+            },
+            transaction,
+            cancellationToken: cancellationToken));
+
+        if (request.Inputs is not null)
+        {
+            foreach (var input in request.Inputs)
+            {
+                // Tenant + matter isolation: an input edge may only reference facts/evidence/authority that
+                // belong to the same tenant and (for matter-scoped rows) the same matter. This prevents an
+                // application inference from silently citing another matter's or tenant's records.
+                if (input.LegalFactPropositionId is { } factPropositionId)
+                {
+                    var belongs = await connection.ExecuteScalarAsync<int>(new CommandDefinition(
+                        """
+                        SELECT COUNT(1) FROM POLOXI.Legal_MatterFactProposition
+                        WHERE LegalFactPropositionId=@Id AND TenantId=@TenantId AND DecisionMatterId=@MatterId AND IsDeleted=0;
+                        """,
+                        new { Id = factPropositionId, TenantId = tenantId, MatterId = request.MatterId },
+                        transaction, cancellationToken: cancellationToken));
+                    if (belongs == 0)
+                        throw new ArgumentException($"Fact proposition {factPropositionId} does not belong to matter {request.MatterId}.", nameof(request));
+                }
+
+                if (input.LegalEvidenceItemId is { } evidenceItemId)
+                {
+                    var belongs = await connection.ExecuteScalarAsync<int>(new CommandDefinition(
+                        """
+                        SELECT COUNT(1) FROM POLOXI.Legal_MatterEvidenceItem
+                        WHERE LegalEvidenceItemId=@Id AND TenantId=@TenantId AND DecisionMatterId=@MatterId AND IsDeleted=0;
+                        """,
+                        new { Id = evidenceItemId, TenantId = tenantId, MatterId = request.MatterId },
+                        transaction, cancellationToken: cancellationToken));
+                    if (belongs == 0)
+                        throw new ArgumentException($"Evidence item {evidenceItemId} does not belong to matter {request.MatterId}.", nameof(request));
+                }
+
+                if (input.VerifiedLegalPropositionId is { } verifiedId)
+                {
+                    // Verified authority is tenant-scoped (not matter-scoped): it is shared research output.
+                    var belongs = await connection.ExecuteScalarAsync<int>(new CommandDefinition(
+                        """
+                        SELECT COUNT(1) FROM POLOXI.Legal_VerifiedLegalProposition
+                        WHERE VerifiedLegalPropositionId=@Id AND TenantId=@TenantId;
+                        """,
+                        new { Id = verifiedId, TenantId = tenantId },
+                        transaction, cancellationToken: cancellationToken));
+                    if (belongs == 0)
+                        throw new ArgumentException($"Verified legal proposition {verifiedId} does not belong to this tenant.", nameof(request));
+                }
+
+                await connection.ExecuteAsync(new CommandDefinition(
+                    """
+                    INSERT INTO POLOXI.Legal_MatterApplicationInferenceInput
+                        (LegalApplicationInferenceInputId, LegalApplicationInferenceId, InputRoleCode,
+                         LegalFactPropositionId, LegalEvidenceItemId, VerifiedLegalPropositionId,
+                         RelationshipCode, Rationale, TenantId, CreatedByUserId)
+                    VALUES
+                        (NEWID(), @InferenceId, @InputRoleCode, @LegalFactPropositionId, @LegalEvidenceItemId,
+                         @VerifiedLegalPropositionId, @RelationshipCode, @Rationale, @TenantId, @UserId);
+                    """,
+                    new
+                    {
+                        InferenceId = inferenceId,
+                        input.InputRoleCode,
+                        input.LegalFactPropositionId,
+                        input.LegalEvidenceItemId,
+                        input.VerifiedLegalPropositionId,
+                        input.RelationshipCode,
+                        input.Rationale,
+                        TenantId = tenantId,
+                        UserId = userId
+                    },
+                    transaction,
+                    cancellationToken: cancellationToken));
+            }
+        }
+
+        transaction.Commit();
+        return inferenceId;
+    }
+
+    public async Task ReviewApplicationInferenceAsync(Guid tenantId, Guid userId, Guid applicationInferenceId, LegalApplicationInferenceReviewRequest request, CancellationToken cancellationToken = default)
+    {
+        if (!LegalApplicationInferencePolicy.IsValidReviewState(request.ReviewStateCode))
+            throw new ArgumentException($"Invalid application review state code: {request.ReviewStateCode}.", nameof(request));
+        if (request.DispositionCode is not null && !LegalApplicationInferencePolicy.IsValidDisposition(request.DispositionCode))
+            throw new ArgumentException($"Invalid application disposition code: {request.DispositionCode}.", nameof(request));
+
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE POLOXI.Legal_MatterApplicationInference
+            SET ReviewStateCode=@ReviewStateCode,
+                DispositionCode=COALESCE(@DispositionCode, DispositionCode),
+                Confidence=COALESCE(@Confidence, Confidence),
+                Rationale=COALESCE(@Rationale, Rationale),
+                ModifiedDateUtc=SYSUTCDATETIME(),
+                ModifiedByUserId=@UserId
+            WHERE LegalApplicationInferenceId=@Id AND DecisionMatterId=@MatterId AND TenantId=@TenantId AND IsDeleted=0;
+            """,
+            new
+            {
+                Id = applicationInferenceId,
+                MatterId = request.MatterId,
+                request.ReviewStateCode,
+                request.DispositionCode,
+                request.Confidence,
+                request.Rationale,
+                TenantId = tenantId,
+                UserId = userId
+            },
+            cancellationToken: cancellationToken));
     }
 
     public async Task<Guid> AppendSourceAssertionAsync(Guid tenantId, Guid userId, LegalSourceAssertionCreateRequest request, CancellationToken cancellationToken = default)
@@ -446,6 +757,28 @@ public sealed class LegalDocumentCorpusRepository(ISqlConnectionFactory connecti
                     """, verArgs);
             }
 
+            // Wide-run audit artifacts physically FK-reference the matter's passages
+            // (Legal_WideBranchPassageMap / Legal_WidePropositionAnchor -> Legal_DocumentPassage).
+            // They must be hard-removed BEFORE the passages they pin, or the passage delete below
+            // fails with FK_Legal_WideBranchPassageMap_Passage / FK_Legal_WidePropositionAnchor_Passage.
+            if (hasVersions)
+            {
+                await ExecAsync(
+                    """
+                    DELETE map FROM POLOXI.Legal_WideBranchPassageMap map
+                    INNER JOIN POLOXI.Legal_DocumentPassage passage
+                        ON passage.LegalDocumentPassageId=map.LegalDocumentPassageId
+                    WHERE map.TenantId=@TenantId AND passage.LegalDocumentVersionId IN @VersionIds;
+                    """, verArgs);
+                await ExecAsync(
+                    """
+                    DELETE anchor FROM POLOXI.Legal_WidePropositionAnchor anchor
+                    INNER JOIN POLOXI.Legal_DocumentPassage passage
+                        ON passage.LegalDocumentPassageId=anchor.LegalDocumentPassageId
+                    WHERE anchor.TenantId=@TenantId AND passage.LegalDocumentVersionId IN @VersionIds;
+                    """, verArgs);
+            }
+
             var passagesRemoved = hasVersions
                 ? await ExecAsync(
                     """
@@ -459,6 +792,17 @@ public sealed class LegalDocumentCorpusRepository(ISqlConnectionFactory connecti
                 await ExecAsync(
                     """
                     DELETE FROM POLOXI.Legal_DocumentProcessingRun
+                    WHERE TenantId=@TenantId AND LegalDocumentVersionId IN @VersionIds;
+                    """, verArgs);
+            }
+
+            // Search-projection outbox rows FK-reference the version
+            // (FK_Legal_DocumentSearchProjectionOutbox_Version); remove them before the version delete.
+            if (hasVersions)
+            {
+                await ExecAsync(
+                    """
+                    DELETE FROM POLOXI.Legal_DocumentSearchProjectionOutbox
                     WHERE TenantId=@TenantId AND LegalDocumentVersionId IN @VersionIds;
                     """, verArgs);
             }
@@ -482,6 +826,15 @@ public sealed class LegalDocumentCorpusRepository(ISqlConnectionFactory connecti
             var uploadBatchesRemoved = 0;
             if (purgeAll)
             {
+                // Upload operations FK-reference the batch (FK_Legal_UploadOperation_Batch) and are
+                // keyed by matter; they must be removed before their parent batch. The occurrences
+                // that reference these operations were already deleted above.
+                await ExecAsync(
+                    """
+                    DELETE FROM POLOXI.Legal_UploadOperation
+                    WHERE TenantId=@TenantId AND DecisionMatterId=@MatterId;
+                    """, new { TenantId = tenantId, MatterId = matterId });
+
                 uploadBatchesRemoved = await ExecAsync(
                     """
                     DELETE FROM POLOXI.Legal_UploadBatch
@@ -509,20 +862,25 @@ public sealed class LegalDocumentCorpusRepository(ISqlConnectionFactory connecti
             """
             SELECT
                 COUNT(1) AS TotalVersions,
-                ISNULL(SUM(version.IsEnriched), 0) AS EnrichedVersions
+                ISNULL(SUM(version.IsEnriched), 0) AS EnrichedVersions,
+                ISNULL(SUM(version.IsPending), 0) AS PendingVersions
             FROM
             (
                 SELECT
                     version.LegalDocumentVersionId,
-                    -- A version is "done" (not re-read) once semantic activation has been attempted with a
-                    -- terminal outcome that persists: ENRICHED (produced evidence) or NO_EVIDENCE (activated
-                    -- but produced none). FAILED/NULL remain eligible for (re)activation. The evidence-row
-                    -- fallback keeps versions activated before this marker existed counted as enriched.
-                    CASE WHEN version.SemanticActivationStatusCode IN (N'ENRICHED', N'NO_EVIDENCE')
-                           OR EXISTS
+                    -- NO_EVIDENCE is terminal for automatic retries, but does not mean enriched.
+                    -- Historical ENRICHED markers may have been written for zero-item proposals.
+                    CASE WHEN EXISTS
                         (SELECT 1 FROM POLOXI.Legal_MatterEvidenceItem evidence
-                         WHERE evidence.LegalDocumentVersionId=version.LegalDocumentVersionId AND evidence.IsDeleted=0)
-                        THEN 1 ELSE 0 END AS IsEnriched
+                         WHERE evidence.LegalDocumentVersionId=version.LegalDocumentVersionId AND evidence.IsDeleted=0
+                           AND evidence.GenerationOriginCode<>N'DOCUMENT_INTAKE')
+                        THEN 1 ELSE 0 END AS IsEnriched,
+                    CASE WHEN ISNULL(version.SemanticActivationStatusCode, N'') NOT IN (N'ENRICHED', N'NO_EVIDENCE')
+                          AND NOT EXISTS
+                        (SELECT 1 FROM POLOXI.Legal_MatterEvidenceItem evidence
+                         WHERE evidence.LegalDocumentVersionId=version.LegalDocumentVersionId AND evidence.TenantId=@TenantId
+                           AND evidence.IsDeleted=0 AND evidence.GenerationOriginCode<>N'DOCUMENT_INTAKE')
+                        THEN 1 ELSE 0 END AS IsPending
                 FROM POLOXI.Legal_MatterDocumentVersion version
                 INNER JOIN POLOXI.Legal_MatterDocument document ON document.LegalDocumentId=version.LegalDocumentId AND document.IsDeleted=0
                 WHERE version.TenantId=@TenantId AND document.DecisionMatterId=@MatterId AND version.IsDeleted=0
@@ -532,11 +890,79 @@ public sealed class LegalDocumentCorpusRepository(ISqlConnectionFactory connecti
                               WHERE passage.LegalDocumentVersionId=version.LegalDocumentVersionId AND passage.IsDeleted=0)
             ) version;
             """, new { TenantId = tenantId, MatterId = matterId }, cancellationToken: cancellationToken));
-        var pending = Math.Max(row.TotalVersions - row.EnrichedVersions, 0);
-        return new LegalMatterCorpusActivationStatus(matterId, row.TotalVersions, row.EnrichedVersions, pending, 0);
+        return new LegalMatterCorpusActivationStatus(matterId, row.TotalVersions, row.EnrichedVersions, row.PendingVersions, 0);
     }
 
-    private sealed record ActivationStatusRow(int TotalVersions, int EnrichedVersions);
+    private sealed record ActivationStatusRow(int TotalVersions, int EnrichedVersions, int PendingVersions);
+
+    // Deterministic, matter-level aggregation of the admitted evidence corpus (the same proposition→
+    // evidence graph the Evidence Tab renders). Produces the raw components DecisionCoreMath normalizes
+    // into the shared EvidenceSupport seed. LLM-free: no scores are read from the model — only the
+    // persisted graph (evidence/proposition confidences, relationship type, source verification state).
+    public async Task<LegalMatterEvidenceCorpusStrength> GetMatterEvidenceCorpusStrengthAsync(Guid tenantId, Guid matterId, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        using var multi = await connection.QueryMultipleAsync(new CommandDefinition(
+            """
+            -- Net support signal: Σ(SUPPORTS edge) − Σ(CONTRADICTS edge), each weighted by
+            -- evidence.Confidence × proposition.Confidence. A VERIFIED source assertion on the evidence
+            -- item gives the edge full weight; an unverified edge contributes at half weight so it still
+            -- registers but cannot, on its own, establish strong support. Only admitted (not INVALIDATED)
+            -- atomic DYNAMIC_LLM evidence participates; the DOCUMENT_INTAKE baseline is excluded here and
+            -- counted separately as an intake-only presence floor.
+            SELECT
+                ISNULL(SUM(
+                    CASE support.RelationshipTypeCode
+                        WHEN N'SUPPORTS' THEN 1.0
+                        WHEN N'CONTRADICTS' THEN -1.0
+                        ELSE 0.0
+                    END
+                    * ISNULL(evidence.Confidence, 0.5)
+                    * ISNULL(proposition.Confidence, 0.5)
+                    * CASE WHEN EXISTS (
+                            SELECT 1 FROM POLOXI.Legal_SourceAssertion anchor
+                            WHERE anchor.LegalEvidenceItemId=evidence.LegalEvidenceItemId
+                              AND anchor.VerificationStateCode=N'VERIFIED' AND anchor.IsDeleted=0)
+                        THEN 1.0 ELSE 0.5 END
+                ), 0.0) AS NetSupportSignal
+            FROM POLOXI.Legal_MatterPropositionSupport support
+            INNER JOIN POLOXI.Legal_MatterFactProposition proposition
+                ON proposition.LegalFactPropositionId=support.LegalFactPropositionId AND proposition.IsDeleted=0
+            INNER JOIN POLOXI.Legal_MatterEvidenceItem evidence
+                ON evidence.LegalEvidenceItemId=support.LegalEvidenceItemId AND evidence.IsDeleted=0
+            WHERE support.TenantId=@TenantId AND proposition.DecisionMatterId=@MatterId AND support.IsDeleted=0
+              AND evidence.GenerationOriginCode=N'DYNAMIC_LLM'
+              AND evidence.EvidenceStateCode<>N'INVALIDATED';
+
+            -- Distinct admitted atomic evidence items (corpus depth signal).
+            SELECT COUNT(1) AS AtomicEvidenceCount
+            FROM POLOXI.Legal_MatterEvidenceItem evidence
+            WHERE evidence.TenantId=@TenantId AND evidence.DecisionMatterId=@MatterId AND evidence.IsDeleted=0
+              AND evidence.GenerationOriginCode=N'DYNAMIC_LLM'
+              AND evidence.EvidenceStateCode<>N'INVALIDATED';
+
+            -- Documents carrying only the DOCUMENT_INTAKE baseline (uploaded but not atomically enriched).
+            SELECT COUNT(1) AS IntakeOnlyDocumentCount
+            FROM POLOXI.Legal_MatterDocument document
+            WHERE document.TenantId=@TenantId AND document.DecisionMatterId=@MatterId AND document.IsDeleted=0
+              AND EXISTS (SELECT 1 FROM POLOXI.Legal_MatterEvidenceItem baseline
+                          INNER JOIN POLOXI.Legal_MatterDocumentVersion version
+                              ON version.LegalDocumentVersionId=baseline.LegalDocumentVersionId AND version.IsDeleted=0
+                          WHERE version.LegalDocumentId=document.LegalDocumentId AND baseline.IsDeleted=0
+                            AND baseline.GenerationOriginCode=N'DOCUMENT_INTAKE')
+              AND NOT EXISTS (SELECT 1 FROM POLOXI.Legal_MatterEvidenceItem atomic
+                              INNER JOIN POLOXI.Legal_MatterDocumentVersion version
+                                  ON version.LegalDocumentVersionId=atomic.LegalDocumentVersionId AND version.IsDeleted=0
+                              WHERE version.LegalDocumentId=document.LegalDocumentId AND atomic.IsDeleted=0
+                                AND atomic.GenerationOriginCode=N'DYNAMIC_LLM'
+                                AND atomic.EvidenceStateCode<>N'INVALIDATED');
+            """, new { TenantId = tenantId, MatterId = matterId }, cancellationToken: cancellationToken));
+
+        var netSupportSignal = await multi.ReadSingleAsync<double>();
+        var atomicEvidenceCount = await multi.ReadSingleAsync<int>();
+        var intakeOnlyDocumentCount = await multi.ReadSingleAsync<int>();
+        return new LegalMatterEvidenceCorpusStrength(netSupportSignal, atomicEvidenceCount, intakeOnlyDocumentCount);
+    }
 
     public async Task<IReadOnlyCollection<LegalPendingCorpusVersion>> GetPendingCorpusVersionsAsync(Guid tenantId, Guid matterId, int maximumVersions, CancellationToken cancellationToken = default)
     {
@@ -556,10 +982,15 @@ public sealed class LegalDocumentCorpusRepository(ISqlConnectionFactory connecti
                           WHERE passage.LegalDocumentVersionId=version.LegalDocumentVersionId AND passage.IsDeleted=0)
               -- Idempotency: skip versions that have already reached a terminal semantic-activation outcome
               -- (ENRICHED or NO_EVIDENCE). FAILED/NULL stay eligible so transient failures can retry. The
-              -- evidence-row fallback covers versions activated before the marker column existed.
+              -- derived-evidence fallback (excluding the DOCUMENT_INTAKE baseline) covers versions activated
+              -- before the marker column existed.
               AND ISNULL(version.SemanticActivationStatusCode, N'') NOT IN (N'ENRICHED', N'NO_EVIDENCE')
+              -- The DOCUMENT_INTAKE baseline is stamped for every version BEFORE this selection runs, so it must
+              -- NOT disqualify a version from semantic activation. Only real derived evidence (e.g. DYNAMIC_LLM)
+              -- marks a version as already activated; the terminal status markers above remain the primary guard.
               AND NOT EXISTS (SELECT 1 FROM POLOXI.Legal_MatterEvidenceItem evidence
-                              WHERE evidence.LegalDocumentVersionId=version.LegalDocumentVersionId AND evidence.IsDeleted=0)
+                              WHERE evidence.LegalDocumentVersionId=version.LegalDocumentVersionId AND evidence.IsDeleted=0
+                                AND evidence.GenerationOriginCode<>N'DOCUMENT_INTAKE')
             ORDER BY version.CreatedDateUtc;
             """, new { TenantId = tenantId, MatterId = matterId, MaximumVersions = Math.Clamp(maximumVersions, 1, 100) }, cancellationToken: cancellationToken));
         return rows.ToArray();
@@ -578,6 +1009,69 @@ public sealed class LegalDocumentCorpusRepository(ISqlConnectionFactory connecti
             WHERE LegalDocumentVersionId=@VersionId AND TenantId=@TenantId AND IsDeleted=0;
             """,
             new { StatusCode = statusCode, UserId = userId, VersionId = documentVersionId, TenantId = tenantId },
+            cancellationToken: cancellationToken));
+    }
+
+    // The uploaded intake document IS the evidence. Guarantee each version carries a single baseline
+    // document-intake evidence record (GenerationOriginCode N'DOCUMENT_INTAKE') so no document can ever be
+    // classified as having "no evidence" merely because the LLM/Govern extraction admitted zero atomic
+    // items. Atomic DYNAMIC_LLM evidence (when extraction succeeds) enriches the document on top of this
+    // baseline. Idempotent and tenant-scoped: inserts only when the version has no intake record yet.
+    public async Task EnsureDocumentIntakeEvidenceAsync(Guid tenantId, Guid userId, Guid matterId, Guid documentVersionId, string documentFileName, CancellationToken cancellationToken = default)
+    {
+        var summary = string.IsNullOrWhiteSpace(documentFileName)
+            ? "Uploaded source document (intake evidence)."
+            : $"Uploaded source document: {documentFileName.Trim()}";
+
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(
+            """
+            INSERT INTO POLOXI.Legal_MatterEvidenceItem
+                (LegalEvidenceItemId, DecisionMatterId, LegalDocumentVersionId, LegalDocumentPassageId,
+                 EvidenceTypeCode, DimensionCode, Summary, EvidenceStateCode, Confidence,
+                 GenerationOriginCode, DomainConceptCode, VerificationProfileCode, TenantId, CreatedByUserId)
+            SELECT NEWID(), @MatterId, version.LegalDocumentVersionId, NULL,
+                   N'SOURCE_DOCUMENT', N'DOCUMENT_INTAKE', @Summary, N'PROPOSED', NULL,
+                   N'DOCUMENT_INTAKE', NULL, NULL, @TenantId, @UserId
+            FROM POLOXI.Legal_MatterDocumentVersion version
+            WHERE version.LegalDocumentVersionId=@VersionId AND version.TenantId=@TenantId AND version.IsDeleted=0
+              AND NOT EXISTS (
+                  SELECT 1 FROM POLOXI.Legal_MatterEvidenceItem existing
+                  WHERE existing.LegalDocumentVersionId=@VersionId AND existing.TenantId=@TenantId
+                    AND existing.GenerationOriginCode=N'DOCUMENT_INTAKE' AND existing.IsDeleted=0);
+            """,
+            new { MatterId = matterId, VersionId = documentVersionId, TenantId = tenantId, UserId = userId, Summary = summary },
+            cancellationToken: cancellationToken));
+    }
+
+    // One-time matter-wide backfill of the document-intake evidence baseline. Covers existing versions that
+    // activation will never re-read (already terminal, including legacy NO_EVIDENCE), so every uploaded
+    // document becomes evidence without re-running extraction. Set-based, idempotent, tenant-scoped.
+    public async Task<int> BackfillDocumentIntakeEvidenceAsync(Guid tenantId, Guid userId, Guid matterId, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return await connection.ExecuteAsync(new CommandDefinition(
+            """
+            INSERT INTO POLOXI.Legal_MatterEvidenceItem
+                (LegalEvidenceItemId, DecisionMatterId, LegalDocumentVersionId, LegalDocumentPassageId,
+                 EvidenceTypeCode, DimensionCode, Summary, EvidenceStateCode, Confidence,
+                 GenerationOriginCode, DomainConceptCode, VerificationProfileCode, TenantId, CreatedByUserId)
+            SELECT NEWID(), document.DecisionMatterId, version.LegalDocumentVersionId, NULL,
+                   N'SOURCE_DOCUMENT', N'DOCUMENT_INTAKE',
+                   N'Uploaded source document: ' + document.FileName, N'PROPOSED', NULL,
+                   N'DOCUMENT_INTAKE', NULL, NULL, @TenantId, @UserId
+            FROM POLOXI.Legal_MatterDocumentVersion version
+            INNER JOIN POLOXI.Legal_MatterDocument document
+                ON document.LegalDocumentId=version.LegalDocumentId AND document.IsDeleted=0
+            WHERE document.DecisionMatterId=@MatterId AND document.TenantId=@TenantId
+              AND version.TenantId=@TenantId AND version.IsDeleted=0
+              AND NOT EXISTS (
+                  SELECT 1 FROM POLOXI.Legal_MatterEvidenceItem existing
+                  WHERE existing.LegalDocumentVersionId=version.LegalDocumentVersionId
+                    AND existing.TenantId=@TenantId
+                    AND existing.GenerationOriginCode=N'DOCUMENT_INTAKE' AND existing.IsDeleted=0);
+            """,
+            new { MatterId = matterId, TenantId = tenantId, UserId = userId },
             cancellationToken: cancellationToken));
     }
 
@@ -1585,6 +2079,7 @@ public sealed class LegalDocumentCorpusRepository(ISqlConnectionFactory connecti
                     "NORMAL"));
             }
             var insertedEdges = new HashSet<(Guid FactId, Guid EvidenceId, string RelationshipTypeCode)>();
+            var supportedEvidenceKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var relationship in proposal.Relationships)
             {
                 if (!factIds.TryGetValue(relationship.TargetProposalKey, out var factId) || !evidenceIds.TryGetValue(relationship.SourceProposalKey, out var evidenceId))
@@ -1606,6 +2101,59 @@ public sealed class LegalDocumentCorpusRepository(ISqlConnectionFactory connecti
                 await connection.ExecuteAsync(new CommandDefinition(
                     """INSERT POLOXI.Legal_MatterPropositionSupport (LegalPropositionSupportId,LegalFactPropositionId,LegalEvidenceItemId,RelationshipTypeCode,AssessmentReason,TenantId,CreatedByUserId) VALUES (NEWID(),@FactId,@EvidenceId,@RelationshipTypeCode,@Rationale,@TenantId,@UserId);""",
                     new { FactId = factId, EvidenceId = evidenceId, RelationshipTypeCode = relationshipTypeCode, Rationale = rationale, TenantId = tenantId, UserId = userId }, transaction, cancellationToken: cancellationToken));
+                // Only admitted (span-anchored) evidence that produced a real support/contradiction edge counts as
+                // "linked". INSUFFICIENT downgrades do not satisfy the source-of-truth linkage requirement below.
+                if (!nonAdmitted && !string.Equals(relationshipTypeCode, LegalDocumentRelationshipTypes.Insufficient, StringComparison.OrdinalIgnoreCase))
+                    supportedEvidenceKeys.Add(relationship.SourceProposalKey);
+            }
+
+            // Source-of-truth linkage backfill: document evidence is authoritative and every admitted
+            // (span-anchored) evidence item MUST be linked to a proposition carrying its factors (dimension)
+            // and evidence type. When the interpreter emitted no relationship for an admitted item, it would
+            // otherwise be orphaned and hidden from the proposition graph. Here we synthesize a derived
+            // proposition from the evidence summary and bind a SUPPORTS edge so no admitted document evidence
+            // is left unlinked. These derived propositions are non-authoritative (attorney-reviewable).
+            foreach (var item in proposal.EvidenceItems)
+            {
+                if (nonAdmittedEvidenceKeys.Contains(item.ProposalKey) || supportedEvidenceKeys.Contains(item.ProposalKey))
+                    continue;
+                if (!evidenceIds.TryGetValue(item.ProposalKey, out var evidenceId))
+                    continue;
+
+                var derivedText = string.IsNullOrWhiteSpace(item.Summary)
+                    ? $"Document evidence ({item.EvidenceTypeCode.Replace('_', ' ')}) recorded from the uploaded corpus."
+                    : item.Summary.Trim();
+
+                // Reuse an existing canonical proposition when the derived text matches, so backfill never
+                // duplicates identity; otherwise insert a new, non-authoritative derived proposition.
+                var decision = LegalPropositionBindingPolicy.Resolve(derivedText, LegalFactStates.Supported, existingPropositions);
+                Guid derivedFactId;
+                if (decision.IsReuse && !decision.IsContradiction && decision.MatchedPropositionId is { } reusedId)
+                {
+                    derivedFactId = reusedId;
+                }
+                else
+                {
+                    derivedFactId = Guid.NewGuid();
+                    existingPropositions.Add(new LegalExistingProposition(derivedFactId, derivedText, LegalFactStates.Supported));
+                    await connection.ExecuteAsync(new CommandDefinition(
+                        """INSERT POLOXI.Legal_MatterFactProposition (LegalFactPropositionId,DecisionMatterId,PropositionText,FactStateCode,GenerationOriginCode,Confidence,IsDecisionAuthoritative,TenantId,CreatedByUserId) VALUES (@Id,@MatterId,@Text,@FactStateCode,N'DYNAMIC_LLM',@Confidence,0,@TenantId,@UserId);""",
+                        new { Id = derivedFactId, MatterId = matterId, Text = derivedText, FactStateCode = LegalFactStates.Supported, Confidence = item.Confidence, TenantId = tenantId, UserId = userId }, transaction, cancellationToken: cancellationToken));
+                }
+
+                if (!insertedEdges.Add((derivedFactId, evidenceId, LegalDocumentRelationshipTypes.Supports)))
+                    continue;
+                await connection.ExecuteAsync(new CommandDefinition(
+                    """INSERT POLOXI.Legal_MatterPropositionSupport (LegalPropositionSupportId,LegalFactPropositionId,LegalEvidenceItemId,RelationshipTypeCode,AssessmentReason,TenantId,CreatedByUserId) VALUES (NEWID(),@FactId,@EvidenceId,@RelationshipTypeCode,@Rationale,@TenantId,@UserId);""",
+                    new
+                    {
+                        FactId = derivedFactId,
+                        EvidenceId = evidenceId,
+                        RelationshipTypeCode = LegalDocumentRelationshipTypes.Supports,
+                        Rationale = $"Derived from admitted document evidence ({item.EvidenceTypeCode.Replace('_', ' ')} / {item.DimensionCode.Replace('_', ' ')}); document evidence is the source of truth and is always linked to a proposition.",
+                        TenantId = tenantId,
+                        UserId = userId
+                    }, transaction, cancellationToken: cancellationToken));
             }
             // Surface each material binding outcome as an OPEN, attorney-gated review task in the same transaction,
             // so DISPUTED transitions and NEW_ISSUE_PROPOSAL insertions are never applied silently. The attorney
@@ -1822,7 +2370,10 @@ public sealed class LegalDocumentCorpusRepository(ISqlConnectionFactory connecti
     private sealed record DocumentRow(Guid LegalDocumentId, Guid MatterId, string FileName, string ContentType, string StatusCode, string? DocumentTypeCode, string? DomainPackCode, DateTime CreatedDateUtc);
     private sealed record DocumentVersionRow(Guid LegalDocumentVersionId, Guid LegalDocumentId, int VersionNumber, string Sha256Hash, string StorageReference, long FileSizeBytes, string MalwareStatusCode, string ProcessingStatusCode, string? ExtractionProviderCode, string? ExtractionModelCode, string? ExtractionModelVersion, DateTime CreatedDateUtc);
     private sealed record PassageRow(Guid LegalDocumentPassageId, Guid LegalDocumentVersionId, int? PageNumber, string? SectionPath, int SequenceNumber, string Text, string ExtractionMethodCode, decimal? ExtractionConfidence, string? BoundingRegionJson, string? SourceSpanJson, string EpistemicStateCode);
-    private sealed record PropositionHeadRow(Guid LegalFactPropositionId, Guid MatterId, string PropositionText, string FactStateCode, string GenerationOriginCode, decimal? Confidence, bool IsDecisionAuthoritative);
+    private sealed record PropositionHeadRow(Guid LegalFactPropositionId, Guid MatterId, string PropositionText, string FactStateCode, string GenerationOriginCode, decimal? Confidence, bool IsDecisionAuthoritative, string PropositionKindCode = LegalPropositionKinds.Factual);
+    private sealed record FactorPropositionRow(Guid LegalFactPropositionId, string PropositionKindCode, string PropositionText, string FactStateCode, decimal? Confidence, bool IsDecisionAuthoritative);
+    private sealed record FactorEvidenceRow(Guid LegalEvidenceItemId, string EvidenceTypeCode, string DimensionCode, string Summary, string EvidenceStateCode, decimal? Confidence);
+    private sealed record ApplicationInferenceRow(Guid LegalApplicationInferenceId, Guid MatterId, string DimensionCode, string? FactorCode, Guid? TargetNodeId, Guid? LegalApplicationPropositionId, string ConclusionText, string DispositionCode, string ReviewStateCode, decimal? Confidence, string? Rationale, string GenerationOriginCode, Guid? SupersededByApplicationInferenceId, DateTime CreatedDateUtc);
     private sealed record MatterContextRow(Guid MatterId, Guid LegalDocumentId, Guid LegalDocumentVersionId, Guid PassageId, Guid? EvidenceItemId, Guid? FactPropositionId, string Title, string? Text, string SourceReference, int? PageNumber, string ExtractionMethodCode, string EvidenceStateCode, string FactStateCode, bool IsDecisionAuthoritative, string? DocumentTypeCode, string? DimensionCode, string? EmbeddingJson);
     private sealed record LegacyProjectionRow(Guid SearchDocumentId, Guid EntityId, string Title, string Text);
 

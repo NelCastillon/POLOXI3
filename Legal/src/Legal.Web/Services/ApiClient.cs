@@ -321,6 +321,10 @@ public sealed class ApiClient(HttpClient httpClient)
         public async Task<Legal.Application.Features.Intelligence.Decision.Channels.ChannelScoringLpiReadModel> GetChannelScoringLpiAsync(Guid matterId,CancellationToken token=default)=>await GetFromJsonWithTransientThrottleRetryAsync<Legal.Application.Features.Intelligence.Decision.Channels.ChannelScoringLpiReadModel>($"api/legal_decision/matters/{matterId}/channel-scoring",token)??Legal.Application.Features.Intelligence.Decision.Channels.ChannelScoringLpiReadModel.Empty(matterId);
         public async Task<Legal.Application.Features.Intelligence.Decision.Channels.MatterScoringTraceReadModel> GetMatterScoringTraceAsync(Guid matterId,CancellationToken token=default)=>await GetFromJsonWithTransientThrottleRetryAsync<Legal.Application.Features.Intelligence.Decision.Channels.MatterScoringTraceReadModel>($"api/legal_decision/matters/{matterId}/scoring-trace",token)??Legal.Application.Features.Intelligence.Decision.Channels.MatterScoringTraceReadModel.Empty(matterId);
         public async Task<Legal.Application.Features.Intelligence.Decision.LegalMatterEvidenceGraphDto?> GetLegalMatterEvidenceGraphAsync(Guid matterId,CancellationToken token=default)=>await GetFromJsonWithTransientThrottleRetryAsync<Legal.Application.Features.Intelligence.Decision.LegalMatterEvidenceGraphDto>($"api/legal_decision/matters/{matterId}/evidence-graph",token);
+        public async Task<Legal.Application.Features.Intelligence.Decision.LegalMatterFactorReviewHubDto?> GetLegalMatterFactorReviewHubAsync(Guid matterId,CancellationToken token=default)=>await GetFromJsonWithTransientThrottleRetryAsync<Legal.Application.Features.Intelligence.Decision.LegalMatterFactorReviewHubDto>($"api/legal_decision/matters/{matterId}/factor-review-hub",token);
+        public async Task<Guid?> CreateLegalApplicationInferenceAsync(Guid matterId,Legal.Application.Features.Intelligence.Decision.LegalApplicationInferenceCreateRequest request,CancellationToken token=default){using var response=await _httpClient.PostAsJsonAsync($"api/legal_decision/matters/{matterId}/application-inferences",request,token);await EnsureSuccessWithDetailAsync(response,token);var payload=await response.Content.ReadFromJsonAsync<CreatedApplicationInferenceResponse>(cancellationToken:token);return payload?.LegalApplicationInferenceId;}
+        public async Task ReviewLegalApplicationInferenceAsync(Guid matterId,Guid applicationInferenceId,Legal.Application.Features.Intelligence.Decision.LegalApplicationInferenceReviewRequest request,CancellationToken token=default){using var response=await _httpClient.PostAsJsonAsync($"api/legal_decision/matters/{matterId}/application-inferences/{applicationInferenceId}/review",request,token);await EnsureSuccessWithDetailAsync(response,token);}
+        private sealed record CreatedApplicationInferenceResponse(Guid LegalApplicationInferenceId);
         public async Task<Legal.Application.Features.Intelligence.Decision.CandidateFullAnalysisDto?> GetLegalCandidateFullAnalysisAsync(Guid matterId,int candidateIndex,CancellationToken token=default)=>await GetFromJsonWithTransientThrottleRetryAsync<Legal.Application.Features.Intelligence.Decision.CandidateFullAnalysisDto>($"api/legal_decision/matters/{matterId}/candidate-analysis/{candidateIndex}",token);
         public async Task<Legal.Application.Features.Intelligence.Decision.MatterHumanIntelligenceDto?> GetLegalMatterHumanIntelligenceAsync(Guid matterId,CancellationToken token=default)=>await GetFromJsonWithTransientThrottleRetryAsync<Legal.Application.Features.Intelligence.Decision.MatterHumanIntelligenceDto>($"api/legal_decision/matters/{matterId}/human-intelligence",token);
         // ── Attorney Decision Input (Human Intelligence) write path ──────────────────────────────
@@ -1157,8 +1161,21 @@ public sealed class ApiClient(HttpClient httpClient)
     // cookie rides on the same host as the API when proxied; callers use this as an href/src.
     public string MediaVersionContentUrl(Guid versionId)=>new Uri(_httpClient.BaseAddress!,$"api/legal_media/versions/{versionId}/content").ToString();
 
-    // Absolute URL for the authorized inline document original (PDF preview iframe/object src).
-    public string LegalDocumentVersionContentUrl(Guid documentVersionId)=>new Uri(_httpClient.BaseAddress!,$"api/legal_decision/documents/versions/{documentVersionId}/content").ToString();
+    // Same-origin URL on the Web host for the authorized inline document original. A lightweight Web
+    // proxy endpoint streams the bytes from the API server-side, so browser viewers (pdf.js fetch,
+    // <object>) stay same-origin and avoid cross-origin/CORS failures. Used as an href/src.
+    public string LegalDocumentVersionContentUrl(Guid documentVersionId)=>$"/documents/versions/{documentVersionId}/content";
+
+    // Server-side streaming of the authorized document original. Used by the same-origin Web proxy
+    // endpoint so browser-side viewers (pdf.js) fetch the PDF from the Web host without a cross-origin
+    // request. The ActingUserHandler forwards the caller's identity to the API on this call.
+    public async Task<HttpResponseMessage> GetLegalDocumentVersionContentResponseAsync(Guid documentVersionId,string? range=null,CancellationToken token=default)
+    {
+        var message=new HttpRequestMessage(HttpMethod.Get,$"api/legal_decision/documents/versions/{documentVersionId}/content");
+        if(!string.IsNullOrWhiteSpace(range))
+            message.Headers.TryAddWithoutValidation("Range",range);
+        return await _httpClient.SendAsync(message,HttpCompletionOption.ResponseHeadersRead,token);
+    }
 
     public async Task<Legal.Application.Abstractions.Intelligence.MediaProcessingResult?> ProcessMediaAssetAsync(Guid matterId,Guid assetId,Guid versionId,string assetType,CancellationToken token=default)
     {

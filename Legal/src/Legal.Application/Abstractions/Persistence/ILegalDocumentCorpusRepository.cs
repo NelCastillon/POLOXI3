@@ -72,6 +72,33 @@ public interface ILegalDocumentCorpusRepository
         Guid matterId,
         CancellationToken cancellationToken = default);
 
+    // Factor-centric review hub: groups the existing evidence/proposition/authority graph by factor
+    // (dimension + optional node/factor code) and layers application inferences on top, so opening a
+    // factor shows supporting evidence, contradictory evidence, applicable law, unresolved questions,
+    // and the reviewed application conclusion — each traceable to its source.
+    Task<LegalMatterFactorReviewHubDto> GetMatterFactorReviewHubAsync(
+        Guid tenantId,
+        Guid matterId,
+        CancellationToken cancellationToken = default);
+
+    // Appends a new application inference (facts + rule → application) and its typed input edges in a
+    // single transaction. Append-only semantics mirror source assertions: a revised conclusion
+    // supersedes an older row rather than mutating it. Returns the new inference id.
+    Task<Guid> CreateApplicationInferenceAsync(
+        Guid tenantId,
+        Guid userId,
+        LegalApplicationInferenceCreateRequest request,
+        CancellationToken cancellationToken = default);
+
+    // Updates the reviewable disposition/state/confidence of an application inference (ACCEPTED /
+    // REJECTED / etc.). Tenant- and matter-scoped.
+    Task ReviewApplicationInferenceAsync(
+        Guid tenantId,
+        Guid userId,
+        Guid applicationInferenceId,
+        LegalApplicationInferenceReviewRequest request,
+        CancellationToken cancellationToken = default);
+
     // Hard-deletes document-derived evidence for a matter in a single transaction. When
     // request.DocumentIds is null/empty, every supporting document for the matter is purged
     // (full clean slate); otherwise only the specified documents and their derived rows are
@@ -99,6 +126,15 @@ public interface ILegalDocumentCorpusRepository
         Guid matterId,
         CancellationToken cancellationToken = default);
 
+    // Deterministic matter-level aggregation of the admitted evidence corpus (the same proposition→
+    // evidence graph the Evidence Tab renders), returning raw signal components that DecisionCoreMath
+    // normalizes into the candidate EvidenceSupport seed. Matter-scoped: there is no candidate FK on
+    // propositions, so this is a shared corpus-strength baseline for the matter.
+    Task<LegalMatterEvidenceCorpusStrength> GetMatterEvidenceCorpusStrengthAsync(
+        Guid tenantId,
+        Guid matterId,
+        CancellationToken cancellationToken = default);
+
     // Returns up to <paramref name="maximumVersions"/> prepared-but-not-activated versions (extracted
     // text present, no evidence rows yet) so activation can enrich them in observable chunks.
     Task<IReadOnlyCollection<LegalPendingCorpusVersion>> GetPendingCorpusVersionsAsync(
@@ -115,6 +151,30 @@ public interface ILegalDocumentCorpusRepository
         Guid userId,
         Guid documentVersionId,
         string statusCode,
+        CancellationToken cancellationToken = default);
+
+    // Guarantees that every uploaded intake document is itself represented as an evidence record:
+    // the uploaded artifact IS the evidence, independent of how many atomic items the LLM extraction
+    // admitted from it. Inserts a single baseline document-intake evidence row (GenerationOriginCode
+    // N'DOCUMENT_INTAKE') for the version when none exists. Idempotent and tenant-scoped: a no-op once
+    // the version already carries its intake evidence record.
+    Task EnsureDocumentIntakeEvidenceAsync(
+        Guid tenantId,
+        Guid userId,
+        Guid matterId,
+        Guid documentVersionId,
+        string documentFileName,
+        CancellationToken cancellationToken = default);
+
+    // One-time matter-wide backfill: guarantees every existing (non-deleted) document version in the matter
+    // carries its baseline document-intake evidence record, including versions already marked terminal
+    // (ENRICHED / legacy NO_EVIDENCE) that will not be re-read by normal activation passes. Does NOT re-run
+    // LLM extraction — it only stamps the document-as-evidence anchor. Idempotent and tenant-scoped. Returns
+    // the number of intake evidence rows inserted.
+    Task<int> BackfillDocumentIntakeEvidenceAsync(
+        Guid tenantId,
+        Guid userId,
+        Guid matterId,
         CancellationToken cancellationToken = default);
 
     // evidence items → fact propositions → support edges) for a matter so the Document
